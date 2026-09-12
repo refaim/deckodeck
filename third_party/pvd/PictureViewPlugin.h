@@ -1,4 +1,4 @@
-// UTF-8 copy of ../../sdk/PictureViewPlugin.h (original encoding: CP1251).
+// UTF-8 copy of PictureViewPlugin.h from the PictureView SDK (original encoding: CP1251).
 #ifndef PICTUREVIEWPLUGIN_H
 #define PICTUREVIEWPLUGIN_H
 

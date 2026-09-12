@@ -8,10 +8,11 @@ lives next to it (`plugins/<id>/DESIGN.md`).
 
 `pvdkit`: decoder plugins for PictureView 3 (image viewer plugin for Far Manager 3, by Pavel
 Skakov), as a monorepo of shared libraries plus one directory per plugin. Every plugin speaks the
-PVD decoder interface v1 defined in `third_party/pvd/PictureViewPlugin.h` (UTF-8 copy of
-`../sdk/PictureViewPlugin.h`; never edit it). Reference implementations of that interface:
-`../examples/pvdBMP.cpp`, `../examples/pvdIJL.cpp`. Bundled decoders for comparison (binary only):
-`../plugin/*.pvd`. Plugins today: `plugins/avif` → `AVIF.pvd` (libavif + dav1d + libyuv).
+PVD decoder interface v1 defined in `third_party/pvd/PictureViewPlugin.h` (UTF-8 copy of the
+SDK original; never edit it). The author's reference decoders (`third_party/pvd/examples/pvdBMP.cpp`,
+`pvdIJL.cpp`, `pvdDjVu.cpp`) and the PictureView distribution readme/help
+(`third_party/pvd/dist-docs/`) document how the host calls the exports and which priorities the
+built-in decoders use; read them before touching the pvd layer. Plugins today: `plugins/avif` → `AVIF.pvd` (libavif + dav1d + libyuv).
 
 Every plugin ships x64 and x86, links its codec libraries statically, and imports `KERNEL32.dll`
 only. No WIC, no GDI+, no system codecs.

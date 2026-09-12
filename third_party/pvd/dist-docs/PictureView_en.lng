@@ -1,0 +1,66 @@
+﻿.Language=English,English
+
+"Picture View"
+
+"OK"
+"Cancel"
+"A&dvanced"
+
+"Process actions:"
+"Ente&r archive"
+"&QuickView"
+"Vie&w"
+"&Edit"
+
+"Decoders:"
+
+"Advance decoding of neighbor images:"
+"In real panel&s"
+"In virt&ual panels"
+
+"Post-processing:"
+"Autole&vels"
+"Aut&oluma"
+"&Chroma"
+"Chroma multiplier:"
+
+"Drawing:"
+"&Fullscreen on startup"
+"Free positio&ning"
+"S&kip quick format detection"
+"Discard transparenc&y"
+"Free OpenGL on e&xit"
+"Use &mipmaps for resize"
+"Use s&haders for resize"
+"Optimi&ze shaders speed"
+"Di&ther"
+"Smooth upscalin&g"
+"sRG&B gamma aware"
+"&10-bit rendering"
+"Dither for &8-bit in non-fullscreen"
+
+"Autosize:"
+"&Autosize on image open"
+"Mi&nimal size:"
+"Ma&ximal size:"
+
+"Keyboard zooming and scrolling:"
+"Smooth &zooming:"
+"Smooth &scrolling:"
+
+"Mouse zoom mode:"
+"T&o center of current view"
+"Center &point under cursor"
+"&Hold point under cursor"
+
+"File jumps:"
+"&Keep position on jumps"
+"Loop &jumping"
+
+"Background:"
+"No&rmal:"
+"Se&lected:"
+"&Choose"
+"Choos&e"
+
+"&Title template:"
