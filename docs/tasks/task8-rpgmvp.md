@@ -106,7 +106,8 @@ committed script, `plugins/rpgmvp/scripts/rpgmvp-decrypt.ps1`, pure PowerShell, 
    `rpgmvp_adapter_tests` (own `add_executable`) and
    `pvdkit_add_plugin_e2e_tests(rpgmvp FIXTURES ... SOURCES ...)`, which also registers
    `rpgmvp_check_imports` and `rpgmvp_check_exports` (Release configuration).
-Nothing under `src/`, `scripts/` or `CMakePresets.json` changes.
+Nothing under `src/` or `CMakePresets.json` changes; `scripts/coverage.ps1`, `cmake/pvdkit-plugin.cmake` and
+`tests/guard/GuardTests.cpp` change only for the carried-over nits listed at the end.
 
 ## Tests
 Same structure as AVIF: adapter tests on fixtures (every kind, exact BGRA pixels for a few files,
@@ -133,3 +134,30 @@ architectures, never touch `C:\Tools\FarManager`, do not run Far. Report with al
    self-test in both polarities.
 4. Keep the AVIF `DESCRIPTION` as is ("PictureView (Far Manager)"); use the same wording for
    RPGMVP.
+
+## Addendum (2026-09-13, after Tasks 9 and 10 landed in 31375af)
+The gates below did not exist when the sections above were written; they are part of the DoD now.
+1. **Lint gate**: `pwsh -NoProfile -File scripts/lint.ps1 -Jobs 6` (clang-format, clang-tidy via
+   compile_commands.json, cppcheck, PSScriptAnalyzer, BinSkim) must be clean for both
+   architectures on everything you add (`plugins/rpgmvp/**`, the decrypt script, the CMake). Run it
+   once per architecture at the end, never two lint runs at once.
+2. **Leak gate**: `pvdkit_add_plugin_e2e_tests(rpgmvp ...)` already registers `rpgmvp_leak_tests`
+   (shared scenarios in `tests/support/leak/LeakScenarios.cpp`, fixtures discovered from the
+   fixture directory: everything that is not `*.md`; the directory must hold at least one accepted
+   and one rejected file — the negatives above satisfy that). It must pass with every exact
+   counter at +0 on both architectures in Debug/Release and under `ctest --preset asan` (x64).
+   Its hostile-corpus scenario feeds 200 mutants of the accepted fixtures through the DLL — a
+   crash or a leak there is a plugin bug, fix it; a libspng error is the expected outcome.
+   Under ASan the harness gates handles and mapped-view count only (mapped bytes and heap
+   counters are printed, not gated).
+3. **CPU etiquette (mandatory)**: `cmake --build --preset <p> --parallel 6`, never unbounded; one
+   build or lint at a time; do not build x64 and x86 concurrently. Use `PVDKIT_BUILD_SUFFIX=-t8`
+   for every preset so your directories are `build/<preset>-t8`.
+4. **Test framework**: doctest (as everywhere in the repo), `tests/TestMain.cpp` is the shared main.
+5. **Reference decoders and fixtures**: verify fixture expectations with ffprobe/ffmpeg
+   (`C:\Users\Roma\scoop\apps\ffmpeg-shared\current\bin`) on the PNG produced by the committed
+   decrypt script; write the expected values into `fixtures/SOURCES.md` and assert them in tests.
+6. **Deliverables at the end**: `ctest` green for `debug`, `release`, `debug-x86`, `release-x86`,
+   `asan`; `scripts/coverage.ps1 -Preset coverage` and `-Preset coverage-x86` at 100/100;
+   `rpgmvp_check_imports` / `rpgmvp_check_exports` green; lint clean both archs; zips are NOT
+   your job (the orchestrator packages after review). Never commit.
