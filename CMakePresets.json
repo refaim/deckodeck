@@ -17,6 +17,7 @@
         "CMAKE_CXX_COMPILER": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64/bin/clang-cl.exe",
         "CMAKE_LINKER": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64/bin/lld-link.exe",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-clang",
         "VCPKG_HOST_TRIPLET": "x64-windows",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
@@ -84,6 +85,17 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "PVDKIT_COVERAGE": "ON"
       }
+    },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "displayName": "AddressSanitizer (x64)",
+      "description": "Every target with -fsanitize=address, /Od /Zi, /MT (RelWithDebInfo: the release ports, no Release-only gates); x64 only, no LeakSanitizer on Windows (see CMakeLists.txt)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "PVDKIT_COVERAGE": "OFF",
+        "PVDKIT_ASAN": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -110,6 +122,10 @@
     {
       "name": "coverage-x86",
       "configurePreset": "coverage-x86"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
     }
   ],
   "testPresets": [
@@ -157,6 +173,17 @@
       "name": "coverage-x86",
       "configurePreset": "coverage-x86",
       "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "configuration": "RelWithDebInfo",
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1:abort_on_error=0:allocator_may_return_null=0"
+      },
       "output": {
         "outputOnFailure": true
       }

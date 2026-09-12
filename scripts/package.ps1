@@ -26,6 +26,56 @@ if (($architectures -join ",") -ne "x64,x86") {
   throw "build-all.ps1 was expected to report x64 and x86 plugins, got: $($built | Out-String)"
 }
 
+# --- lint: the static-analysis gate runs once per architecture on the release build it just made
+# (clang-tidy and cppcheck read that build's compile_commands.json, BinSkim its DLLs; clang-format
+# and PSScriptAnalyzer cover the tree). Any finding aborts packaging before a zip exists.
+foreach ($buildDirectory in @($built | ForEach-Object { $_.BuildDirectory } | Sort-Object -Unique)) {
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "lint.ps1") `
+    -BuildDir $buildDirectory -ReleaseDir $buildDirectory | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    throw "scripts/lint.ps1 reported findings for $buildDirectory"
+  }
+}
+# --- end lint ---
+
+# --- asan: the AddressSanitizer gate (docs/tasks/task10-leaks.md, level 2) runs the whole test
+# suite - leak scenarios and hostile corpus included - once, on x64, with every target instrumented
+# (the `asan` preset; its build directory is build/asan<Suffix>, rebuilt from scratch like the
+# release ones). Any ASan report fails a test and therefore the packaging. The preset itself
+# documents why there is no LeakSanitizer on Windows and no x86 variant.
+$asanDirectory = Join-Path $repository "build\asan$Suffix"
+if (Test-Path -LiteralPath $asanDirectory) {
+  $buildRoot = [IO.Path]::GetFullPath((Join-Path $repository "build")) + [IO.Path]::DirectorySeparatorChar
+  if (-not ([IO.Path]::GetFullPath($asanDirectory)).StartsWith($buildRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to remove a build directory outside $buildRoot"
+  }
+  Remove-Item -LiteralPath $asanDirectory -Recurse -Force
+}
+$hadSuffix = Test-Path -LiteralPath "Env:PVDKIT_BUILD_SUFFIX"
+$previousSuffix = $env:PVDKIT_BUILD_SUFFIX
+$env:PVDKIT_BUILD_SUFFIX = $Suffix
+Push-Location $repository
+try {
+  foreach ($step in @(@("--preset", "asan"), @("--build", "--preset", "asan"))) {
+    & cmake @step | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+      throw "cmake $($step -join ' ') failed with exit code $LASTEXITCODE"
+    }
+  }
+  & ctest --preset asan | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    throw "ctest --preset asan failed with exit code $LASTEXITCODE (an AddressSanitizer report or a failing test)"
+  }
+} finally {
+  if ($hadSuffix) {
+    $env:PVDKIT_BUILD_SUFFIX = $previousSuffix
+  } else {
+    Remove-Item -LiteralPath "Env:PVDKIT_BUILD_SUFFIX" -ErrorAction SilentlyContinue
+  }
+  Pop-Location
+}
+# --- end asan ---
+
 $distDirectory = Join-Path $repository "dist"
 New-Item -ItemType Directory -Force -Path $distDirectory | Out-Null
 $staging = Join-Path $distDirectory "staging"

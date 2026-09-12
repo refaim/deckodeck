@@ -1,0 +1,15 @@
+# Test-only relaxations of the root .clang-tidy (everything else is inherited). Each plugin's
+# tests/.clang-tidy is a copy of this file: clang-tidy reads the nearest .clang-tidy above the
+# translation unit, and plugins/<id>/tests/ does not sit below this directory.
+#
+# - bugprone-unchecked-optional-access: doctest's REQUIRE(x.has_value()) is a do/while that logs
+#   and does not return in the check's flow model, so every guarded x-> afterwards is reported.
+# - clang-analyzer-optin.core.EnumCastOutOfRange: tests cast out-of-range integers on purpose to
+#   reach the default branch of every enum switch (ErrorCode 255, avifResult 999), and the check
+#   also fires inside the MSVC STL (<filesystem> bitmask enums) when a test calls file_size().
+---
+InheritParentConfig: true
+Checks: >
+  -bugprone-unchecked-optional-access,
+  -clang-analyzer-optin.core.EnumCastOutOfRange
+...

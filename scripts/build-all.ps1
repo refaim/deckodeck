@@ -79,7 +79,8 @@ try {
       New-Item -ItemType Directory -Force -Path $distDirectory | Out-Null
       $destination = Join-Path $distDirectory $manifest.file
       Copy-Item -LiteralPath $plugin -Destination $destination -Force
-      Write-Host "$($build.Architecture): $destination ($((Get-Item -LiteralPath $destination).Length) bytes)"
+      # Progress for the operator; the pipeline itself carries only the plugin objects below.
+      Write-Information -MessageData "$($build.Architecture): $destination ($((Get-Item -LiteralPath $destination).Length) bytes)" -InformationAction Continue
       [pscustomobject]@{
         Name = $manifest.name
         Version = $manifest.version

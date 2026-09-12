@@ -127,6 +127,13 @@ try {
   # ones: each <id>_e2e_tests carries a ctest ENVIRONMENT property (pvdkit_add_plugin_e2e_tests)
   # that overrides it with pvdkit-<id>-%p-%m.profraw in the same directory, which is how
   # Assert-PluginProfile below attributes profiles to plugins.
+  # The test inventory is read before the run: --show-only writes Testing/Temporary/LastTest.log
+  # like a run does, and would otherwise erase the [leak] lines the leak tests just logged there.
+  $testInventoryJson = & ctest --test-dir $buildDirectory --show-only=json-v1
+  if ($LASTEXITCODE -ne 0) {
+    throw "ctest test discovery failed with exit code $LASTEXITCODE"
+  }
+
   $env:LLVM_PROFILE_FILE = Join-Path $buildDirectory "pvdkit-%p-%m.profraw"
   Invoke-Checked "ctest" @("--preset", $Preset)
 
@@ -140,10 +147,6 @@ try {
   Invoke-Checked $llvmProfdata (@("merge", "-sparse") + $profileFiles.FullName + @("-o", $profileData))
 
   $normalizedBuildDirectory = (ConvertTo-NormalizedPath $buildDirectory) + [IO.Path]::DirectorySeparatorChar
-  $testInventoryJson = & ctest --test-dir $buildDirectory --show-only=json-v1
-  if ($LASTEXITCODE -ne 0) {
-    throw "ctest test discovery failed with exit code $LASTEXITCODE"
-  }
   $testInventory = $testInventoryJson | ConvertFrom-Json
   # Only executables built into this tree carry coverage mappings; a test that runs an external
   # program (e.g. the PowerShell import check) must not be handed to llvm-cov as an object.

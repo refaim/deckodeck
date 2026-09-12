@@ -106,6 +106,8 @@ tests/core/     core logic with fake decoder / file source / describer (doctest)
 tests/adapters/ the win adapter on real files
 tests/e2e/      the host driver + VERSIONINFO test, compiled into every plugin's e2e executable
 tests/guard/    source-scanning test enforcing rules 2–4 over src/ and plugins/*/src/
+tests/support/  the leak gate: heap/handle accounting, hostile corpus, the scenarios compiled into
+                every plugin's <id>_leak_tests (registered with its e2e tests; both architectures)
 ```
 
 ## Definition of done for any task
@@ -114,5 +116,10 @@ tests/guard/    source-scanning test enforcing rules 2–4 over src/ and plugins
 - Coverage gate passes at 100% lines / 100% branches on `src/**` and `plugins/*/src/**` (numbers included).
 - Guard test passes.
 - Zero warnings on both architectures.
+- `scripts/lint.ps1` (clang-format, clang-tidy, cppcheck, PSScriptAnalyzer, BinSkim) reports zero
+  findings against both architectures' build directories. A new suppression carries a one-line
+  reason in the configuration file it lives in (`.clang-tidy`, `tests/.clang-tidy`,
+  `cppcheck-suppressions.txt`, `PSScriptAnalyzerSettings.psd1`, `binskim.psd1`) or next to the
+  `NOLINT`.
 - The Release presets produce every `<NAME>.pvd` whose import table lists only `KERNEL32.dll` and
   whose export table is exactly the eight bare `pvd*` names (`<id>_check_imports`, `<id>_check_exports`).

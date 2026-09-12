@@ -3,14 +3,22 @@
 #include <memory>
 #include <utility>
 
-namespace pvdkit::pvd {
+namespace pvdkit::pvd
+{
 
-void* toHost(std::unique_ptr<IFileSession> session) noexcept { return session.release(); }
+    void *toHost(std::unique_ptr<IFileSession> session) noexcept
+    {
+        return session.release();
+    }
 
-std::unique_ptr<IFileSession> fromHost(void* context) noexcept {
-  return std::unique_ptr<IFileSession>{static_cast<IFileSession*>(context)};
-}
+    std::unique_ptr<IFileSession> fromHost(void *context) noexcept
+    {
+        return std::unique_ptr<IFileSession>{static_cast<IFileSession *>(context)};
+    }
 
-IFileSession* borrow(void* context) noexcept { return static_cast<IFileSession*>(context); }
+    IFileSession *borrow(void *context) noexcept
+    {
+        return static_cast<IFileSession *>(context);
+    }
 
-}  // namespace pvdkit::pvd
+} // namespace pvdkit::pvd

@@ -19,7 +19,12 @@
 #        plugin's identity, fixtures and DLL path; ctest entries <id>_e2e_tests (in coverage
 #        builds run under LLVM_PROFILE_FILE=pvdkit-<id>-%p-%m.profraw so scripts/coverage.ps1 can
 #        require this DLL's own profile), <id>_check_imports and <id>_check_exports (the last two
-#        in the Release configuration).
+#        in the Release configuration);
+#     -> executable <id>_leak_tests = the same host driver plus the shared leak scenarios
+#        (tests/support/leak/*, the property PVDKIT_LEAK_SCENARIO_SOURCES of pvdkit_leakcheck) over
+#        the same fixture directory, which discovers the fixtures through the DLL itself; ctest
+#        entry <id>_leak_tests (the same coverage-build profile name). A plugin gets the leak gate
+#        by registering its e2e tests and nothing else.
 
 # Escapes a string for use inside a C string literal in a generated header (backslashes, quotes).
 function(_pvdkit_escape_literal out value)
@@ -228,4 +233,44 @@ function(pvdkit_add_plugin_e2e_tests id)
     CONFIGURATIONS Release
     COMMAND "${PVDKIT_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File
             "${PROJECT_SOURCE_DIR}/scripts/check-exports.ps1" -Path "$<TARGET_FILE:${id}_plugin>")
+
+  _pvdkit_add_plugin_leak_tests(${id} "${arg_FIXTURES}")
+endfunction()
+
+# The leak gate (docs/tasks/task10-leaks.md, level 1): the shared scenarios in tests/support/leak
+# drive the DLL like the host through the same driver the e2e test uses, for N host-level
+# operations per scenario after a warm-up, and require zero heap-block, heap-byte and handle
+# deltas (tests/support/LeakCheck.hpp explains the accounting and why it is one mechanism for
+# Debug and Release). The scenarios need no plugin-specific code: they discover the fixture
+# directory through the plugin itself, so pvdkit_add_plugin_e2e_tests registers this for every
+# plugin. Only the host driver is shared with the e2e executable (not its VERSIONINFO test).
+function(_pvdkit_add_plugin_leak_tests id fixtures)
+  if(NOT TARGET pvdkit_leakcheck)
+    message(FATAL_ERROR "_pvdkit_add_plugin_leak_tests(${id}): tests/support must be configured before the plugins")
+  endif()
+  get_target_property(scenario_sources pvdkit_leakcheck PVDKIT_LEAK_SCENARIO_SOURCES)
+  if(NOT scenario_sources)
+    message(FATAL_ERROR "_pvdkit_add_plugin_leak_tests(${id}): pvdkit_leakcheck carries no PVDKIT_LEAK_SCENARIO_SOURCES")
+  endif()
+  file(GLOB host_driver CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/tests/e2e/PluginHost.*")
+  add_executable(${id}_leak_tests ${scenario_sources} ${host_driver} "${PROJECT_SOURCE_DIR}/tests/TestMain.cpp")
+  add_dependencies(${id}_leak_tests ${id}_plugin)
+  target_include_directories(${id}_leak_tests PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/tests/e2e")
+  target_link_libraries(${id}_leak_tests PRIVATE ${id}_identity pvdkit_leakcheck doctest::doctest pvdkit_options)
+  target_compile_definitions(
+    ${id}_leak_tests
+    PRIVATE
+      PVDKIT_PLUGIN_PATH="$<TARGET_FILE:${id}_plugin>"
+      PVDKIT_FIXTURE_DIR="${fixtures}")
+  add_test(NAME ${id}_leak_tests COMMAND ${id}_leak_tests)
+  if(PVDKIT_COVERAGE)
+    # Same reasoning as for ${id}_e2e_tests above: this process loads the instrumented DLL too, and
+    # its profiles are filed under the plugin id so scripts/coverage.ps1 can attribute them. The
+    # definition lets the LoadLibrary/FreeLibrary scenario allow for what the profile runtime inside
+    # the instrumented DLL keeps per load (LeakScenarios.cpp).
+    target_compile_definitions(${id}_leak_tests PRIVATE PVDKIT_COVERAGE=1)
+    set_tests_properties(
+      ${id}_leak_tests
+      PROPERTIES ENVIRONMENT "LLVM_PROFILE_FILE=${PROJECT_BINARY_DIR}/pvdkit-${id}-%p-%m.profraw")
+  endif()
 endfunction()

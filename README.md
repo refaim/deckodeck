@@ -68,7 +68,46 @@ Checks that are part of the definition of done:
 ./scripts/coverage.ps1 -Preset coverage-x86             # the same gate for the 32-bit build
 ./scripts/check-imports.ps1 -Path build/release/plugins/avif/AVIF.pvd   # imports == KERNEL32.dll only
 ./scripts/check-exports.ps1 -Path build/release/plugins/avif/AVIF.pvd   # exports == the eight bare pvd* names
+./scripts/lint.ps1 -BuildDir build/release -ReleaseDir build/release          # static analysis, zero findings (x64)
+./scripts/lint.ps1 -BuildDir build/release-x86 -ReleaseDir build/release-x86  # the same for the 32-bit build
+cmake --preset asan; cmake --build --preset asan; ctest --preset asan  # AddressSanitizer over the whole suite (x64)
 ```
+
+`lint.ps1` is the static-analysis gate and exits non-zero on any finding. `-BuildDir` is any
+configured build of the architecture (its `compile_commands.json` feeds clang-tidy and cppcheck;
+every preset exports one, and `debug` works as well as `release`), `-ReleaseDir` the Release
+build whose `plugins/<id>/<NAME>.pvd` BinSkim reads; `scripts/package.ps1` passes its own
+from-scratch release directory as both, once per architecture, before it zips anything. The
+tools: clang-format (`--dry-run --Werror`, `.clang-format`: Microsoft style, 120 columns, 4
+spaces) over `src/**`, `plugins/*/src/**`, `tests/**` and `plugins/*/tests/**`; clang-tidy
+(`.clang-tidy`: `clang-analyzer-*`, `bugprone-*`, `performance-*`, `portability-*`, warnings as
+errors) over every translation unit of the compile database, in parallel, reporting headers under
+`src/`, `tests/` and every plugin's `src/` and `tests/`, with `tests/.clang-tidy` and
+`plugins/<id>/tests/.clang-tidy` relaxing two checks for test code; cppcheck
+(`--enable=warning,performance,portability`, the same compile database restricted to `src/` and
+`plugins/*/src/`, `cppcheck-suppressions.txt`); PSScriptAnalyzer over
+`scripts/`, `plugins/*/scripts/` and the root `.psd1` files (`PSScriptAnalyzerSettings.psd1`);
+and BinSkim over every release `<NAME>.pvd` (`binskim.psd1`: error and warning results fail; the
+release build links `/DEBUG:NONE`; `binskim.psd1` lists which rules that leaves unevaluated and
+which mitigations - Spectre, CET shadow stack, `/sdl` - are deliberately not done and why).
+BinSkim cannot judge `/HIGHENTROPYVA` on a DLL (BA2015 is not applicable), so the script reads
+that bit from every 64-bit image with llvm-readobj itself. `-Tools` selects a subset
+(`-Tools clang-format,cppcheck`); `-Jobs` is the number of parallel clang-tidy processes, half
+the logical cores by default, and every tool runs at below-normal priority so the machine stays
+usable meanwhile. Suppressions live in those files, each with its reason. A new
+plugin copies `tests/.clang-tidy` into its own `tests/`. The gate is not part of `ctest`.
+
+The `asan` preset builds every target - the plugin DLLs included - with AddressSanitizer
+(`-fsanitize=address /Od /Zi`, `/MT`, RelWithDebInfo so the release ports are used) and runs the
+whole suite under it, the leak scenarios and their hostile corpus included; any ASan report fails
+the run. It is x64 only, and it is a memory-error gate, not a leak gate: LeakSanitizer does not
+exist in clang 19's Windows runtime (`detect_leaks is not supported on this platform`), so leaks
+are the level-1 job of `<id>_leak_tests` in every preset. Only our own code is instrumented: the
+vcpkg ports (libavif, dav1d, libyuv) are built without ASan, so inside them only the interceptors
+(`malloc`, `free`, `memcpy`, ...) see anything - the hostile-corpus claim under this preset is
+about our code on hostile input and the host-side read of every byte of every page handed out,
+not about a port's own instructions. `scripts/package.ps1` runs it from scratch before zipping.
+Details and the other toolchain caveats: `docs/ARCHITECTURE.md` par. 4.
 
 `coverage.ps1` configures and builds the `coverage` preset (`-Preset coverage-x86` for x86), runs
 every test executable (each plugin's e2e run loads its instrumented DLL and merges its profile too,
@@ -90,10 +129,12 @@ src/adapters/   win/ (file mapping, UTF-8 paths)
 plugins/<id>/   one plugin: src/core, src/adapters/<lib>, src/DefaultPlugin.cpp (composition),
                 tests/{core,adapters,e2e}, fixtures/, scripts/, package/README.txt.in, README.md, DESIGN.md
 tests/          pvd, core, adapters (win), guard (source rules) — shared tests; e2e holds the
-                host driver and VERSIONINFO test every plugin's e2e executable compiles in
+                host driver and VERSIONINFO test every plugin's e2e executable compiles in;
+                support holds the leak accounting, the hostile corpus generator and the leak
+                scenarios every plugin's leak executable compiles in
 cmake/          toolchains, vcpkg wrapper, pvdkit-plugin.cmake (the plugin helpers)
 docs/           ARCHITECTURE.md (the shared design) and the task history
-scripts/        coverage, import/export checks, build-all, package (all plugins)
+scripts/        coverage, import/export checks, lint, build-all, package (all plugins)
 ```
 
 `docs/ARCHITECTURE.md` describes the layering, the canonical interfaces and how a plugin is added;
@@ -115,5 +156,33 @@ scripts/        coverage, import/export checks, build-all, package (all plugins)
   plugin. Registered for the Release configuration only (`add_test(... CONFIGURATIONS Release)`):
   the `release` test presets pass `-C Release`, and on the multi-config
   `Visual Studio 17 2022 -T ClangCL` fallback `ctest -C Release` selects them.
+- `leakcheck_tests` and `<id>_leak_tests` - the leak gate (level 1 of `docs/tasks/task10-leaks.md`,
+  every preset, both architectures). `tests/support/LeakCheck` snapshots the process - live blocks
+  and bytes of the process heap (`HeapWalk`; one mechanism for Debug and Release because every
+  static CRT in the process, the plugin DLL's included, allocates from that heap, which
+  `_CrtMemCheckpoint` could never see across modules), the handle count, the mapped views
+  (committed `MEM_MAPPED` regions via `VirtualQuery`: a leaked `MapViewOfFile` is neither a block
+  nor a handle and barely moves the commit charge), and the commit charge as a coarse
+  cross-check - around a warm-up and N = 200 host-level operations, and requires no growth in
+  blocks, bytes, handles or views (a pass that grows gets a second pass and both are printed; the
+  second decides only when the first grew by at most two small blocks, else the first stands -
+  a cache that fills after warm-up is a finding; growth is reported as the list of blocks that
+  appeared). `leakcheck_tests` proves the accounting on deliberately leaking fakes (a block, a
+  handle, a view); `<id>_leak_tests` (registered by `pvdkit_add_plugin_e2e_tests`, no plugin code needed)
+  drives the real DLL like the host through the e2e driver over the plugin's fixture directory,
+  which it classifies through the DLL itself: disk and memory round trips with init/exit, close
+  without free, a decode aborted at each callback step, every rejection path, two pages
+  outstanding freed in both orders, N sessions open at once, init/exit cycled, eight threads
+  decoding concurrently, `LoadLibrary`/`FreeLibrary` cycled, host-like browsing with a sliding
+  window of three open files (aborts, page switches, close with pages out), and the hostile
+  corpus - every rejected fixture plus 200 deterministic mutants of the accepted ones (byte flips,
+  truncations, corrupted box sizes, spliced and trailing garbage, zeroed ranges; generated into
+  `%TEMP%` at test time, seed 20260912) opened in both modes, each of which must be refused or
+  decode to a usable image. Every scenario prints one `[leak] ...` line with its deltas and
+  timings; `PVDKIT_LEAK_ITERATIONS=5000` turns a run into a soak. The "< 30 s per architecture"
+  budget is met by the plain presets (~15 s Release, ~24-27 s Debug); the instrumented `coverage`
+  and `asan` builds run the same N and take 30-42 s, by design. The unit-level counterpart lives
+  in `adapter_tests` (`FileMapping`/`FileSource` open and close) and `<id>_adapter_tests`
+  (decoder create/decode/destroy, refusals, the composed plugin).
 
 Fixtures belong to their plugin (`plugins/<id>/fixtures/` with a `SOURCES.md`).

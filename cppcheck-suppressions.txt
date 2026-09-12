@@ -1,0 +1,18 @@
+# cppcheck suppressions for scripts/lint.ps1 (--suppressions-list). Format: <id>:<path glob>.
+# Every entry is narrow (third-party code only) and carries its reason; never suppress an id
+# repository-wide. Both entries are quiet today (0 matches on either architecture); they are kept
+# so a change in how cppcheck sees third-party headers cannot turn into findings in code we may
+# not edit.
+
+# third_party/pvd/PictureViewPlugin.h is the author's SDK header, copied verbatim (AGENTS.md: never
+# edit it): plain C structs the host fills, which cannot have constructors. cppcheck reports
+# uninitMemberVarNoCtor on them (8 findings) when run without --platform; lint.ps1 passes
+# --platform=win64/win32W, under which cppcheck 2.21 does not, so this guards the SDK header if
+# that changes with a cppcheck update.
+uninitMemberVarNoCtor:*third_party/pvd/PictureViewPlugin.h
+
+# vcpkg ports (libavif, dav1d, libyuv, doctest) are third-party code we never modify. cppcheck
+# does not read them today: the compile database passes their include directory as -imsvc, which
+# cppcheck ignores (with --enable=missingInclude it reports <avif/avif.h> as not found), so this
+# guards them if cppcheck ever learns -imsvc or a -I is added.
+*:*/vcpkg_installed/*

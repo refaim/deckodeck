@@ -25,9 +25,14 @@ pvdkit/
     tests/core/ tests/adapters/ tests/e2e/   the plugin's tests
     fixtures/  scripts/  package/README.txt.in  README.md  DESIGN.md
   tests/pvd/ tests/core/ tests/adapters/ tests/guard/   shared tests
+  tests/support/      the leak gate: LeakCheck (accounting), HostileCorpus (fuzz-lite corpus),
+                      leak/LeakScenarios.cpp compiled into every plugin's <id>_leak_tests
   tests/e2e/          the shared host driver + VERSIONINFO test, compiled into every plugin's e2e
   cmake/pvdkit-plugin.cmake   pvdkit_plugin_identity / pvdkit_add_plugin / pvdkit_add_plugin_e2e_tests
-  scripts/            coverage, check-imports, check-exports, build-all, package (all plugins)
+  scripts/            coverage, check-imports, check-exports, lint, build-all, package (all plugins;
+                      package runs lint on both architectures and the asan preset)
+  .clang-format .clang-tidy tests/.clang-tidy cppcheck-suppressions.txt PSScriptAnalyzerSettings.psd1
+  binskim.psd1        the analyzer configuration scripts/lint.ps1 reads (Task 9)
   ports/ triplets/ vcpkg.json CMakePresets.json   one toolchain and one manifest for the kit
   docs/               this file and the task history
 ```
@@ -116,7 +121,7 @@ describer it places under `src/core/`.
 ### 3.1 `src/core/Error.hpp`
 
 ```cpp
-enum class ErrorCode {
+enum class ErrorCode : std::uint8_t {   // every enum names its base type (clang-tidy performance-enum-size)
   NotRecognised,      // signature check failed → host tries the next decoder
   FileOpenFailed,     // could not open/map the file by name
   ParseFailed,        // the container could not be parsed
@@ -129,7 +134,7 @@ enum class ErrorCode {
   InvalidTransform,   // clap/irot/imir data inconsistent with image size
   Internal,           // programming error surfaced as a value (e.g. buffer too small)
 };
-struct Error { ErrorCode code; std::string detail; };
+struct Error { ErrorCode code = ErrorCode::Internal; std::string detail; };   // scalar members carry defaults (cppcheck)
 template <class T> using Result = std::expected<T, Error>;
 std::string_view name(ErrorCode);   // for diagnostics/tests
 ```
@@ -137,18 +142,18 @@ std::string_view name(ErrorCode);   // for diagnostics/tests
 ### 3.2 `src/pvd/Types.hpp` — host-facing values (no raw pointers)
 
 ```cpp
-struct PluginInfo { std::uint32_t priority; std::string name, version, comments; };
-struct ImageInfo  { std::uint32_t pageCount; bool animated; std::string formatName, compression, comments; };
+struct PluginInfo { std::uint32_t priority = 0; std::string name, version, comments; };
+struct ImageInfo  { std::uint32_t pageCount = 0; bool animated = false; std::string formatName, compression, comments; };
 struct PageInfo   { std::uint32_t width, height, bitsPerPixel, frameTimeMs; };
-enum class PixelFormat { Bgr24, Bgra32 };
+enum class PixelFormat : std::uint8_t { Bgr24, Bgra32 };
 struct DecodedPage {                     // a view; pixel memory is owned by the session
   std::span<const std::byte> pixels;     // top-down rows
-  std::uint32_t bitsPerPixel;            // 24 or 32
-  std::uint32_t pitchBytes;              // width * bytesPerPixel, no padding
+  std::uint32_t bitsPerPixel = 0;        // 24 or 32
+  std::uint32_t pitchBytes = 0;          // width * bytesPerPixel, no padding
 };
 struct OpenRequest {
   std::string_view utf8FileName;
-  std::uint64_t fileSize;                // 0 → `head` is the whole file and outlives the session
+  std::uint64_t fileSize = 0;            // 0 → `head` is the whole file and outlives the session
   std::span<const std::byte> head;
 };
 class Progress {                         // wraps the host callback; no callback → always continue
@@ -184,16 +189,18 @@ class IPlugin {
 ### 3.4 `src/pvd/Shim.hpp`, `ContextHandle.hpp`, `Firewall.hpp`, `PluginIdentity.hpp`
 
 - `Firewall`: `template <class F> auto guarded(F&& f, decltype(f()) fallback) noexcept` — runs `f`,
-  returns `fallback` on any exception. A `void` overload swallows. This is the only `catch (...)` in
-  the codebase. Tested with a fake that throws `std::bad_alloc`, `std::runtime_error`, and an `int`.
+  returns `fallback` on any exception. A `void` overload delegates to it (wrapping `f` in a lambda
+  that returns `true`) and swallows, so the value overload holds the only `catch (...)` in the
+  codebase. Tested with a fake that throws `std::bad_alloc`, `std::runtime_error`, and an `int`.
 - `ContextHandle`: `void* toHost(std::unique_ptr<IFileSession>)`,
   `std::unique_ptr<IFileSession> fromHost(void*)`, `IFileSession* borrow(void*)` (the pointer stays on
   the adapter line: callers immediately dereference or check null).
-- `PluginIdentity` (`src/pvd/PluginIdentity.hpp`): `struct { std::uint32_t priority;
+- `PluginIdentity` (`src/pvd/PluginIdentity.hpp`): `struct { std::uint32_t priority = 0;
   std::string_view name, version; }` — the constant identity of one plugin, literal-backed (the
   host receives `data()` as C strings). The shared layer only forwards a value it is given; each
   plugin's value `kPluginIdentity` comes from its generated `pvd/PluginConstants.hpp` (§3.4a).
-- `Shim` (constructed over `IPlugin&` and a `PluginIdentity`, non-copyable):
+- `Shim` (constructed over `IPlugin&` and a `const PluginIdentity&`, copied into the member,
+  non-copyable):
   `UINT32 init()`, `void exit()`, `void pluginInfo(pvdInfoPlugin*)`,
   `BOOL fileOpen(const char*, INT64, const BYTE*, UINT32, pvdInfoImage*, void**)`,
   `BOOL pageInfo(void*, UINT32, pvdInfoPage*)`,
@@ -275,25 +282,25 @@ class IFileSource { public: virtual ~IFileSource() = default; [[nodiscard]] virt
 ### 3.6 `src/core/IDecoder.hpp`, `src/core/IImageDescriber.hpp`
 
 ```cpp
-enum class ChromaFormat { Yuv444, Yuv422, Yuv420, Yuv400 };
+enum class ChromaFormat : std::uint8_t { Yuv444, Yuv422, Yuv420, Yuv400 };
 struct Cicp { std::uint16_t primaries, transfer, matrix; bool fullRange; };
 struct CropRect { std::uint32_t x, y, width, height; };
-enum class MirrorAxis { TopBottom, LeftRight };   // named after the effect, never a magic number
+enum class MirrorAxis : std::uint8_t { TopBottom, LeftRight };   // named after the effect, never a magic number
 struct Transforms {                               // every field at its default = "none"
   std::optional<CropRect> clap;       // already converted from clap fractions to a pixel rect by the adapter
   std::uint8_t irotAngle = 0;         // 0..3 quarter turns, anti-clockwise (HEIF 'irot')
   std::optional<MirrorAxis> imir;
 };
-struct ImageMeta {
-  std::uint32_t width, height;        // coded size, before transforms
-  std::uint8_t depth;                 // bits per sample of the source (8, 10, 12, ...)
-  ChromaFormat chroma;                // sample layout in CICP terms (see below)
-  bool hasAlpha, alphaPremultiplied;
-  Cicp cicp;
-  std::uint32_t frameCount;           // ≥ 1
-  bool animated;                      // frameCount > 1 (image sequence)
+struct ImageMeta {                    // every scalar has a default: an empty ImageMeta{} is a valid value
+  std::uint32_t width = 0, height = 0; // coded size, before transforms
+  std::uint8_t depth = 0;             // bits per sample of the source (8, 10, 12, ...)
+  ChromaFormat chroma = ChromaFormat::Yuv444;   // sample layout in CICP terms (see below)
+  bool hasAlpha = false, alphaPremultiplied = false;
+  Cicp cicp{};
+  std::uint32_t frameCount = 0;       // ≥ 1 once parsed
+  bool animated = false;              // frameCount > 1 (image sequence)
   Transforms transforms;
-  bool hasIcc, hasExif, hasXmp;
+  bool hasIcc = false, hasExif = false, hasXmp = false;
 };
 struct FrameTiming { std::uint32_t durationMs; };
 struct DecoderOptions { unsigned maxThreads; bool strict; std::uint64_t maxPixels; std::uint32_t maxDimension; };
@@ -353,10 +360,11 @@ Decisions (Task 7, open point 1):
   refused instead of wrapped; there is no `#ifdef` on the architecture anywhere in `src/`. Frame
   times use `std::llround` (`long` is 32 bits on Windows).
 - `Transform` (`src/core/Transform.hpp/.cpp`): pure functions over `PixelView`
-  (`std::span<const std::byte>`, width, height, bytesPerPixel, pitch):
+  (`std::span<const std::byte>`, width, height, bytesPerPixel, pitch, the four integers defaulted
+  to 0; always passed by `const&`):
   `Result<CropRect> validatedCrop(...)`, `std::pair<uint32,uint32> displaySize(const ImageMeta&)`,
   `bool hasTransforms(const Transforms&)`,
-  `Result<PixelBuffer> apply(const Transforms&, PixelView, std::uint64_t maxPixels)` applying
+  `Result<PixelBuffer> apply(const Transforms&, const PixelView&, std::uint64_t maxPixels)` applying
   **clap → irot → imir** in that order; with no transform present `apply` returns an identity copy
   (no precondition, never throws for a well-formed view). There are no separate public
   `crop`/`rotate`/`mirror` entry points: `apply` with a single property set is the per-operation
@@ -367,7 +375,8 @@ Decisions (Task 7, open point 1):
   `imir` semantics follow the installed `avif.h` comment for `axis`; the adapter maps the number to
   `MirrorAxis`. Unit tests use 2×3 / 3×2 synthetic images with hand-derived expected outputs.
 - `CodecPlugin : pvd::IPlugin` (`src/core/CodecPlugin.hpp/.cpp`), ctor
-  `(IFileSource&, IDecoderFactory&, const IImageDescriber&, DecoderOptions, PluginInfo)`.
+  `(IFileSource&, IDecoderFactory&, const IImageDescriber&, const DecoderOptions&, PluginInfo)`
+  (the options are copied into the member; `FileSession` takes them the same way).
   `open()`: `recognises(head)` else `NotRecognised`; if `fileSize == 0` data = `head`, else
   `fileSource.open(name)` → `IFileData` owned by the session; `factory.create(data, options)`;
   `describer.describe(meta)`; build `ImageInfo{frameCount, animated, formatName, compression,
@@ -409,13 +418,14 @@ Decisions (Task 7, open point 1):
 
 ## 4. Build
 
-- CMake ≥ 3.28, presets in `CMakePresets.json`: `debug`, `release`, `coverage` (x64) and
+- CMake ≥ 3.28, presets in `CMakePresets.json`: `debug`, `release`, `coverage`, `asan` (x64) and
   `debug-x86`, `release-x86`, `coverage-x86` (32-bit; all Ninja, clang-cl, lld-link). The names
-  are unchanged from v1; every preset builds every plugin. `-DPVDKIT_PLUGINS=<id>[;<id>]`
-  restricts the build (and the vcpkg manifest features, see below) to those plugins. The x86
-  presets differ from the x64 ones only in `VCPKG_TARGET_TRIPLET = x86-windows-static-clang`;
-  `cmake/vcpkg-root.cmake` reads `triplets/<triplet>.cmake` to pick the chainload toolchain
-  (`cmake/clang-cl-x86.toolchain.cmake`: the same x64-hosted clang-cl cross-compiling with
+  are unchanged from v1 (`asan` is Task 10's); every preset builds every plugin.
+  `-DPVDKIT_PLUGINS=<id>[;<id>]` restricts the build (and the vcpkg manifest features, see below)
+  to those plugins. The x86 presets differ from the x64 ones only in
+  `VCPKG_TARGET_TRIPLET = x86-windows-static-clang`; `cmake/vcpkg-root.cmake` reads
+  `triplets/<triplet>.cmake` to pick the chainload toolchain (`cmake/clang-cl-x86.toolchain.cmake`:
+  the same x64-hosted clang-cl cross-compiling with
   `CMAKE_<LANG>_COMPILER_TARGET = i686-pc-windows-msvc`), so the triplet file is the one place
   that maps an architecture to its toolchain. The x86 triplet also sets `VCPKG_LOAD_VCVARS_ENV ON`:
   vcpkg does not load vcvars for chainloaded triplets, and without it meson (dav1d) activates
@@ -423,9 +433,14 @@ Decisions (Task 7, open point 1):
   A plugin lands in `build/<preset><suffix>/plugins/<id>/<NAME>.pvd` (x86 builds are
   `IMAGE_FILE_MACHINE_I386`).
   `release`: `/O2`, `/MT`, `/DEBUG:NONE`. `coverage`: `/Od /Zi /MT`
-  + `-fprofile-instr-generate -fcoverage-mapping` on every target.
-- Common flags: `/clang:-std=c++23 /W4 /WX /permissive- /utf-8 /EHsc /Zc:preprocessor`
-  plus `-Wno-` nothing unless justified. `static_assert(__cplusplus >= 202302L)` in `src/core/Error.hpp`.
+  + `-fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic` on every target - the
+  atomic counter updates because the leak tests decode through the instrumented DLL on eight
+  threads at once, and plain adds lose each other (a probe recorded 1.4-3.0 M of 8 M increments
+  without the flag, exactly 8 M with it; the x86 gate once read 99.657 % branches for that
+  reason).
+- Common flags: `/clang:-std=c++23 /W4 /WX /permissive- /utf-8 /EHsc /Zc:preprocessor /guard:cf`
+  (Control Flow Guard on the compile and the link line of every configuration, BinSkim BA2008; it
+  adds no import) plus `-Wno-` nothing unless justified. `static_assert(__cplusplus >= 202302L)` in `src/core/Error.hpp`.
   The `coverage-x86` build links `clang_rt.profile-i386.lib` from the x86-hosted LLVM of the same
   Build Tools explicitly (the x64-hosted one ships only the x86_64 runtime, so clang names an
   arch-less `clang_rt.profile.lib` that exists nowhere; `/NODEFAULTLIB` drops that name).
@@ -460,7 +475,8 @@ Decisions (Task 7, open point 1):
     coverage builds with the ctest `ENVIRONMENT` property
     `LLVM_PROFILE_FILE=<build>/pvdkit-<id>-%p-%m.profraw`, so the coverage gate can tell this
     DLL's profile from every other plugin's) plus the ctest entries `<id>_check_imports` and
-    `<id>_check_exports` (Release configuration).
+    `<id>_check_exports` (Release configuration), and - from the same call, no extra line in the
+    plugin - `<id>_leak_tests` (the shared leak scenarios over the same fixtures, §5).
   Shared tests: `pvd_tests` (compiles `Exports.cpp` against `pvd_tests_identity`), `core_tests`,
   `adapter_tests` (win), `guard_tests`. Per-directory `CMakeLists.txt` with
   `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`; the top level globs `plugins/*/CMakeLists.txt` the
@@ -468,6 +484,26 @@ Decisions (Task 7, open point 1):
 - `scripts/check-imports.ps1`: fails unless the import table of the given DLL is exactly `KERNEL32.dll`
   (`llvm-readobj --coff-imports`). `scripts/check-exports.ps1`: exactly the eight bare `pvd*` names.
   Both are registered per plugin as ctest tests in the release presets.
+- `scripts/lint.ps1 -BuildDir <configured build> -ReleaseDir <release build> [-Tools ...] [-Jobs n]`
+  (Task 9): the static-analysis gate, run once per architecture and not part of ctest. clang-format
+  (`--dry-run --Werror`, `.clang-format`: Microsoft base, 120 columns, 4 spaces) over `src/**`,
+  `plugins/*/src/**`, `tests/**`, `plugins/*/tests/**`; clang-tidy (`.clang-tidy`:
+  `clang-analyzer-*, bugprone-*, performance-*, portability-*`, warnings as errors, headers under
+  `src/`, `tests/` and the plugin `src/`/`tests/` roots reported) over every TU of the build's
+  `compile_commands.json` (`CMAKE_EXPORT_COMPILE_COMMANDS` is on in the base preset), `-Jobs`
+  processes at a time (half the cores by default), with `tests/.clang-tidy` and
+  `plugins/<id>/tests/.clang-tidy` relaxing `bugprone-unchecked-optional-access` and
+  `clang-analyzer-optin.core.EnumCastOutOfRange` for test code only; cppcheck
+  (`--enable=warning,performance,portability --std=c++23 --platform=win64|win32W --library=windows`,
+  the same compile database restricted to `src/` and `plugins/*/src/`, `cppcheck-suppressions.txt`);
+  PSScriptAnalyzer (`scripts/`, `plugins/*/scripts/`, the root `.psd1` files;
+  `PSScriptAnalyzerSettings.psd1`, no exclusions); BinSkim over every release `<NAME>.pvd`
+  (`binskim.psd1`: error and warning results fail - SARIF warnings carry no `level`, the script
+  applies the 2.1.0 default; the PDB-less release build leaves the PDB rules unevaluated and
+  Spectre, CET shadow stack and `/sdl` deliberately undone, as documented there) plus the
+  `/HIGHENTROPYVA` bit of every 64-bit image read with llvm-readobj (BinSkim's BA2015 does not
+  apply to DLLs). Every tool runs at below-normal priority. Exit 1 on any finding; every
+  suppression carries its reason in the file it lives in or next to the `NOLINT`.
 - Build directories: `build/<preset>$env{PVDKIT_BUILD_SUFFIX}` so several agents can build the
   same tree concurrently without sharing a Ninja/CMake state directory.
 - `scripts/coverage.ps1 [-Preset coverage|coverage-x86]`: configures+builds the preset, runs every
@@ -488,6 +524,44 @@ Decisions (Task 7, open point 1):
   and `dist/x86/<NAME>.pvd`. `scripts/package.ps1`: the same from scratch (suffix `-pkg`), checks
   each DLL's `FileVersion` against the manifest, then `dist/<NAME>-<version>-{x64,x86}.zip`
   (`<NAME>.pvd`, `README.txt`, `LICENSES.txt` from the staging directory) with their SHA-256.
+  Before the zips it also runs the `asan` preset from scratch (`build/asan-pkg`): configure, build,
+  `ctest --preset asan`; any AddressSanitizer report fails the packaging.
+- Preset `asan` (Task 10, level 2; x64 only): `CMAKE_BUILD_TYPE=RelWithDebInfo` with
+  `PVDKIT_ASAN=ON`, which adds `-fsanitize=address /Od /Zi` to every target - the plugin DLLs
+  included - and `/DEBUG` at link time, so a report names the line. RelWithDebInfo rather than
+  Release keeps `/MT` and the release ports (vcpkg maps the configuration) without the
+  Release-only gates (`check_imports`, `check_exports`) that the thunk model would not satisfy in
+  spirit. CMake links with lld-link directly, so the top-level `CMakeLists.txt` names the runtime
+  libraries clang-cl's own driver would add (LLVM 19 `lib/clang/19/lib/windows`): an executable
+  gets `clang_rt.asan-x86_64.lib` and `clang_rt.asan_cxx-x86_64.lib` as `/wholearchive:` inputs, a
+  DLL gets `clang_rt.asan_dll_thunk-x86_64.lib` (it forwards to the executable's runtime through
+  `GetProcAddress`, so the instrumented `.pvd` still imports only `KERNEL32.dll` and exports the
+  eight names) - the `197611TARGET_PROPERTY:TYPE>` of the target being linked selects the set. The
+  test preset sets `ASAN_OPTIONS=halt_on_error=1:abort_on_error=0:allocator_may_return_null=0`;
+  `detect_stack_use_after_return` stays off (its fake stack is incompatible with SEH-based C++
+  unwinding here and wants 11 MB per thread). Three toolchain facts, each verified with a probe on
+  clang-cl 19.1.5 / UCRT 10.0.26100: **LeakSanitizer does not exist on Windows** - the runtime
+  answers `AddressSanitizer: detect_leaks is not supported on this platform` and exits 1, so the
+  leak gate is the level-1 accounting of `<id>_leak_tests` and this preset is the memory-error
+  gate only; the x86 cross build is not offered (the x64-hosted LLVM ships only the x86_64
+  runtime, and LSan would be absent there too); and ASan instrumentation breaks a rethrow
+  (`throw;`) inside a catch handler (garbage exception object, access violation or fail-fast
+  0xC0000409), which only doctest's exception translation does - `tests/TestMain.cpp` therefore
+  wraps the doctest implementation in `#pragma clang attribute push(no_sanitize("address"))`
+  under ASan; nothing under `src/**` or `plugins/*/src/**` rethrows (the firewall swallows). At
+  start-up the runtime also prints `interception_win: unhandled instruction` for one CRT function
+  it cannot hot-patch in this UCRT; instrumented code is checked regardless (the probe caught a
+  one-byte heap overflow in an EXE and in a `LoadLibrary`-ed DLL with full symbols). Under ASan
+  `HeapAlloc` of every module is served by ASan's allocator and freed memory is quarantined, so
+  the leak scenarios check handles and mapped views only there and print the rest. What is and is
+  not instrumented: our code (`src/**`, `plugins/*/src/**`, the tests) is; the vcpkg ports -
+  libavif, dav1d, libyuv - are not (they are built by vcpkg without `-fsanitize=address`), so
+  inside them only ASan's interceptors see anything (`malloc`/`free`/`memcpy`/... arguments, a
+  use after free of a block, an overflow that reaches a redzone through an intercepted call),
+  not an out-of-bounds read by dav1d's own instructions. The hostile-corpus claim under this
+  preset is therefore about our code on hostile input plus the host-side check that every byte
+  of every handed-out page is readable; a bug confined to a port's own instructions is caught by
+  the port's upstream fuzzing, not here.
 
 ## 5. Tests
 
@@ -512,6 +586,84 @@ Decisions (Task 7, open point 1):
   into every plugin's `<id>_e2e_tests` with `PVDKIT_PLUGIN_PATH` / `PVDKIT_FIXTURE_DIR` set for
   that plugin. The plugin adds its own `E2eTests.cpp` (fixture expectations, pixel checks, the
   rejection list, concurrency).
+- `tests/support`: the leak gate (Task 10, level 1; every preset, both architectures). Static
+  library `pvdkit_leakcheck` = `LeakCheck.hpp/.cpp` (the accounting) + `HostileCorpus.hpp/.cpp`
+  (the fuzz-lite corpus generator), with `leakcheck_tests` as its self-test against deliberately
+  leaking fakes (a leaked block and a leaked handle are charged exactly, warm-up allocations are
+  not; the corpus is deterministic and every mutant differs from its source); `leak/LeakScenarios.cpp`
+  is compiled into every plugin's `<id>_leak_tests` by `pvdkit_add_plugin_e2e_tests` together with
+  the host driver (`PVDKIT_PLUGIN_PATH` / `PVDKIT_FIXTURE_DIR` as for the e2e test), so a plugin
+  registers nothing extra. Accounting (decision, Task 10): the process heap is walked (`HeapWalk`
+  under `HeapLock`, busy blocks and their bytes) rather than `_CrtMemCheckpoint`, because every
+  module built with the static CRT has its own CRT instance whose debug-heap bookkeeping is
+  invisible to the others - the test executable could never see the plugin DLL's blocks - while
+  every UCRT instance, dav1d's `_aligned_malloc` and libyuv's `malloc` all draw from the one
+  process heap, so one mechanism serves Debug and Release and both architectures (verified: a
+  `malloc`'d block shows up once, LFH activation mid-run changes nothing); plus
+  `GetProcessHandleCount`; plus the mapped views - the committed `MEM_MAPPED` regions of the
+  address space, enumerated with `VirtualQuery` (count and bytes) - because a view of a file
+  mapping is neither a heap block nor a handle and, being file-backed, hardly moves the commit
+  charge: a `FileMapping` whose `UnmapViewOfFile` was made a no-op passed every other counter
+  (200 leaked views: blocks +0, handles +0, private +24 KiB) and is caught by this one (views
+  +200, +800 KiB); image sections and private memory are not counted, so it is stable and
+  unaffected by ASan; and, as the coarse cross-check the task asked for, the commit charge
+  (`GetProcessMemoryInfo`, `PrivateUsage`; it wanders by up to +-9 MiB on its own and not with the
+  iteration count, so it is gated at 32 MiB and printed next to the heap's committed size). One
+  process-heap block is Windows' own and is recognised rather than charged: ntdll allocates a
+  critical section's `RTL_CRITICAL_SECTION_DEBUG` (48 bytes on x64, 32 on x86) on its first
+  contended acquisition - from a static pool of 64, then from the process heap - and keeps it
+  while the section lives (`DeleteCriticalSection` zeroes it and keeps it for reuse; all of this
+  measured on this machine, both architectures); the plugin DLL's UCRT locks (`__acrt_locale_lock`,
+  `__acrt_multibyte_cp_lock`) are first contended when several threads start using its CRT at
+  once, which can happen in the warm-up, the first pass or the second. A new block of exactly
+  that size, `Type` 0, whose `CriticalSection` field points at a readable `CRITICAL_SECTION` whose
+  `DebugInfo` points back at the block is therefore taken out of the heap counters and reported
+  as `cs-debug +n` (self-tested: a fresh section contended after exhausting the static pool is
+  recognised and not charged; a same-sized ordinary block, zeroed or pointing elsewhere, is
+  charged). A snapshot waits until two readings 5 ms apart agree on every number (the kernel
+  releases a joined thread's stack and decommits pages a little after the fact; if they never
+  agree within 1 s the log says `snapshot did not settle`) and records every busy block
+  (address, size, first 16 bytes) in one of two pre-reserved buffers, sorted by address, so
+  growth is reported as a list of the blocks that appeared rather than as a bare count. `measureLeaks(scenario, warmUp, N, body)` runs the
+  body `warmUp` times (one full cycle over the fixtures for cycling scenarios, the hostile
+  corpus included: lazy one-time allocations of the loader, the CRT and the codec libraries are
+  not leaks), snapshots, runs it N times, snapshots; a pass that shows growth is followed by a
+  second measured pass from a fresh snapshot and both are printed, but the second one decides
+  only when the first grew by no more than the known noise (`kRetryNoise`: 2 blocks, 1 KiB, no
+  handle, no view - the zeroed debug block ntdll keeps when a section is deleted right after its
+  first contention within a pass, which the recognition can no longer claim; a joined thread
+  itself leaves nothing: 30 spawn/join cycles measured at 0 blocks), otherwise the first pass
+  stands and the gate fails: a cache that fills after the warm-up (+1 block of 64 KiB, injected
+  in a scratch copy) is reported as a finding, not retried away. `requireNoLeak` demands no
+  growth in blocks, bytes, handles, views and view bytes (a negative delta is a release of
+  something warm-up allocated, never a leak) and prints one `[leak] <scenario>: heap blocks +n,
+  heap bytes +n, handles +n, views +n (+n KiB), cs-debug +n, private +n KiB (...) (warm-up w x
+  ms, measured N x ms)` line, with both passes appended when a second one ran. N = 200
+  host-level operations per scenario
+  (`PVDKIT_LEAK_ITERATIONS` overrides). Scenarios (`docs/tasks/task10-leaks.md`): disk and memory
+  round trips with `pvdInit`/`pvdExit` inside the loop; close without free; decode aborted at
+  callback step 0, 1 and 2; every rejection path (each rejected fixture in both modes, empty and
+  11-byte heads, a valid head for a missing file, pages out of range); two pages outstanding freed
+  in both orders; N sessions open at once then closed (every 8th with a page, half of those freed
+  before the close); `pvdInit`/`pvdExit` cycled N times; 8 threads x N/8 round trips; `LoadLibrary`/
+  `FreeLibrary` cycled 20 times with a round trip inside (in coverage builds with an explicit
+  allowance of 1 block, 256 bytes and 2 handles per load for the LLVM profile runtime inside the
+  instrumented DLL, `PVDKIT_COVERAGE`; zero everywhere else); host-like browsing with a sliding
+  window of 3 open files over the whole folder, N/24 passes, a decode aborted every 5th file, a
+  page switch on every animated file, every other close with pages still out; and the hostile
+  corpus - every rejected fixture plus 200 mutants of the accepted ones (`Mutation`: flip,
+  truncate, flip+truncate, box size, splice, trailing garbage, zero range; seed 20260912; written
+  to `%TEMP%/pvdkit-hostile-<pid>-<seed>-<n>/` and removed afterwards) opened in both modes, each
+  refused or decoded to a page whose every byte is read. Fixtures are discovered through the DLL
+  itself (every regular non-`.md` file under the fixture directory, opened once in both modes:
+  accepted with its page count, or rejected); a plugin must ship at least one of each. Unit-level
+  counterparts: `tests/adapters/LeakTests.cpp` (`FileMapping`/`FileSource` open and close, every
+  failure path) and `plugins/<id>/tests/adapters/LeakTests.cpp` (decoder create/decode/destroy on
+  every fixture with the error paths, refusals, the composed plugin). Cost: the task's "< 30 s per
+  architecture" budget applies to the plain presets, and `avif_leak_tests` meets it there: ~15 s
+  in Release, ~24-27 s in Debug, x64 and x86 alike. The instrumented builds run the same N and
+  are deliberately not trimmed (a smaller N there would test less of exactly the build the gate
+  is instrumented for): ~30-42 s under `coverage`, ~30 s under `asan`.
 - `tests/guard`: walks `src/` and every `plugins/*/src/` and fails on forbidden tokens: `new `,
   `new(`, `delete `, `malloc`, `calloc`, `realloc`, `free(`, `shared_ptr`, `weak_ptr`,
   `reinterpret_cast` outside adapters/pvd, `#include <windows.h>` outside `src/adapters/**`,
@@ -554,7 +706,10 @@ Decisions (Task 7, open point 1):
 4. `fixtures/` + `fixtures/SOURCES.md`, `tests/core`, `tests/adapters`, `tests/e2e/E2eTests.cpp` +
    `pvdkit_add_plugin_e2e_tests(<id> FIXTURES ... SOURCES ...)`, `package/README.txt.in`,
    `README.md`, `DESIGN.md`.
-5. Extend the guard's codec-header list with the new library's header. Nothing under `src/`,
+5. Copy `tests/.clang-tidy` to `plugins/<id>/tests/.clang-tidy` (clang-tidy reads the nearest
+   configuration above a translation unit, so the test-only relaxations do not reach a plugin's
+   tests otherwise) and run `scripts/lint.ps1` on both architectures.
+6. Extend the guard's codec-header list with the new library's header. Nothing under `src/`,
    `scripts/` or `CMakePresets.json` changes.
 
 ## 7. Concurrency and lifetime

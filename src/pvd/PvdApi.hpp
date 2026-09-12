@@ -11,6 +11,7 @@
 #endif
 #include <Windows.h>
 
-extern "C" {
+extern "C"
+{
 #include "../../third_party/pvd/PictureViewPlugin.h"
 }

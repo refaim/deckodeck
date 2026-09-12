@@ -1,0 +1,27 @@
+# Check set shared with ObserverModules: the static analyzer, bug-prone patterns, performance and
+# portability. Every warning is an error; scripts/lint.ps1 runs clang-tidy over the compile
+# database of a configured build (both architectures). HeaderFilterRegex covers our own headers
+# under src/, tests/, plugins/<id>/src/ and plugins/<id>/tests/: third_party/, the generated
+# PluginConstants.hpp and the vcpkg headers stay out (diagnostics in the main file of a TU are
+# always reported). A test header is checked with the configuration of the test TU that includes
+# it, i.e. with the tests/.clang-tidy relaxations.
+# tests/.clang-tidy and plugins/<id>/tests/.clang-tidy relax two checks for test code only.
+---
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -bugprone-easily-swappable-parameters
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*[\\/](src|tests|plugins[\\/][^\\/]+[\\/](src|tests))[\\/].*'
+SystemHeaders: false
+FormatStyle: file
+CheckOptions:
+  # An explicit static_cast<void>(...) is a deliberate discard (unique_ptr::release() after a
+  # failed CreateFileW, CHECK_THROWS_AS over a [[nodiscard]] call); the check targets implicit ones.
+  bugprone-unused-return-value.AllowCastToVoid: true
+  # A product of compile-time constants (16 * 1024, 5 * 4 * 2) cannot overflow before it widens.
+  bugprone-implicit-widening-of-multiplication-result.IgnoreConstantIntExpr: true
+...

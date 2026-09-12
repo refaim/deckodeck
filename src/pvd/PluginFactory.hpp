@@ -4,8 +4,9 @@
 
 #include "pvd/Plugin.hpp"
 
-namespace pvdkit::pvd {
+namespace pvdkit::pvd
+{
 
-[[nodiscard]] std::unique_ptr<IPlugin> makePlugin();
+    [[nodiscard]] std::unique_ptr<IPlugin> makePlugin();
 
-}  // namespace pvdkit::pvd
+} // namespace pvdkit::pvd
