@@ -1,0 +1,10 @@
+LIBRARY
+EXPORTS
+    pvdInit
+    pvdExit
+    pvdPluginInfo
+    pvdFileOpen
+    pvdPageInfo
+    pvdPageDecode
+    pvdPageFree
+    pvdFileClose

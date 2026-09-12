@@ -1,0 +1,10 @@
+build/
+out/
+.cache/
+*.profraw
+*.profdata
+coverage/
+.vs/
+.vscode/
+*.user
+dist/
