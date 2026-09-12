@@ -161,3 +161,38 @@ The gates below did not exist when the sections above were written; they are par
    `asan`; `scripts/coverage.ps1 -Preset coverage` and `-Preset coverage-x86` at 100/100;
    `rpgmvp_check_imports` / `rpgmvp_check_exports` green; lint clean both archs; zips are NOT
    your job (the orchestrator packages after review). Never commit.
+
+## Resolution of the contract conflict (orchestrator, 2026-09-13) — overrides the sections above
+The implementer correctly stopped: "always BGRA32", the source-bpp rule and the comment wording
+could not be met without touching `src/`. Decision: a **minimal shared-contract change** plus a
+relaxed RPGMVP spec. Concretely:
+
+1. **Output format follows the shared rule, unchanged**: `FileSession` picks `Bgra32` iff
+   `meta.hasAlpha`, else `Bgr24`. "Always BGRA32" is withdrawn. For RPGMVP `hasAlpha` = colour type
+   4 or 6, or a `tRNS` chunk present (colour types 0, 2, 3). The adapter decodes with
+   `SPNG_FMT_RGBA8` when `hasAlpha` and `SPNG_FMT_RGB8` otherwise (libspng 0.7.4 has no BGR
+   formats — check `spng.h`; if it does have one, use it), straight into the caller's buffer row by
+   row via `spng_decode_image` with `SPNG_DECODE_PROGRESSIVE` + `spng_decode_row` (or whole-image
+   decode into the destination when `pitchBytes == width × bpp`, which `PixelBuffer` guarantees —
+   pick the simpler one and say why), then swaps R↔B in place. `alphaPremultiplied = false`.
+2. **`ImageMeta` gains two generic fields** (`src/core/IDecoder.hpp`, with the defaults every
+   other adapter keeps): `bool indexed = false;` — the source stores palette indices and `depth`
+   is the index width (1/2/4/8) — and `bool interlaced = false;` — the source is stored
+   progressively (PNG Adam7; informational only). `chroma`/`cicp` stay as specified above.
+3. **`FileSession::pageInfo` bpp rule**: `bitsPerPixel = indexed ? depth : depth × (hasAlpha ? 4 : 3)`
+   — so indexed8 reports 8, indexed4 reports 4, RGBA8 32, RGB8 24, RGBA16 64, greyscale8 8×3 = 24
+   (greyscale is expanded to RGB by the decoder, like AVIF `Yuv400`). Add the branch to
+   `tests/core/FileSessionTests.cpp` (both polarities) — coverage must stay 100/100.
+4. **Comments are derived from `ImageMeta` only**, by the RPGMVP describer in
+   `plugins/rpgmvp/src/core/`: `"RPG Maker MV/MZ encrypted PNG, <depth>-bit <kind>[, interlaced]"`
+   where `<kind>` is `palette` (indexed; add ` with transparency` when `hasAlpha`),
+   `greyscale` / `greyscale with alpha` (chroma `Yuv400`), `RGB` / `RGBA` otherwise. The RPGMV
+   header version and the explicit "tRNS" word are dropped from the comments (they are not in the
+   meta; the adapter must still not gate on the version bytes).
+5. **`docs/ARCHITECTURE.md`** — update the `ImageMeta` listing (§3, two new lines with the comments
+   above) and the `pageInfo` bullet in the `FileSession` description (§3.7) to the new bpp rule.
+   `plugins/avif` needs no change (defaults), but its tests must stay green.
+6. The scope statement above now reads: `src/core/IDecoder.hpp`, `src/core/FileSession.cpp` and
+   `tests/core/` change only as described in points 2–3; nothing else under `src/` or `scripts/`
+   beyond the carried-over nits; `CMakePresets.json` unchanged.
+Everything else in this task stands.
