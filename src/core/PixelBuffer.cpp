@@ -5,6 +5,8 @@
 #include <string_view>
 #include <utility>
 
+#include "core/Narrow.hpp"
+
 namespace avifpvd::core {
 
 namespace {
@@ -34,12 +36,18 @@ Result<PixelBuffer> PixelBuffer::create(const std::uint32_t width,
     return std::unexpected(tooLarge("pixel pitch cannot be represented"));
   }
 
-  const auto size = pitch * height;
-  auto bytes = std::make_unique_for_overwrite<std::byte[]>(
-      static_cast<std::size_t>(size));
-  return PixelBuffer{
-      std::move(bytes), static_cast<std::size_t>(size),   width, height,
-      bytesPerPixel,    static_cast<std::uint32_t>(pitch)};
+  // The byte count is exact in 64 bits; only a count this process can address
+  // becomes the std::size_t the allocation needs (4 GiB is already too much
+  // for the 32-bit build).
+  return narrow<std::size_t>(pitch * height, "pixel buffer size")
+      .transform([&](const std::size_t size) {
+        return PixelBuffer{std::make_unique_for_overwrite<std::byte[]>(size),
+                           size,
+                           width,
+                           height,
+                           bytesPerPixel,
+                           static_cast<std::uint32_t>(pitch)};
+      });
 }
 
 PixelBuffer::PixelBuffer(std::unique_ptr<std::byte[]> bytes,

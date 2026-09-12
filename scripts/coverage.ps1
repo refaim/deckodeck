@@ -1,5 +1,10 @@
 [CmdletBinding()]
-param()
+param(
+  # Coverage configure/build/test preset: `coverage` (x64, default) or `coverage-x86`. The build
+  # directory, the instrumented AVIF.pvd and the test executables all follow the preset name.
+  [ValidateSet("coverage", "coverage-x86")]
+  [string]$Preset = "coverage"
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -91,7 +96,7 @@ function Assert-PluginProfile {
 }
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$buildDirectory = Join-Path $repository "build\coverage$env:AVIFPVD_BUILD_SUFFIX"
+$buildDirectory = Join-Path $repository "build\$Preset$env:AVIFPVD_BUILD_SUFFIX"
 $llvmDirectory = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin"
 $llvmProfdata = Join-Path $llvmDirectory "llvm-profdata.exe"
 $llvmCov = Join-Path $llvmDirectory "llvm-cov.exe"
@@ -100,8 +105,8 @@ $previousProfileFile = $env:LLVM_PROFILE_FILE
 
 Push-Location $repository
 try {
-  Invoke-Checked "cmake" @("--preset", "coverage")
-  Invoke-Checked "cmake" @("--build", "--preset", "coverage")
+  Invoke-Checked "cmake" @("--preset", $Preset)
+  Invoke-Checked "cmake" @("--build", "--preset", $Preset)
 
   Get-ChildItem -LiteralPath $buildDirectory -Filter "avifpvd-*.profraw" -File -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
@@ -111,7 +116,7 @@ try {
   # on FreeLibrary, the executable at exit). With %p alone the second writer would overwrite the
   # first and the DLL's counters would be lost.
   $env:LLVM_PROFILE_FILE = Join-Path $buildDirectory "avifpvd-%p-%m.profraw"
-  Invoke-Checked "ctest" @("--preset", "coverage")
+  Invoke-Checked "ctest" @("--preset", $Preset)
 
   $profileFiles = @(Get-ChildItem -LiteralPath $buildDirectory -Filter "*.profraw" -File)
   if ($profileFiles.Count -eq 0) {

@@ -12,6 +12,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#include <winioctl.h>
 
 #include <doctest/doctest.h>
 
@@ -277,6 +278,50 @@ TEST_CASE("file source opens long paths written with forward slashes and dot-dot
 
   // An already extended long path is passed through as is.
   checkOpens(source, utf8Path(extended(longFile)));
+}
+
+TEST_CASE("a file beyond the 32-bit address space is refused, never truncated") {
+  // 4 GiB + 1 byte: one more than a 32-bit std::size_t can count, so the 64-bit file size must
+  // be checked before it is narrowed. The file is sparse (no disk space is consumed and no
+  // 4 GiB write happens); the test insists on sparse support rather than falling back.
+  constexpr std::uint64_t kSize = (std::uint64_t{1} << 32) + 1;
+  const TempTree tree{L"avifpvd-huge"};
+  const auto path = tree.path() / L"sparse.bin";
+  {
+    avifpvd::win::UniqueHandle file{CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                                                nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                                                nullptr)};
+    REQUIRE(file.get() != INVALID_HANDLE_VALUE);
+    DWORD ignored = 0;
+    REQUIRE(DeviceIoControl(file.get(), FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &ignored,
+                            nullptr) != FALSE);
+    LARGE_INTEGER end{};
+    end.QuadPart = static_cast<LONGLONG>(kSize);
+    REQUIRE(SetFilePointerEx(file.get(), end, nullptr, FILE_BEGIN) != FALSE);
+    REQUIRE(SetEndOfFile(file.get()) != FALSE);
+  }
+
+  avifpvd::win::UniqueHandle file{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+  REQUIRE(file.get() != INVALID_HANDLE_VALUE);
+  const auto size = avifpvd::win::detail::fileSize(file);
+  avifpvd::win::FileSource source;
+  const auto opened = source.open(utf8Path(path));
+  if constexpr (sizeof(std::size_t) == 4) {
+    REQUIRE_FALSE(size.has_value());
+    CHECK(size.error().code == ErrorCode::TooLarge);
+    CHECK(size.error().detail == "file size (4294967297) does not fit in 32 bits");
+
+    REQUIRE_FALSE(opened.has_value());
+    CHECK(opened.error().code == ErrorCode::TooLarge);
+    CHECK(opened.error().detail == "file size (4294967297) does not fit in 32 bits");
+  } else {
+    REQUIRE(size.has_value());
+    CHECK(*size == kSize);
+
+    REQUIRE(opened.has_value());
+    CHECK((*opened)->bytes().size() == kSize);
+  }
 }
 
 TEST_CASE("file-mapping Win32 operations report failures as values") {

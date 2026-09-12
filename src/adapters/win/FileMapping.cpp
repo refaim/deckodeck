@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "core/Narrow.hpp"
+
 namespace avifpvd::win {
 namespace {
 
@@ -32,7 +34,9 @@ core::Result<std::size_t> detail::fileSize(const UniqueHandle& file) {
     // rejects an empty range), so the detail carries no invented error code.
     return std::unexpected(core::Error{core::ErrorCode::FileOpenFailed, "file is empty"});
   }
-  return static_cast<std::size_t>(size.QuadPart);
+  // GetFileSizeEx answers in 64 bits; a file a 32-bit process cannot address is refused here,
+  // before the size is narrowed for the view.
+  return core::narrow<std::size_t>(static_cast<std::uint64_t>(size.QuadPart), "file size");
 }
 
 core::Result<UniqueHandle> detail::createReadOnlyMapping(const UniqueHandle& file) {

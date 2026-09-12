@@ -759,6 +759,11 @@ TEST_CASE("foreign result, allocation and timing helpers cover failure boundarie
   CHECK(avifpvd::avif::detail::durationMilliseconds(
             static_cast<double>(std::numeric_limits<std::uint32_t>::max())) ==
         std::numeric_limits<std::uint32_t>::max());
+  // Between LONG_MAX (long is 32 bits on Windows, both architectures) and UINT32_MAX the value
+  // still fits the uint32 frame time and must round, not overflow the rounding step.
+  CHECK(avifpvd::avif::detail::durationMilliseconds(3000000.0004) == 3000000000U);
+  CHECK(avifpvd::avif::detail::durationMilliseconds(4294967.2944) ==
+        std::numeric_limits<std::uint32_t>::max() - 1);
 
   avifpvd::avif::DecoderHandle empty;
   CHECK_THROWS_AS(static_cast<void>(avifpvd::avif::detail::requireDecoder(std::move(empty))),

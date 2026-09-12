@@ -64,7 +64,9 @@ Decoding is done by libavif + dav1d + libyuv, linked statically. No WIC, no GDI+
 - CMake 4.4 on PATH. Ninja: use vcpkg's downloaded copy or `scoop install ninja` if absent.
   Fallback generator: `Visual Studio 17 2022` with `-T ClangCL`.
 - vcpkg at `C:\Users\Roma\scoop\apps\vcpkg\current` (`vcpkg` on PATH), manifest mode (`vcpkg.json`),
-  triplet `x64-windows-static`. Dependencies: `libavif[dav1d]` (pulls `libyuv`), `doctest`.
+  triplets `x64-windows-static-clang` and `x86-windows-static-clang` (`triplets/`; the x86 one
+  cross-compiles with the same x64-hosted clang-cl and loads the x86 vcvars for the ports).
+  Dependencies: `libavif[dav1d]` (pulls `libyuv`), `doctest`.
   A warm-up build of exactly these packages may already be in vcpkg's binary cache.
 - Static CRT: `/MT` (`CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>`).
   The final `AVIF.pvd` must import only `KERNEL32.dll`. Verify with

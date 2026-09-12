@@ -24,6 +24,14 @@
       }
     },
     {
+      "name": "base-x86",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x86-windows-static-clang"
+      }
+    },
+    {
       "name": "debug",
       "inherits": "base",
       "displayName": "Debug",
@@ -49,6 +57,33 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "AVIFPVD_COVERAGE": "ON"
       }
+    },
+    {
+      "name": "debug-x86",
+      "inherits": "base-x86",
+      "displayName": "Debug (x86)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AVIFPVD_COVERAGE": "OFF"
+      }
+    },
+    {
+      "name": "release-x86",
+      "inherits": "base-x86",
+      "displayName": "Release (x86)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "AVIFPVD_COVERAGE": "OFF"
+      }
+    },
+    {
+      "name": "coverage-x86",
+      "inherits": "base-x86",
+      "displayName": "Coverage (x86)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AVIFPVD_COVERAGE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -63,6 +98,18 @@
     {
       "name": "coverage",
       "configurePreset": "coverage"
+    },
+    {
+      "name": "debug-x86",
+      "configurePreset": "debug-x86"
+    },
+    {
+      "name": "release-x86",
+      "configurePreset": "release-x86"
+    },
+    {
+      "name": "coverage-x86",
+      "configurePreset": "coverage-x86"
     }
   ],
   "testPresets": [
@@ -85,6 +132,30 @@
     {
       "name": "coverage",
       "configurePreset": "coverage",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "debug-x86",
+      "configurePreset": "debug-x86",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release-x86",
+      "configurePreset": "release-x86",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "coverage-x86",
+      "configurePreset": "coverage-x86",
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true

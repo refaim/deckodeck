@@ -75,7 +75,7 @@ enum class ErrorCode {
   ConversionFailed,   // YUV→RGB failed
   PageOutOfRange,     // page index ≥ page count
   Aborted,            // host callback asked us to stop
-  TooLarge,           // exceeds DecoderOptions limits
+  TooLarge,           // exceeds DecoderOptions limits, or a byte count this process cannot address
   UnsupportedFeature, // parsed but we refuse (kept for future use, must have a test if used)
   InvalidTransform,   // clap/irot/imir data inconsistent with image size
   Internal,           // programming error surfaced as a value (e.g. buffer too small)
@@ -165,6 +165,23 @@ class IPlugin {
   writes them (with empty comments) before it consults `IPlugin::info()`, so a throwing `info()`
   leaves the host with the constant identity, and `DefaultPlugin` builds its `PluginInfo` from
   the same constants.
+- Exports on x86: the eight functions are `__stdcall`, so their symbols are `_pvdInit@0`,
+  `_pvdFileOpen@28`, ... while the host resolves the bare names. `AVIF.def` lists the bare names
+  and is the one source of truth for both architectures: lld-link (like link.exe) resolves an
+  undecorated `.def` name to the decorated `__stdcall` symbol itself, so the x86 export table
+  reads `pvdInit`, `pvdFileOpen`, ... with no alias lines, no `#ifdef _M_IX86` and no
+  `/EXPORT` pragmas. `scripts/check-exports.ps1` (ctest `check_exports`, Release) pins the
+  export table to exactly those eight bare names on both architectures; the e2e host driver
+  (`GetProcAddress` by bare name) is the behavioural acceptance test.
+- Version identity: `project(VERSION)` in `CMakeLists.txt` is the single source of the version.
+  `src/pvd/CMakeLists.txt` generates `pvd/Version.hpp` from `src/pvd/Version.hpp.in` (version,
+  `AVIFPVD_AUTHOR` / `AVIFPVD_COPYRIGHT` cache variables, and the plugin comments built from the
+  library versions vcpkg installed); `PluginConstants.hpp` `static_assert`s that `kPluginVersion`
+  equals it, and `src/pvd/AVIF.rc` (llvm-rc) embeds it as the VERSIONINFO resource of `AVIF.pvd`
+  (`FileVersion`/`ProductVersion`, `CompanyName`, `LegalCopyright`, `FileDescription`,
+  `ProductName`/`InternalName`/`OriginalFilename` = `AVIF.pvd`, `Comments` = the `pvdPluginInfo`
+  comments). The e2e test reads the block back with `GetFileVersionInfoW`/`VerQueryValueW`
+  (`version.lib` is linked into `e2e_tests` only) and compares it with the running plugin.
 
 ### 3.5 `src/core/IFileSource.hpp`
 
@@ -222,6 +239,12 @@ class IDecoderFactory {
 - `PixelBuffer` (`src/core/PixelBuffer.hpp`): owns `std::unique_ptr<std::byte[]>` made with
   `std::make_unique_for_overwrite`; fields width, height, bytesPerPixel, pitch; `bytes()` spans.
   Size arithmetic in `std::uint64_t`, checked against `DecoderOptions::maxPixels` by the caller.
+- `narrow<To>` (`src/core/Narrow.hpp`): `Result<To> narrow(std::uint64_t value, std::string_view
+  what)` - the one place where a 64-bit byte count becomes a `std::size_t` (`TooLarge` if `To`
+  cannot hold it). `PixelBuffer::create` (pitch x height) and `win::detail::fileSize`
+  (`GetFileSizeEx`) go through it, so on the 32-bit build a picture or file beyond 4 GiB is
+  refused instead of wrapped; there is no `#ifdef` on the architecture anywhere in `src/`. Frame
+  times use `std::llround` (`long` is 32 bits on Windows).
 - `Transform` (`src/core/Transform.hpp/.cpp`): pure functions over `PixelView`
   (`std::span<const std::byte>`, width, height, bytesPerPixel, pitch):
   `Result<CropRect> validatedCrop(...)`, `std::pair<uint32,uint32> displaySize(const ImageMeta&)`,
@@ -301,11 +324,25 @@ class IDecoderFactory {
 
 ## 4. Build
 
-- CMake ≥ 3.28, presets in `CMakePresets.json`: `debug`, `release`, `coverage` (all Ninja, clang-cl,
-  lld-link). `release`: `/O2 /GL-`? no LTO needed; `/MT`, `/DEBUG:NONE`. `coverage`: `/Od /Zi /MT`
+- CMake ≥ 3.28, presets in `CMakePresets.json`: `debug`, `release`, `coverage` (x64) and
+  `debug-x86`, `release-x86`, `coverage-x86` (32-bit; all Ninja, clang-cl, lld-link). The x86
+  presets differ from the x64 ones only in `VCPKG_TARGET_TRIPLET = x86-windows-static-clang`;
+  `cmake/vcpkg-root.cmake` reads `triplets/<triplet>.cmake` to pick the chainload toolchain
+  (`cmake/clang-cl-x86.toolchain.cmake`: the same x64-hosted clang-cl cross-compiling with
+  `CMAKE_<LANG>_COMPILER_TARGET = i686-pc-windows-msvc`), so the triplet file is the one place
+  that maps an architecture to its toolchain. The x86 triplet also sets `VCPKG_LOAD_VCVARS_ENV ON`:
+  vcpkg does not load vcvars for chainloaded triplets, and without it meson (dav1d) activates
+  `vcvars64.bat` itself and links i686 objects against the x64 CRT (`_mainCRTStartup` unresolved).
+  The plugin is `build/release-x86<suffix>/src/pvd/AVIF.pvd` (`IMAGE_FILE_MACHINE_I386`).
+  `release`: `/O2 /GL-`? no LTO needed; `/MT`, `/DEBUG:NONE`. `coverage`: `/Od /Zi /MT`
   + `-fprofile-instr-generate -fcoverage-mapping` on `src/**` and tests.
 - Common flags: `/clang:-std=c++23 /W4 /WX /permissive- /utf-8 /EHsc /Zc:preprocessor`
   plus `-Wno-` nothing unless justified. `static_assert(__cplusplus >= 202302L)` in `src/core/Error.hpp`.
+  The `coverage-x86` build links `clang_rt.profile-i386.lib` from the x86-hosted LLVM of the same
+  Build Tools explicitly (the x64-hosted one ships only the x86_64 runtime, so clang names an
+  arch-less `clang_rt.profile.lib` that exists nowhere; `/NODEFAULTLIB` drops that name).
+- Resources: `project(... LANGUAGES CXX RC)`; `src/pvd/AVIF.rc` is compiled by llvm-rc (from the
+  chainload toolchain) and linked into `AVIF.pvd`; it adds no imports (`check_imports`).
 - vcpkg manifest `vcpkg.json`: `libavif[dav1d]`, `doctest`. Custom triplet
   `triplets/x64-windows-static-clang.cmake` = `x64-windows-static` + chainload
   `cmake/clang-cl.toolchain.cmake` so libyuv gets its SIMD paths (vcpkg#28446) and everything is one
@@ -324,13 +361,19 @@ class IDecoderFactory {
   `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` so parallel agents do not fight over one file.
 - `scripts/check-imports.ps1`: fails unless the import table of `AVIF.pvd` is exactly `KERNEL32.dll`
   (uses `dumpbin /dependents` from Build Tools, or `llvm-readobj --coff-imports`). Registered as a
-  ctest test in the release preset.
+  ctest test in the release presets (`check_imports`). `scripts/check-exports.ps1` (`check_exports`)
+  does the same for the export table: exactly the eight bare `pvd*` names.
 - Build directories: `build/<preset>$env{AVIFPVD_BUILD_SUFFIX}` so several agents can build the
   same tree concurrently without sharing a Ninja/CMake state directory.
-- `scripts/coverage.ps1`: configures+builds `coverage`, runs `pvd_tests`, `core_tests`,
-  `adapter_tests`, `guard_tests` with `LLVM_PROFILE_FILE`, merges with `llvm-profdata`, runs `llvm-cov report` with
+- `scripts/coverage.ps1 [-Preset coverage|coverage-x86]`: configures+builds the preset, runs the
+  five test executables under `LLVM_PROFILE_FILE`, merges with `llvm-profdata`, runs `llvm-cov report` with
   `-ignore-filename-regex` excluding `tests/`, `third_party/`, `vcpkg`, prints the totals, writes HTML
   to `build/coverage/html`, exits 1 unless lines == 100% and branches == 100% for `src/**`.
+  The same 100 % gate applies to both presets.
+- `scripts/build-all.ps1`: builds `release` and `release-x86`, runs both gates on each DLL and
+  copies them to `dist/x64/AVIF.pvd` and `dist/x86/AVIF.pvd`. `scripts/package.ps1`: the same from
+  scratch (suffix `-pkg`), then `dist/AVIF-<version>-x64.zip` and `-x86.zip` (`AVIF.pvd`,
+  `README.txt`, `LICENSES.txt` from vcpkg's `share/<port>/copyright` files) with their SHA-256.
 
 ## 5. Tests
 

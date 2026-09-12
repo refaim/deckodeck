@@ -6,7 +6,9 @@ file(GLOB_RECURSE AVIFPVD_E2E_TEST_SOURCES CONFIGURE_DEPENDS "*.cpp" "*.hpp")
 add_executable(e2e_tests ${AVIFPVD_E2E_TEST_SOURCES} "${PROJECT_SOURCE_DIR}/tests/TestMain.cpp")
 add_dependencies(e2e_tests avifpvd)
 target_include_directories(e2e_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(e2e_tests PRIVATE doctest::doctest avifpvd_options)
+# version.lib serves the VERSIONINFO read-back test; it is linked into this test only, never into
+# the plugin (check_imports keeps AVIF.pvd at KERNEL32.dll).
+target_link_libraries(e2e_tests PRIVATE doctest::doctest avifpvd_options version)
 target_compile_definitions(
   e2e_tests
   PRIVATE
@@ -24,3 +26,12 @@ add_test(
   CONFIGURATIONS Release
   COMMAND "${AVIFPVD_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File
           "${PROJECT_SOURCE_DIR}/scripts/check-imports.ps1" -Path "$<TARGET_FILE:avifpvd>")
+
+# The export-table policy: exactly the eight PVD entry points under their bare names. On x86 the
+# __stdcall symbols are `_pvdInit@0` etc.; the .def file makes the linker export them undecorated,
+# and this test keeps it that way on both architectures (same Release-only registration as above).
+add_test(
+  NAME check_exports
+  CONFIGURATIONS Release
+  COMMAND "${AVIFPVD_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File
+          "${PROJECT_SOURCE_DIR}/scripts/check-exports.ps1" -Path "$<TARGET_FILE:avifpvd>")

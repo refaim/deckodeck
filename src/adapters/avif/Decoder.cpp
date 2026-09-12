@@ -126,7 +126,9 @@ std::uint32_t detail::durationMilliseconds(const double durationSeconds) {
   if (milliseconds >= maximum) {
     return std::numeric_limits<std::uint32_t>::max();
   }
-  return static_cast<std::uint32_t>(std::lround(milliseconds));
+  // std::llround: long is 32 bits on Windows (both architectures), so std::lround would
+  // overflow between LONG_MAX and the uint32 maximum accepted above.
+  return static_cast<std::uint32_t>(std::llround(milliseconds));
 }
 
 DecoderHandle detail::requireDecoder(DecoderHandle decoder) {

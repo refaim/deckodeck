@@ -56,6 +56,21 @@ TEST_CASE("PixelBuffer rejects a pitch that cannot be represented") {
   CHECK(created.error().code == ErrorCode::TooLarge);
 }
 
+TEST_CASE("PixelBuffer rejects a byte count the address space cannot hold") {
+  // 65536 x 65536 x 1 byte = 4 GiB: within a permissive pixel limit and a representable pitch,
+  // but one byte past what a 32-bit std::size_t can count. The 64-bit build would simply
+  // allocate it, so the case is only exercised where the narrowing can fail.
+  if constexpr (sizeof(std::size_t) == 4) {
+    const auto created = PixelBuffer::create(
+        65536, 65536, 1, std::numeric_limits<std::uint64_t>::max());
+
+    REQUIRE_FALSE(created.has_value());
+    CHECK(created.error().code == ErrorCode::TooLarge);
+    CHECK(created.error().detail ==
+          "pixel buffer size (4294967296) does not fit in 32 bits");
+  }
+}
+
 TEST_CASE("PixelBuffer rejects overflowing storage arithmetic") {
   const auto maximum = std::numeric_limits<std::uint32_t>::max();
   const auto created = PixelBuffer::create(
