@@ -23,7 +23,8 @@
 //    private), so without this counter a FileMapping that never unmapped would pass every other
 //    check - proven with an injected no-op UnmapViewOfFile before this counter existed. Image
 //    sections (MEM_IMAGE: the DLLs) and private memory (heap segments, stacks, ASan's shadow) are
-//    not counted, so the number is stable after warm-up and unaffected by ASan.
+//    not counted, so the view count is stable after warm-up, under ASan too; the bytes are not
+//    under ASan (see below).
 // 4. The commit charge (PrivateUsage) is the coarse cross-check for whatever is none of the above
 //    - thread stacks, VirtualAlloc - and coarse it is: measured on the AVIF plugin it wanders by
 //    up to +-9 MiB between two quiescent snapshots with the process heap's own committed size
@@ -37,8 +38,11 @@
 //
 // Under AddressSanitizer the picture changes for the heap: ASan intercepts HeapAlloc (every heap,
 // every module) and serves it from its own allocator, and it quarantines freed memory, so heap
-// blocks and private bytes say nothing there. The gate then checks handles and mapped views only
-// and reports the rest; memory errors are ASan's own job in that preset.
+// blocks and private bytes say nothing there. Nor do the mapped bytes: the runtime keeps its own
+// MEM_MAPPED regions and grows them in place while the tests run (views +0, bytes +24 KiB
+// measured on the AVIF memory round trip), which is not the plugin's. The gate then checks
+// handles and the mapped-view count only and reports the rest, the mapped bytes included;
+// memory errors are ASan's own job in that preset.
 
 #include <array>
 #include <chrono>
@@ -229,9 +233,10 @@ namespace pvdkit::test
 
     /// The gate: no growth in heap blocks, heap bytes, handles, mapped views and mapped bytes
     /// beyond `allowance` (normally zero; a negative delta is a release, not a leak), private
-    /// bytes within `privateBytesTolerance` (under ASan: handles and views only, see the header
-    /// comment). Prints the report first so the numbers are in the log either way. Uses doctest
-    /// CHECKs.
+    /// bytes within `privateBytesTolerance`. Under ASan only handles and the mapped-view count
+    /// are gated; heap blocks, heap bytes, private bytes and mapped bytes are printed only, the
+    /// last because ASan's runtime grows its own mapped regions in place (see the header comment).
+    /// Prints the report first so the numbers are in the log either way. Uses doctest CHECKs.
     void requireNoLeak(const LeakReport &report, std::int64_t privateBytesTolerance = kPrivateBytesTolerance,
                        Allowance allowance = {});
 

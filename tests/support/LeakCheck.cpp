@@ -427,10 +427,12 @@ namespace pvdkit::test
         CAPTURE(line);
         CHECK(report.delta.handles <= allowance.handles);
         CHECK(report.delta.mappedViews <= 0);
-        CHECK(report.delta.mappedBytes <= 0);
         if (underAddressSanitizer()) {
             return;
         }
+        // Mapped bytes below the early return: ASan's runtime grows its own MEM_MAPPED regions in
+        // place (views +0, bytes +n), which is not the plugin's (LeakCheck.hpp).
+        CHECK(report.delta.mappedBytes <= 0);
         CHECK(report.delta.heapBlocks <= allowance.heapBlocks);
         CHECK(report.delta.heapBytes <= allowance.heapBytes);
         CHECK(report.delta.privateBytes <= privateBytesTolerance);

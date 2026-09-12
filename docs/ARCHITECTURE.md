@@ -553,8 +553,8 @@ Decisions (Task 7, open point 1):
   it cannot hot-patch in this UCRT; instrumented code is checked regardless (the probe caught a
   one-byte heap overflow in an EXE and in a `LoadLibrary`-ed DLL with full symbols). Under ASan
   `HeapAlloc` of every module is served by ASan's allocator and freed memory is quarantined, so
-  the leak scenarios check handles and mapped views only there and print the rest. What is and is
-  not instrumented: our code (`src/**`, `plugins/*/src/**`, the tests) is; the vcpkg ports -
+  the leak scenarios check handles and the mapped-view count only there (§5) and print the rest.
+  What is and is not instrumented: our code (`src/**`, `plugins/*/src/**`, the tests) is; the vcpkg ports -
   libavif, dav1d, libyuv - are not (they are built by vcpkg without `-fsanitize=address`), so
   inside them only ASan's interceptors see anything (`malloc`/`free`/`memcpy`/... arguments, a
   use after free of a block, an overflow that reaches a redzone through an intercepted call),
@@ -605,8 +605,10 @@ Decisions (Task 7, open point 1):
   mapping is neither a heap block nor a handle and, being file-backed, hardly moves the commit
   charge: a `FileMapping` whose `UnmapViewOfFile` was made a no-op passed every other counter
   (200 leaked views: blocks +0, handles +0, private +24 KiB) and is caught by this one (views
-  +200, +800 KiB); image sections and private memory are not counted, so it is stable and
-  unaffected by ASan; and, as the coarse cross-check the task asked for, the commit charge
+  +200, +800 KiB); image sections and private memory are not counted, so the view count is stable
+  under ASan too, while the bytes are not (ASan's runtime grows its own `MEM_MAPPED` regions in
+  place: views +0, +24 KiB measured), so under ASan the gate checks handles and the view count
+  only and prints the rest; and, as the coarse cross-check the task asked for, the commit charge
   (`GetProcessMemoryInfo`, `PrivateUsage`; it wanders by up to +-9 MiB on its own and not with the
   iteration count, so it is gated at 32 MiB and printed next to the heap's committed size). One
   process-heap block is Windows' own and is recognised rather than charged: ntdll allocates a

@@ -509,6 +509,40 @@ TEST_CASE("the retry noise bound is two small blocks and nothing else")
     CHECK(withinRetryNoise({0, 0, 0, 0, 0, 64 * 1024 * 1024, 64 * 1024 * 1024}));
 }
 
+// The gate's failing side, through doctest's own bookkeeping: `expected_failures(n)` passes a
+// test case exactly when n of its CHECKs failed. A synthetic report that grew in one gated
+// counter must therefore trip exactly one CHECK, and one that grew only in a counter the gate
+// merely prints must trip none. The scenario names say so, since the tripped CHECK is still
+// printed as an ERROR line before doctest marks the case as "failed exactly 1 times as expected".
+TEST_CASE("the gate fails a report that grew in handles alone, under ASan too" * doctest::expected_failures(1))
+{
+    LeakReport report;
+    report.scenario = "gate self-test: handles +1, one failed CHECK expected";
+    report.delta = {0, 0, 1, 0, 0, 0, 0, 0};
+    pvdkit::test::requireNoLeak(report);
+}
+
+TEST_CASE("the gate fails a report that grew in mapped views alone, under ASan too" * doctest::expected_failures(1))
+{
+    LeakReport report;
+    report.scenario = "gate self-test: views +1, one failed CHECK expected";
+    report.delta = {0, 0, 0, 1, 0, 0, 0, 0};
+    pvdkit::test::requireNoLeak(report);
+}
+
+// Mapped bytes up with the view count flat: an existing region grew in place. That is what ASan's
+// runtime does under the asan preset (LeakCheck.hpp), so there the bytes are printed and not
+// gated; everywhere else they are a finding.
+TEST_CASE("the gate fails a report whose mapped bytes grew with no new view, except under ASan" *
+          doctest::expected_failures(underAddressSanitizer() ? 0 : 1))
+{
+    LeakReport report;
+    report.scenario = underAddressSanitizer() ? "gate self-test: views +0 (+24 KiB), no failed CHECK expected"
+                                              : "gate self-test: views +0 (+24 KiB), one failed CHECK expected";
+    report.delta = {0, 0, 0, 0, 24 * 1024, 0, 0, 0};
+    pvdkit::test::requireNoLeak(report);
+}
+
 TEST_CASE("the report line carries every number a reader needs")
 {
     LeakReport report;
