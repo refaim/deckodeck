@@ -5,7 +5,7 @@ session/pixel-buffer arithmetic, the AVIF transform kernel (clap/irot/imir), the
 substitution and CRC, the R↔B swaps, and our handling of every library return code — on the
 exact entry surface the DLL exports use. The codec libraries themselves (dav1d, libavif, libspng,
 zlib) are on OSS-Fuzz and are built by vcpkg without instrumentation; they are not the target,
-they are the environment. Roma's threat model: a crash in a `.pvd` is a crash of Far Manager
+they are the environment. What matters to Roma: a crash in a `.pvd` is a crash of Far Manager
 (in-process), so "never crash, never hang, never leak on any input" is the property.
 
 ## Deliverables
