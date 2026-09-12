@@ -11,6 +11,7 @@
 
 #include <doctest/doctest.h>
 
+#include "FixtureExpectations.hpp"
 #include "PluginHost.hpp"
 
 namespace pvdkit::e2e
@@ -19,34 +20,6 @@ namespace pvdkit::e2e
     {
 
         using Pixel = std::vector<std::uint8_t>;
-
-        struct Expected
-        {
-            std::string_view name;
-            std::uint32_t width;
-            std::uint32_t height;
-            std::uint32_t sourceBpp;
-            bool alpha;
-        };
-
-        constexpr std::array kAccepted{
-            Expected{"rgba8_36x16_shadow2.rpgmvp", 36, 16, 32, true},
-            Expected{"indexed4_trns_144x192_cursor.rpgmvp", 144, 192, 4, true},
-            Expected{"indexed8_trns_288x384_weapons3.rpgmvp", 288, 384, 8, true},
-            Expected{"rgb8_816x624_gameover.rpgmvp", 816, 624, 24, false},
-            Expected{"rgba16_60x20_par.rpgmvp", 60, 20, 64, true},
-            Expected{"indexed8_trns_82x38_shadow2.png_", 82, 38, 8, true},
-            Expected{"rgba8_576x384_lolded.png_", 576, 384, 32, true},
-            Expected{"rgba8_adam7_700x700_kamen.png_", 700, 700, 32, true},
-            Expected{"rgb16_88x4a.rpgmvp", 88, 4, 48, false},
-            Expected{"rgba8_48x48.rpgmvp", 48, 48, 32, true},
-            Expected{"rgba8_srgb_48x48.rpgmvp", 48, 48, 32, true},
-            Expected{"gray8_16x8.rpgmvp", 16, 8, 24, false},
-            Expected{"graya8_16x8.rpgmvp", 16, 8, 32, true},
-            Expected{"gray1_16x8.rpgmvp", 16, 8, 3, false},
-            Expected{"rgba8_noninterlaced_700x700_kamen.rpgmvp", 700, 700, 32, true},
-            Expected{"apng_4x4.rpgmvp", 4, 4, 24, false},
-        };
 
         std::string text(const char *value)
         {
@@ -110,7 +83,7 @@ namespace pvdkit::e2e
     {
         const auto plugin = loadInitializedPlugin();
         const auto &exports = plugin.exports();
-        for (const auto &expected : kAccepted) {
+        for (const auto &expected : rpgmvp::tests::kAccepted) {
             CAPTURE(expected.name);
             const auto file = readFixture(expected.name);
             auto disk = openAndDecode(exports, file, OpenMode::Disk);
@@ -215,19 +188,20 @@ namespace pvdkit::e2e
         exports.pageFree(image->context, nullptr);
         exports.fileClose(image->context);
 
-        for (const auto name : {"rgba8_48x48.png", "rgb16_88x4a.png", "stub_31.bin", "stub_48.bin",
-                                "bad_ihdr_crc.rpgmvp", "too_large_100000x100000.rpgmvp"}) {
+        for (const auto name : rpgmvp::tests::kRejected) {
             CAPTURE(name);
             const auto rejected = readFixture(name);
             CHECK_FALSE(openImage(exports, rejected, OpenMode::Disk).has_value());
             CHECK_FALSE(openImage(exports, rejected, OpenMode::Memory).has_value());
         }
 
-        const auto truncated = readFixture("decode-failures/truncated_idat.rpgmvp");
-        auto corrupt = openImage(exports, truncated, OpenMode::Memory);
-        REQUIRE(corrupt.has_value());
-        CHECK_FALSE(decodePage(exports, corrupt->context, 0, nullptr, nullptr).has_value());
-        exports.fileClose(corrupt->context);
+        for (const auto name : rpgmvp::tests::kDecodeFailures) {
+            const auto truncated = readFixture(name);
+            auto corrupt = openImage(exports, truncated, OpenMode::Memory);
+            REQUIRE(corrupt.has_value());
+            CHECK_FALSE(decodePage(exports, corrupt->context, 0, nullptr, nullptr).has_value());
+            exports.fileClose(corrupt->context);
+        }
         exports.exit();
     }
 

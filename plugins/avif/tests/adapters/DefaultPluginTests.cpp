@@ -104,6 +104,20 @@ TEST_CASE("the production plugin uses lenient decoding")
     CHECK((*opened)->imageInfo().pageCount == 1);
 }
 
+TEST_CASE("the AVIF production composition accepts caller-supplied decoder limits")
+{
+    constexpr pvdkit::core::DecoderOptions options{1, false, 0, 1};
+    const auto plugin = pvdkit::pvd::makePlugin(options);
+    REQUIRE(plugin != nullptr);
+
+    const auto bytes = readFixture("white_1x1.avif");
+    const auto opened = plugin->open(pvdkit::pvd::OpenRequest{"white_1x1.avif", 0, bytes});
+    REQUIRE(opened.has_value());
+    const auto decoded = (*opened)->decodePage(0, pvdkit::pvd::Progress{});
+    REQUIRE_FALSE(decoded.has_value());
+    CHECK(decoded.error().code == ErrorCode::TooLarge);
+}
+
 TEST_CASE("the production plugin rejects non-AVIF input as NotRecognised and a missing file as FileOpenFailed")
 {
     const auto plugin = pvdkit::pvd::makePlugin();

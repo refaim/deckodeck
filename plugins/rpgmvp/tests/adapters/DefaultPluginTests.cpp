@@ -107,3 +107,15 @@ TEST_CASE("the RPGMVP production composition reports refusal, missing-file and l
     REQUIRE_FALSE(limited.has_value());
     CHECK(limited.error().code == pvdkit::core::ErrorCode::TooLarge);
 }
+
+TEST_CASE("the RPGMVP production composition accepts caller-supplied decoder limits")
+{
+    constexpr pvdkit::core::DecoderOptions options{1, false, std::uint64_t{4} * 1024U * 1024U, 47};
+    const auto plugin = pvdkit::pvd::makePlugin(options);
+    REQUIRE(plugin != nullptr);
+
+    const auto bytes = pluginFixture("rgba8_48x48.rpgmvp");
+    const auto opened = plugin->open(pvdkit::pvd::OpenRequest{"rgba8_48x48.rpgmvp", 0, bytes});
+    REQUIRE_FALSE(opened.has_value());
+    CHECK(opened.error().code == pvdkit::core::ErrorCode::TooLarge);
+}

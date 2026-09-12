@@ -38,7 +38,8 @@ namespace pvdkit::pvd
         class DefaultPlugin final : public IPlugin
         {
           public:
-            DefaultPlugin() : plugin_{fileSource_, decoderFactory_, describer_, defaultOptions(), defaultInfo()}
+            explicit DefaultPlugin(const core::DecoderOptions &options)
+                : plugin_{fileSource_, decoderFactory_, describer_, options, defaultInfo()}
             {
             }
 
@@ -63,7 +64,12 @@ namespace pvdkit::pvd
 
     std::unique_ptr<IPlugin> makePlugin()
     {
-        return std::make_unique<DefaultPlugin>();
+        return makePlugin(defaultOptions());
+    }
+
+    std::unique_ptr<IPlugin> makePlugin(const core::DecoderOptions &options)
+    {
+        return std::make_unique<DefaultPlugin>(options);
     }
 
 } // namespace pvdkit::pvd

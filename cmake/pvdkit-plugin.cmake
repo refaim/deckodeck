@@ -13,7 +13,8 @@
 #        directory <bindir>/package (README.txt, LICENSES.txt, manifest.json) that
 #        scripts/build-all.ps1 and scripts/package.ps1 consume.
 #
-#   pvdkit_add_plugin_e2e_tests(<id> FIXTURES <dir> SOURCES <files...>)   (tests only)
+#   pvdkit_add_plugin_e2e_tests(<id> FIXTURES <dir> SEQUENCE_EXPECTATIONS <source>
+#                                SOURCES <files...>)   (tests only)
 #     -> executable <id>_e2e_tests = the shared host driver (tests/e2e/PluginHost.*), the shared
 #        VERSIONINFO read-back test and the plugin's own e2e sources, compiled against the
 #        plugin's identity, fixtures and DLL path; ctest entries <id>_e2e_tests (in coverage
@@ -25,6 +26,11 @@
 #        the same fixture directory, which discovers the fixtures through the DLL itself; ctest
 #        entry <id>_leak_tests (the same coverage-build profile name). A plugin gets the leak gate
 #        by registering its e2e tests and nothing else.
+#
+#   pvdkit_add_plugin_sequence_tests(<id> FIXTURES <dir> EXPECTATIONS <source>)
+#     (called by the e2e helper)
+#     -> executable <id>_sequence_tests = the framework-free in-process host-sequence driver plus
+#        its shared doctest source, linked to this plugin's composition root with reduced limits.
 
 # Escapes a string for use inside a C string literal in a generated header (backslashes, quotes).
 function(_pvdkit_escape_literal out value)
@@ -176,7 +182,7 @@ function(pvdkit_add_plugin id)
 endfunction()
 
 function(pvdkit_add_plugin_e2e_tests id)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "FIXTURES" "SOURCES")
+  cmake_parse_arguments(PARSE_ARGV 1 arg "" "FIXTURES;SEQUENCE_EXPECTATIONS" "SOURCES")
   if(arg_UNPARSED_ARGUMENTS)
     message(FATAL_ERROR "pvdkit_add_plugin_e2e_tests(${id}): unexpected arguments ${arg_UNPARSED_ARGUMENTS}")
   endif()
@@ -188,6 +194,12 @@ function(pvdkit_add_plugin_e2e_tests id)
   endif()
   if(NOT arg_SOURCES)
     message(FATAL_ERROR "pvdkit_add_plugin_e2e_tests(${id}): SOURCES is required")
+  endif()
+  if(NOT arg_SEQUENCE_EXPECTATIONS OR NOT EXISTS "${arg_SEQUENCE_EXPECTATIONS}"
+     OR IS_DIRECTORY "${arg_SEQUENCE_EXPECTATIONS}")
+    message(
+      FATAL_ERROR
+        "pvdkit_add_plugin_e2e_tests(${id}): SEQUENCE_EXPECTATIONS must name the plugin's expectation source")
   endif()
 
   # The test loads the built DLL with LoadLibraryW and drives its eight exports like the host; it
@@ -240,7 +252,52 @@ function(pvdkit_add_plugin_e2e_tests id)
     COMMAND "${PVDKIT_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File
             "${PROJECT_SOURCE_DIR}/scripts/check-exports.ps1" -Path "$<TARGET_FILE:${id}_plugin>")
 
+  pvdkit_add_plugin_sequence_tests(
+    ${id}
+    FIXTURES "${arg_FIXTURES}"
+    EXPECTATIONS "${arg_SEQUENCE_EXPECTATIONS}")
   _pvdkit_add_plugin_leak_tests(${id} "${arg_FIXTURES}")
+endfunction()
+
+# One executable per plugin is intentional: every composition root defines pvd::makePlugin, so
+# combining compositions in one sequence executable would violate the one-definition rule.
+function(pvdkit_add_plugin_sequence_tests id)
+  cmake_parse_arguments(PARSE_ARGV 1 arg "" "FIXTURES;EXPECTATIONS" "")
+  if(arg_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "pvdkit_add_plugin_sequence_tests(${id}): unexpected arguments ${arg_UNPARSED_ARGUMENTS}")
+  endif()
+  if(NOT TARGET pvdkit_sequence)
+    message(FATAL_ERROR "pvdkit_add_plugin_sequence_tests(${id}): tests/support must be configured before the plugins")
+  endif()
+  if(NOT TARGET ${id}_composition)
+    message(FATAL_ERROR "pvdkit_add_plugin_sequence_tests(${id}): ${id}_composition does not exist")
+  endif()
+  if(NOT arg_FIXTURES OR NOT IS_DIRECTORY "${arg_FIXTURES}")
+    message(FATAL_ERROR "pvdkit_add_plugin_sequence_tests(${id}): FIXTURES must name an existing directory")
+  endif()
+  if(NOT arg_EXPECTATIONS OR NOT EXISTS "${arg_EXPECTATIONS}" OR IS_DIRECTORY "${arg_EXPECTATIONS}")
+    message(
+      FATAL_ERROR
+        "pvdkit_add_plugin_sequence_tests(${id}): EXPECTATIONS must name a plugin-local expectation source")
+  endif()
+
+  add_executable(
+    ${id}_sequence_tests
+    "${arg_EXPECTATIONS}"
+    "${PROJECT_SOURCE_DIR}/tests/support/sequence/SequenceDriverTests.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/TestMain.cpp")
+  target_link_libraries(
+    ${id}_sequence_tests
+    PRIVATE ${id}_composition ${id}_identity pvdkit_sequence doctest::doctest pvdkit_options)
+  target_compile_definitions(
+    ${id}_sequence_tests
+    PRIVATE
+      PVDKIT_FIXTURE_DIR="${arg_FIXTURES}")
+  if(PVDKIT_COVERAGE)
+    # The death-test child flushes its profile before its intentional abort.
+    target_compile_definitions(${id}_sequence_tests PRIVATE PVDKIT_COVERAGE=1)
+  endif()
+  add_test(NAME ${id}_sequence_tests COMMAND ${id}_sequence_tests)
 endfunction()
 
 # The leak gate (docs/tasks/task10-leaks.md, level 1): the shared scenarios in tests/support/leak

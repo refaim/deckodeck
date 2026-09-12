@@ -21,3 +21,10 @@ set_target_properties(pvdkit_leakcheck PROPERTIES PVDKIT_LEAK_SCENARIO_SOURCES "
 add_executable(leakcheck_tests LeakCheckTests.cpp HostileCorpusTests.cpp "${PROJECT_SOURCE_DIR}/tests/TestMain.cpp")
 target_link_libraries(leakcheck_tests PRIVATE pvdkit_leakcheck doctest::doctest pvdkit_options)
 add_test(NAME leakcheck_tests COMMAND leakcheck_tests)
+
+# In-process host-sequence replay over pvd::Shim. The driver itself is framework-free; one
+# doctest executable per plugin links it to that plugin's composition root (registered by
+# pvdkit_add_plugin_sequence_tests) so the duplicate pvd::makePlugin symbols never meet.
+add_library(pvdkit_sequence STATIC sequence/SequenceDriver.cpp sequence/SequenceDriver.hpp)
+target_include_directories(pvdkit_sequence PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pvdkit_sequence PRIVATE pvdkit_pvd pvdkit_core pvdkit_options)
