@@ -301,6 +301,8 @@ struct ImageMeta {                    // every scalar has a default: an empty Im
   bool animated = false;              // frameCount > 1 (image sequence)
   Transforms transforms;
   bool hasIcc = false, hasExif = false, hasXmp = false;
+  bool indexed = false;                 // source stores palette indices; depth is the index width (1/2/4/8)
+  bool interlaced = false;              // source is stored progressively (PNG Adam7; informational only)
 };
 struct FrameTiming { std::uint32_t durationMs; };
 struct DecoderOptions { unsigned maxThreads; bool strict; std::uint64_t maxPixels; std::uint32_t maxDimension; };
@@ -384,8 +386,9 @@ Decisions (Task 7, open point 1):
 - `FileSession : pvd::IFileSession` (`src/core/FileSession.hpp/.cpp`): owns
   `std::unique_ptr<IFileData>` (null in memory mode), `std::unique_ptr<IDecoder>`, `ImageInfo`,
   `std::vector<std::unique_ptr<PixelBuffer>> outstanding_`, `DecoderOptions`.
-  - `pageInfo(p)`: range check; `displaySize(meta)`; `bitsPerPixel = depth × (hasAlpha ? 4 : 3)`
-    (informational, so 10-bit RGBA reports 40); `frameTimeMs` = `frameTiming(p)` when animated else 0.
+  - `pageInfo(p)`: range check; `displaySize(meta)`;
+    `bitsPerPixel = indexed ? depth : depth × (hasAlpha ? 4 : 3)` (informational, so indexed4
+    reports 4 and 10-bit RGBA reports 40); `frameTimeMs` = `frameTiming(p)` when animated else 0.
   - `decodePage(p, progress)`: range check; `progress.report(0, 3)`; allocate `PixelBuffer` at coded
     size (`Bgra32` if `hasAlpha` else `Bgr24`); `decodeFrame`; `progress.report(1, 3)`;
     if any transform present → `Transform::apply` into a new buffer; `progress.report(2, 3)`;

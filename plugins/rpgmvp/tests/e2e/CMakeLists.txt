@@ -1,0 +1,6 @@
+file(GLOB_RECURSE RPGMVP_E2E_TEST_SOURCES CONFIGURE_DEPENDS "*.cpp" "*.hpp")
+
+pvdkit_add_plugin_e2e_tests(
+  rpgmvp
+  FIXTURES "${RPGMVP_FIXTURE_DIR}"
+  SOURCES ${RPGMVP_E2E_TEST_SOURCES})

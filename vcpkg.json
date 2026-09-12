@@ -6,7 +6,8 @@
     "doctest"
   ],
   "default-features": [
-    "avif"
+    "avif",
+    "rpgmvp"
   ],
   "features": {
     "avif": {
@@ -18,6 +19,12 @@
             "dav1d"
           ]
         }
+      ]
+    },
+    "rpgmvp": {
+      "description": "RPGMVP.pvd: RPG Maker MV/MZ encrypted PNG via libspng",
+      "dependencies": [
+        "libspng"
       ]
     }
   }

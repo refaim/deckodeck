@@ -65,6 +65,8 @@ namespace pvdkit::core
         bool animated = false;
         Transforms transforms;
         bool hasIcc = false, hasExif = false, hasXmp = false;
+        bool indexed = false;    ///< Source stores palette indices; `depth` is the index width.
+        bool interlaced = false; ///< Source is stored progressively (for example, PNG Adam7).
     };
 
     /// Holds the display duration of one decoded frame.

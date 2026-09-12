@@ -93,6 +93,21 @@ namespace pvdkit::core
             }
         }
 
+        TEST_CASE("pageInfo reports palette index depth instead of expanded channel depth")
+        {
+            for (const bool indexed : {false, true}) {
+                DecoderState state;
+                auto imageMeta = test::meta(3, 2, true, 4);
+                imageMeta.indexed = indexed;
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+
+                const auto info = session.pageInfo(0);
+
+                REQUIRE(info.has_value());
+                CHECK(info->bitsPerPixel == (indexed ? 4 : 16));
+            }
+        }
+
         TEST_CASE("pageInfo passes through animated frame timing and timing errors")
         {
             DecoderState state;

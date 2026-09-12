@@ -265,10 +265,10 @@ namespace
                 },
             .reinterpretCast = std::regex{R"(\breinterpret_cast\b)"},
             .windowsHeader = std::regex{R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*windows[.]h[ \t]*[>"])"},
-            // The codec libraries the plugins wrap (libavif and dav1d today): foreign headers that only
+            // The codec libraries the plugins wrap: foreign headers that only
             // an adapter may include. Extend the alternation when a plugin brings a new library.
             .codecHeader =
-                std::regex{R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*(avif/avif|dav1d/dav1d)[.]h[ \t]*[>"])"},
+                std::regex{R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*(avif/avif|dav1d/dav1d|spng)[.]h[ \t]*[>"])"},
             // Captures the whole header path after `pvd/` (nested directories included, `.h` or `.hpp`)
             // so callers can check it against an allowlist, rather than hard-coding the forbidden names
             // in the pattern itself.
@@ -397,6 +397,16 @@ namespace
             return;
         }
 
+        const std::string_view rootRelative = normalizedPath.substr(ownRoot.size() + 1);
+        const auto ownEntry = index.find(std::string{ownRoot});
+        const bool isOwnHeader = ownEntry->second.contains(std::string{rootRelative});
+        const bool shadowsShared = std::ranges::any_of(index, [&](const auto &entry) {
+            return !isPluginRootPath(entry.first) && entry.second.contains(std::string{rootRelative});
+        });
+        if (isPluginRootPath(ownRoot) && isOwnHeader && shadowsShared) {
+            violations.push_back({"plugin header shadows a shared header"});
+        }
+
         const auto isAllowedRoot = [ownRoot](const std::string_view root) {
             return root == ownRoot || !isPluginRootPath(root);
         };
@@ -510,7 +520,7 @@ namespace
         };
         IncludeIndex index;
         index[root("project/src")] = {"core/error.hpp", "pvd/types.hpp", "adapters/win/utf8.hpp"};
-        index[root("project/plugins/avif/src")] = {"adapters/avif/decoder.hpp", "core/describe.hpp"};
+        index[root("project/plugins/avif/src")] = {"adapters/avif/decoder.hpp", "core/describe.hpp", "core/error.hpp"};
         index[root("project/plugins/rpgmvp/src")] = {"adapters/spng/decoder.hpp", "core/describe.hpp"};
         return index;
     }
@@ -645,6 +655,8 @@ namespace
             CHECK(scan("project/src/pvd/Exports.cpp", include).empty());
             CHECK(scan("project/src/core/Sample.cpp", std::string{"// "} + std::string{include}).empty());
         }
+        CHECK_FALSE(scan("project/src/core/Sample.cpp", "#include <spng.h>").empty());
+        CHECK(scan("project/plugins/rpgmvp/src/adapters/spng/Sample.cpp", "#include <spng.h>").empty());
     }
 
     TEST_CASE("core may include only the shared pvd boundary contracts, in the shared and the plugin tree")
@@ -805,6 +817,14 @@ namespace
         }
         // The same name from shared code resolves in no shared root and is still rejected.
         CHECK_FALSE(scan("project/src/core/CodecPlugin.cpp", "#include \"core/Describe.hpp\"", index).empty());
+    }
+
+    TEST_CASE("a plugin header cannot shadow a shared header")
+    {
+        const auto index = fakeIndex();
+        CHECK_FALSE(scan("project/plugins/avif/src/core/Error.hpp", "#pragma once", index).empty());
+        CHECK(scan("project/plugins/avif/src/core/Describe.hpp", "#pragma once", index).empty());
+        CHECK(scan("project/src/core/Error.hpp", "#pragma once", index).empty());
     }
 
     TEST_CASE("PvdApi.hpp is the one pvd header that may include Windows.h")

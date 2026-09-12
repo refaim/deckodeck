@@ -86,6 +86,12 @@ function(pvdkit_add_plugin id)
   if(arg_UNPARSED_ARGUMENTS)
     message(FATAL_ERROR "pvdkit_add_plugin(${id}): unexpected arguments ${arg_UNPARSED_ARGUMENTS}")
   endif()
+  file(RELATIVE_PATH plugin_directory_id "${PROJECT_SOURCE_DIR}/plugins" "${CMAKE_CURRENT_SOURCE_DIR}")
+  if(NOT plugin_directory_id STREQUAL "${id}")
+    message(FATAL_ERROR
+            "pvdkit_add_plugin(${id}): id must equal its directory name under plugins/ "
+            "('${plugin_directory_id}') because coverage derives the id from that path")
+  endif()
   if(NOT TARGET ${id}_identity)
     message(FATAL_ERROR "pvdkit_add_plugin(${id}): call pvdkit_plugin_identity(${id} ...) first")
   endif()

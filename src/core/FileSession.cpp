@@ -54,7 +54,9 @@ namespace pvdkit::core
 
         const auto [width, height] = Transform::displaySize(meta);
         const auto channels = meta.hasAlpha ? 4U : 3U;
-        return pvd::PageInfo{width, height, static_cast<std::uint32_t>(meta.depth) * channels, frameTimeMs};
+        const auto bitsPerPixel =
+            meta.indexed ? static_cast<std::uint32_t>(meta.depth) : static_cast<std::uint32_t>(meta.depth) * channels;
+        return pvd::PageInfo{width, height, bitsPerPixel, frameTimeMs};
     }
 
     Result<pvd::DecodedPage> FileSession::decodePage(const std::uint32_t page, const pvd::Progress &progress)

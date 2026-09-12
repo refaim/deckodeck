@@ -69,13 +69,13 @@ function Assert-PluginProfile {
     [string]$WorkDirectory
   )
 
-  $pattern = [regex]('^pvdkit-' + [regex]::Escape($PluginId) + '-(\d+)-([^.]+)\.profraw$')
+  $pattern = [regex]'^pvdkit-([A-Za-z0-9_]+)-(\d+)-([^.]+)\.profraw$'
   $pairs = @(
     $ProfileFiles |
       ForEach-Object {
         $match = $pattern.Match($_.Name)
-        if ($match.Success) {
-          [pscustomobject]@{ ProcessId = $match.Groups[1].Value; Module = $match.Groups[2].Value; File = $_ }
+        if ($match.Success -and $match.Groups[1].Value -ceq $PluginId) {
+          [pscustomobject]@{ ProcessId = $match.Groups[2].Value; Module = $match.Groups[3].Value; File = $_ }
         }
       } |
       Group-Object -Property ProcessId |
