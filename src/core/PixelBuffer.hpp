@@ -7,7 +7,7 @@
 
 #include "core/Error.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 
 struct PixelView {
   std::span<const std::byte> pixels;
@@ -50,4 +50,4 @@ private:
   std::uint32_t pitchBytes_;
 };
 
-} // namespace avifpvd::core
+} // namespace pvdkit::core

@@ -4,13 +4,13 @@
 #include <string>
 #include <string_view>
 
-static_assert(__cplusplus >= 202302L, "AVIF.pvd requires C++23");
+static_assert(__cplusplus >= 202302L, "pvdkit requires C++23");
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 
-/// Identifies an expected AVIF decoding failure.
+/// Identifies an expected decoding failure; NotRecognised makes the host try the next decoder.
 enum class ErrorCode {
-  NotAvif,
+  NotRecognised,
   FileOpenFailed,
   ParseFailed,
   DecodeFailed,
@@ -36,4 +36,4 @@ using Result = std::expected<T, Error>;
 /// Returns the stable diagnostic name of an error category.
 std::string_view name(ErrorCode code);
 
-}  // namespace avifpvd::core
+}  // namespace pvdkit::core

@@ -4,7 +4,7 @@
 
 #include "pvd/Types.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 namespace {
 
 TEST_CASE("progress without a callback always continues") {
@@ -33,4 +33,4 @@ TEST_CASE("progress forwards arguments and returns the callback result") {
 }
 
 }  // namespace
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

@@ -9,21 +9,21 @@
 
 #include "pvd/ContextHandle.hpp"
 #include "pvd/Firewall.hpp"
-#include "pvd/PluginConstants.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 
-void fillDefaultPluginInfo(pvdInfoPlugin* output) noexcept {
+void fillDefaultPluginInfo(pvdInfoPlugin* output, const PluginIdentity& identity) noexcept {
   if (output == nullptr) {
     return;
   }
-  output->Priority = kPluginPriority;
-  output->pName = kPluginName.data();
-  output->pVersion = kPluginVersion.data();
+  output->Priority = identity.priority;
+  output->pName = identity.name.data();
+  output->pVersion = identity.version.data();
   output->pComments = "";
 }
 
-Shim::Shim(IPlugin& plugin) noexcept : plugin_{plugin} {}
+Shim::Shim(IPlugin& plugin, const PluginIdentity identity) noexcept
+    : plugin_{plugin}, identity_{identity} {}
 
 UINT32 Shim::init() noexcept {
   return guarded([] { return UINT32{PVD_CURRENT_INTERFACE_VERSION}; }, UINT32{0});
@@ -32,7 +32,7 @@ UINT32 Shim::init() noexcept {
 void Shim::exit() noexcept { guarded([] {}); }
 
 void Shim::pluginInfo(pvdInfoPlugin* output) noexcept {
-  fillDefaultPluginInfo(output);
+  fillDefaultPluginInfo(output, identity_);
   guarded([&] {
     if (output == nullptr) {
       return;
@@ -173,4 +173,4 @@ void Shim::fileClose(void* context) noexcept {
   guarded([&] { fromHost(context).reset(); });
 }
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

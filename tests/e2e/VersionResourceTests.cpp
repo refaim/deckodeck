@@ -1,4 +1,4 @@
-// Reads the VERSIONINFO resource back from the built AVIF.pvd through the Win32 version API
+// Reads the VERSIONINFO resource back from the built plugin through the Win32 version API
 // (version.lib is linked into this test only; the plugin keeps importing KERNEL32.dll alone).
 
 #include <cstddef>
@@ -10,7 +10,7 @@
 #include <doctest/doctest.h>
 
 #include "PluginHost.hpp"
-#include "pvd/Version.hpp"
+#include "pvd/PluginConstants.hpp"
 
 namespace {
 
@@ -44,7 +44,7 @@ class VersionBlock {
     return *static_cast<const VS_FIXEDFILEINFO*>(value);
   }
 
-  // The StringFileInfo block is US English / Unicode (040904B0), as AVIF.rc declares it.
+  // The StringFileInfo block is US English / Unicode (040904B0), as Plugin.rc declares it.
   [[nodiscard]] std::wstring string(const std::wstring_view name) const {
     void* value = nullptr;
     UINT length = 0;
@@ -62,34 +62,36 @@ class VersionBlock {
 
 }  // namespace
 
-TEST_CASE("AVIF.pvd carries a VERSIONINFO resource that agrees with the plugin") {
-  const VersionBlock block{avifpvd::e2e::pluginPath()};
+TEST_CASE("the plugin carries a VERSIONINFO resource that agrees with its generated identity and with pvdPluginInfo") {
+  const VersionBlock block{pvdkit::e2e::pluginPath()};
 
   const auto& fixed = block.fixed();
   CHECK(fixed.dwSignature == 0xFEEF04BD);
-  CHECK(HIWORD(fixed.dwFileVersionMS) == AVIFPVD_VERSION_MAJOR);
-  CHECK(LOWORD(fixed.dwFileVersionMS) == AVIFPVD_VERSION_MINOR);
-  CHECK(HIWORD(fixed.dwFileVersionLS) == AVIFPVD_VERSION_PATCH);
+  CHECK(HIWORD(fixed.dwFileVersionMS) == PVDKIT_PLUGIN_VERSION_MAJOR);
+  CHECK(LOWORD(fixed.dwFileVersionMS) == PVDKIT_PLUGIN_VERSION_MINOR);
+  CHECK(HIWORD(fixed.dwFileVersionLS) == PVDKIT_PLUGIN_VERSION_PATCH);
   CHECK(LOWORD(fixed.dwFileVersionLS) == 0);
   CHECK(fixed.dwProductVersionMS == fixed.dwFileVersionMS);
   CHECK(fixed.dwProductVersionLS == fixed.dwFileVersionLS);
   CHECK(fixed.dwFileType == VFT_DLL);
 
-  CHECK(block.string(L"FileVersion") == L"" AVIFPVD_VERSION_STRING);
-  CHECK(block.string(L"ProductVersion") == L"" AVIFPVD_VERSION_STRING);
-  CHECK(block.string(L"CompanyName") == L"" AVIFPVD_AUTHOR);
-  CHECK(block.string(L"LegalCopyright") == L"" AVIFPVD_COPYRIGHT);
-  CHECK(block.string(L"FileDescription") == L"AVIF decoder plugin for PictureView (Far Manager)");
-  CHECK(block.string(L"ProductName") == L"AVIF.pvd");
-  CHECK(block.string(L"InternalName") == L"AVIF.pvd");
-  CHECK(block.string(L"OriginalFilename") == L"AVIF.pvd");
+  CHECK(block.string(L"FileVersion") == L"" PVDKIT_PLUGIN_VERSION);
+  CHECK(block.string(L"ProductVersion") == L"" PVDKIT_PLUGIN_VERSION);
+  CHECK(block.string(L"CompanyName") == L"" PVDKIT_PLUGIN_AUTHOR);
+  CHECK(block.string(L"LegalCopyright") == L"" PVDKIT_PLUGIN_COPYRIGHT);
+  CHECK(block.string(L"FileDescription") == L"" PVDKIT_PLUGIN_DESCRIPTION);
+  CHECK(block.string(L"ProductName") == L"" PVDKIT_PLUGIN_FILENAME);
+  CHECK(block.string(L"InternalName") == L"" PVDKIT_PLUGIN_FILENAME);
+  CHECK(block.string(L"OriginalFilename") == L"" PVDKIT_PLUGIN_FILENAME);
 
   // The resource mirrors what the running plugin reports: the same version string and the same
   // comments (library versions) that pvdPluginInfo hands to the host.
-  const auto plugin = avifpvd::e2e::loadInitializedPlugin();
+  const auto plugin = pvdkit::e2e::loadInitializedPlugin();
   pvdInfoPlugin info{};
   plugin.exports().pluginInfo(&info);
   CHECK(block.string(L"FileVersion") == utf8ToWide(info.pVersion));
   CHECK(block.string(L"Comments") == utf8ToWide(info.pComments));
+  CHECK(info.Priority == PVDKIT_PLUGIN_PRIORITY);
+  CHECK(utf8ToWide(info.pName) == L"" PVDKIT_PLUGIN_NAME);
   plugin.exports().exit();
 }

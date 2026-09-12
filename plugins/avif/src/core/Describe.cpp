@@ -5,7 +5,13 @@
 #include <cstdint>
 #include <string_view>
 
-namespace avifpvd::core {
+namespace pvdkit::avif {
+
+using core::ChromaFormat;
+using core::Cicp;
+using core::ImageMeta;
+using core::MirrorAxis;
+
 namespace {
 
 std::string_view chromaName(const ChromaFormat chroma) {
@@ -92,4 +98,9 @@ std::string describe(const ImageMeta &meta) {
   return description;
 }
 
-} // namespace avifpvd::core
+core::ImageDescription
+Describer::describe(const core::ImageMeta &meta) const {
+  return core::ImageDescription{"AVIF", "AV1", avif::describe(meta)};
+}
+
+} // namespace pvdkit::avif

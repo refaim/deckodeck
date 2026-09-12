@@ -11,7 +11,7 @@
 
 #include <dav1d/dav1d.h>
 
-namespace avifpvd::avif {
+namespace pvdkit::avif {
 namespace {
 
 using Mapping = std::pair<avifResult, core::ErrorCode>;
@@ -240,7 +240,7 @@ core::Result<void> Decoder::decodeFrame(const std::uint32_t frame, const pvd::Pi
       });
 }
 
-bool DecoderFactory::looksLikeAvif(const std::span<const std::byte> head) const {
+bool DecoderFactory::recognises(const std::span<const std::byte> head) const {
   if (head.size() < 12) {
     return false;
   }
@@ -283,4 +283,4 @@ core::Result<std::unique_ptr<core::IDecoder>> DecoderFactory::create(
       });
 }
 
-}  // namespace avifpvd::avif
+}  // namespace pvdkit::avif

@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 
 /// Describes this decoder plugin to the PictureView host.
 struct PluginInfo {
@@ -58,4 +58,4 @@ class Progress {
   Fn fn_;
 };
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

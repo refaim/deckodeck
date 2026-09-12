@@ -1,0 +1,40 @@
+// VERSIONINFO resource of every pvdkit plugin. Every value comes from the plugin's generated
+// pvd/PluginConstants.hpp (name, version, priority, description, comments, PVDKIT_AUTHOR /
+// PVDKIT_COPYRIGHT); nothing here is typed twice and nothing here is plugin-specific. Compiled
+// by llvm-rc, which preprocesses with clang and defines RC_INVOKED, once per plugin target.
+#pragma code_page(65001)
+
+#include <windows.h>
+
+#include "pvd/PluginConstants.hpp"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION PVDKIT_PLUGIN_VERSION_MAJOR, PVDKIT_PLUGIN_VERSION_MINOR, PVDKIT_PLUGIN_VERSION_PATCH, 0
+PRODUCTVERSION PVDKIT_PLUGIN_VERSION_MAJOR, PVDKIT_PLUGIN_VERSION_MINOR, PVDKIT_PLUGIN_VERSION_PATCH, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_DLL
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // US English, Unicode: the block the e2e version test and Explorer read.
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", PVDKIT_PLUGIN_AUTHOR
+            VALUE "FileDescription", PVDKIT_PLUGIN_DESCRIPTION
+            VALUE "FileVersion", PVDKIT_PLUGIN_VERSION
+            VALUE "InternalName", PVDKIT_PLUGIN_FILENAME
+            VALUE "LegalCopyright", PVDKIT_PLUGIN_COPYRIGHT
+            VALUE "OriginalFilename", PVDKIT_PLUGIN_FILENAME
+            VALUE "ProductName", PVDKIT_PLUGIN_FILENAME
+            VALUE "ProductVersion", PVDKIT_PLUGIN_VERSION
+            VALUE "Comments", PVDKIT_PLUGIN_COMMENTS
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

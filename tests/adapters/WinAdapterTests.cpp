@@ -24,7 +24,7 @@
 namespace {
 
 namespace fs = std::filesystem;
-using avifpvd::core::ErrorCode;
+using pvdkit::core::ErrorCode;
 
 constexpr std::size_t kMaxPath = 260;
 constexpr std::array kPayload{std::byte{0x41}, std::byte{0x56}, std::byte{0x49}, std::byte{0x46}};
@@ -83,7 +83,7 @@ std::string utf8Path(const fs::path& path) {
 
 std::string utf8Path(const std::wstring& path) { return utf8Path(fs::path{path}); }
 
-void checkOpens(avifpvd::win::FileSource& source, const std::string& utf8) {
+void checkOpens(pvdkit::win::FileSource& source, const std::string& utf8) {
   auto opened = source.open(utf8);
   const std::string openError = opened ? std::string{} : opened.error().detail;
   CAPTURE(utf8);
@@ -95,15 +95,15 @@ void checkOpens(avifpvd::win::FileSource& source, const std::string& utf8) {
 }  // namespace
 
 TEST_CASE("UTF-8 paths convert to UTF-16 and reject malformed input") {
-  const auto empty = avifpvd::win::utf8ToWide("");
+  const auto empty = pvdkit::win::utf8ToWide("");
   REQUIRE(empty.has_value());
   CHECK(empty->empty());
 
-  const auto converted = avifpvd::win::utf8ToWide("folder/\xD1\x84\xD0\xB0\xD0\xB9\xD0\xBB-\xF0\x9F\x98\x80.avif");
+  const auto converted = pvdkit::win::utf8ToWide("folder/\xD1\x84\xD0\xB0\xD0\xB9\xD0\xBB-\xF0\x9F\x98\x80.avif");
   REQUIRE(converted.has_value());
   CHECK(*converted == L"folder/\u0444\u0430\u0439\u043b-\U0001F600.avif");
 
-  const auto invalid = avifpvd::win::utf8ToWide(std::string_view{"\xC3\x28", 2});
+  const auto invalid = pvdkit::win::utf8ToWide(std::string_view{"\xC3\x28", 2});
   REQUIRE_FALSE(invalid.has_value());
   CHECK(invalid.error().code == ErrorCode::FileOpenFailed);
   CHECK_FALSE(invalid.error().detail.empty());
@@ -111,17 +111,17 @@ TEST_CASE("UTF-8 paths convert to UTF-16 and reject malformed input") {
 
 TEST_CASE("UTF-8 inputs longer than INT_MAX bytes are refused before MultiByteToWideChar") {
   constexpr auto intMax = static_cast<std::size_t>(std::numeric_limits<int>::max());
-  CHECK(avifpvd::win::detail::utf8Length(0) == 0);
-  CHECK(avifpvd::win::detail::utf8Length(intMax) == std::numeric_limits<int>::max());
+  CHECK(pvdkit::win::detail::utf8Length(0) == 0);
+  CHECK(pvdkit::win::detail::utf8Length(intMax) == std::numeric_limits<int>::max());
 
-  const auto tooLong = avifpvd::win::detail::utf8Length(intMax + 1);
+  const auto tooLong = pvdkit::win::detail::utf8Length(intMax + 1);
   REQUIRE_FALSE(tooLong.has_value());
   CHECK(tooLong.error().code == ErrorCode::FileOpenFailed);
   CHECK(tooLong.error().detail == "the UTF-8 path is longer than INT_MAX bytes");
 }
 
 TEST_CASE("Win32 paths below MAX_PATH are passed through untouched") {
-  using avifpvd::win::toWin32Path;
+  using pvdkit::win::toWin32Path;
 
   for (const auto path : {L"", L"relative\\file.avif", L"relative/../file.avif", L"C:file.avif",
                           L"C:/file.avif", L"C:\\folder\\..\\file.avif", LR"(\\server\share\file.avif)",
@@ -139,7 +139,7 @@ TEST_CASE("Win32 paths below MAX_PATH are passed through untouched") {
 }
 
 TEST_CASE("Win32 paths at or above MAX_PATH are normalised and given the extended prefix") {
-  using avifpvd::win::toWin32Path;
+  using pvdkit::win::toWin32Path;
   const std::wstring longName(kMaxPath, L'a');
 
   // Forward slashes and `..` are resolved by GetFullPathNameW before the prefix is added.
@@ -180,44 +180,44 @@ TEST_CASE("Win32 paths at or above MAX_PATH are normalised and given the extende
 }
 
 TEST_CASE("file mapping exposes exact file bytes and reports invalid file kinds") {
-  TempTree tree{L"avifpvd-adapter-file-mapping"};
+  TempTree tree{L"pvdkit-adapter-file-mapping"};
   constexpr std::array bytes{std::byte{0x00}, std::byte{0x7f}, std::byte{0x80}, std::byte{0xff}};
   const auto normal = tree.path() / L"normal.bin";
   writeBytes(normal, bytes);
 
-  auto mapped = avifpvd::win::FileMapping::open(normal.wstring());
+  auto mapped = pvdkit::win::FileMapping::open(normal.wstring());
   REQUIRE(mapped.has_value());
   CHECK(std::ranges::equal((*mapped)->bytes(), bytes));
 
   const std::wstring pathWithTrailingData = normal.wstring() + L".not-part-of-view";
   const auto pathView =
       std::wstring_view{pathWithTrailingData}.substr(0, normal.wstring().size());
-  const auto mappedView = avifpvd::win::FileMapping::open(pathView);
+  const auto mappedView = pvdkit::win::FileMapping::open(pathView);
   REQUIRE(mappedView.has_value());
   CHECK(std::ranges::equal((*mappedView)->bytes(), bytes));
 
   const auto emptyPath = tree.path() / L"empty.bin";
   writeBytes(emptyPath, {});
-  const auto empty = avifpvd::win::FileMapping::open(emptyPath.wstring());
+  const auto empty = pvdkit::win::FileMapping::open(emptyPath.wstring());
   REQUIRE_FALSE(empty.has_value());
   CHECK(empty.error().code == ErrorCode::FileOpenFailed);
   // Nothing in Win32 failed for an empty file, so the detail must not invent a Win32 error code.
   CHECK(empty.error().detail == "file is empty");
 
-  const auto missing = avifpvd::win::FileMapping::open((tree.path() / L"missing.bin").wstring());
+  const auto missing = pvdkit::win::FileMapping::open((tree.path() / L"missing.bin").wstring());
   REQUIRE_FALSE(missing.has_value());
   CHECK(missing.error().code == ErrorCode::FileOpenFailed);
   CHECK_FALSE(missing.error().detail.empty());
 
-  const auto directory = avifpvd::win::FileMapping::open(tree.path().wstring());
+  const auto directory = pvdkit::win::FileMapping::open(tree.path().wstring());
   REQUIRE_FALSE(directory.has_value());
   CHECK(directory.error().code == ErrorCode::FileOpenFailed);
   CHECK_FALSE(directory.error().detail.empty());
 }
 
 TEST_CASE("file source supports Unicode and extended-length paths") {
-  TempTree tree{L"avifpvd-adapter-file-source"};
-  avifpvd::win::FileSource source;
+  TempTree tree{L"pvdkit-adapter-file-source"};
+  pvdkit::win::FileSource source;
 
   const auto unicode = tree.path() / L"\u0444\u0430\u0439\u043b-\U0001F600.bin";
   writeBytes(unicode, kPayload);
@@ -244,12 +244,12 @@ TEST_CASE("file source supports Unicode and extended-length paths") {
 }
 
 TEST_CASE("file source opens short absolute paths that rely on Win32 normalisation") {
-  TempTree tree{L"avifpvd-adapter-short-paths"};
+  TempTree tree{L"pvdkit-adapter-short-paths"};
   const auto file = tree.path() / L"normal.bin";
   writeBytes(file, kPayload);
-  avifpvd::win::FileSource source;
+  pvdkit::win::FileSource source;
 
-  // `C:\...\Temp\avifpvd-adapter-short-paths/../avifpvd-adapter-short-paths/normal.bin`: both the
+  // `C:\...\Temp\pvdkit-adapter-short-paths/../pvdkit-adapter-short-paths/normal.bin`: both the
   // forward slashes and the `..` segment need Win32's own normalisation, which `\\?\` disables.
   const auto leaf = tree.path().filename().wstring();
   const std::wstring unnormalised =
@@ -265,7 +265,7 @@ TEST_CASE("file source opens short absolute paths that rely on Win32 normalisati
 }
 
 TEST_CASE("file source opens long paths written with forward slashes and dot-dot segments") {
-  TempTree tree{L"avifpvd-adapter-long-slash"};
+  TempTree tree{L"pvdkit-adapter-long-slash"};
   const auto longDirectory = tree.createLongDirectory();
   const auto longFile = longDirectory / L"payload.bin";
   writeBytes(longFile, kPayload);
@@ -273,7 +273,7 @@ TEST_CASE("file source opens long paths written with forward slashes and dot-dot
   const std::wstring slashed = longDirectory.generic_wstring() + L"/../" +
                                longDirectory.filename().wstring() + L"/payload.bin";
   REQUIRE(slashed.size() >= kMaxPath);
-  avifpvd::win::FileSource source;
+  pvdkit::win::FileSource source;
   checkOpens(source, utf8Path(slashed));
 
   // An already extended long path is passed through as is.
@@ -285,10 +285,10 @@ TEST_CASE("a file beyond the 32-bit address space is refused, never truncated") 
   // be checked before it is narrowed. The file is sparse (no disk space is consumed and no
   // 4 GiB write happens); the test insists on sparse support rather than falling back.
   constexpr std::uint64_t kSize = (std::uint64_t{1} << 32) + 1;
-  const TempTree tree{L"avifpvd-huge"};
+  const TempTree tree{L"pvdkit-huge"};
   const auto path = tree.path() / L"sparse.bin";
   {
-    avifpvd::win::UniqueHandle file{CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+    pvdkit::win::UniqueHandle file{CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
                                                 nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
                                                 nullptr)};
     REQUIRE(file.get() != INVALID_HANDLE_VALUE);
@@ -301,11 +301,11 @@ TEST_CASE("a file beyond the 32-bit address space is refused, never truncated") 
     REQUIRE(SetEndOfFile(file.get()) != FALSE);
   }
 
-  avifpvd::win::UniqueHandle file{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+  pvdkit::win::UniqueHandle file{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
   REQUIRE(file.get() != INVALID_HANDLE_VALUE);
-  const auto size = avifpvd::win::detail::fileSize(file);
-  avifpvd::win::FileSource source;
+  const auto size = pvdkit::win::detail::fileSize(file);
+  pvdkit::win::FileSource source;
   const auto opened = source.open(utf8Path(path));
   if constexpr (sizeof(std::size_t) == 4) {
     REQUIRE_FALSE(size.has_value());
@@ -325,15 +325,15 @@ TEST_CASE("a file beyond the 32-bit address space is refused, never truncated") 
 }
 
 TEST_CASE("file-mapping Win32 operations report failures as values") {
-  const auto size = avifpvd::win::detail::fileSize(avifpvd::win::UniqueHandle{});
+  const auto size = pvdkit::win::detail::fileSize(pvdkit::win::UniqueHandle{});
   REQUIRE_FALSE(size.has_value());
   CHECK(size.error().code == ErrorCode::FileOpenFailed);
 
-  const auto mapping = avifpvd::win::detail::createReadOnlyMapping(avifpvd::win::UniqueHandle{});
+  const auto mapping = pvdkit::win::detail::createReadOnlyMapping(pvdkit::win::UniqueHandle{});
   REQUIRE_FALSE(mapping.has_value());
   CHECK(mapping.error().code == ErrorCode::FileOpenFailed);
 
-  const auto view = avifpvd::win::detail::mapReadOnly(avifpvd::win::UniqueHandle{});
+  const auto view = pvdkit::win::detail::mapReadOnly(pvdkit::win::UniqueHandle{});
   REQUIRE_FALSE(view.has_value());
   CHECK(view.error().code == ErrorCode::FileOpenFailed);
 }

@@ -4,8 +4,8 @@
 
 #include "pvd/Plugin.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 
 [[nodiscard]] std::unique_ptr<IPlugin> makePlugin();
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

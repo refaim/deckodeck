@@ -9,7 +9,7 @@
 #include "core/Error.hpp"
 #include "pvd/Types.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 
 /// Identifies the decoded image chroma subsampling.
 enum class ChromaFormat { Yuv444, Yuv422, Yuv420, Yuv400 };
@@ -25,17 +25,21 @@ struct CropRect {
   std::uint32_t x, y, width, height;
 };
 
-/// Names the visual effect of an AVIF mirror transform.
+/// Names the visual effect of a mirror transform (HEIF/AVIF `imir`).
 enum class MirrorAxis { TopBottom, LeftRight };
 
-/// Holds normalized AVIF transformative properties.
+/// Holds normalized transformative properties (HEIF/AVIF `clap`, `irot`, `imir`). Every field at
+/// its default means "none": formats without transforms leave the struct empty.
 struct Transforms {
   std::optional<CropRect> clap;
   std::uint8_t irotAngle = 0;
   std::optional<MirrorAxis> imir;
 };
 
-/// Describes parsed AVIF image metadata independently of libavif.
+/// Describes a parsed image independently of the decoding library. `chroma` and `cicp` are the
+/// ISO/IEC 23091-2 signalling of the coded samples: RGB formats report `Yuv444` with
+/// `cicp.matrix = 0` (identity) and `cicp.fullRange = true`, which is how CICP itself spells RGB
+/// (sRGB PNG: `{1, 13, 0, true}`; unknown colour: `{2, 2, 0, true}`); greyscale is `Yuv400`.
 struct ImageMeta {
   std::uint32_t width, height;
   std::uint8_t depth;
@@ -61,7 +65,7 @@ struct DecoderOptions {
   std::uint32_t maxDimension;
 };
 
-/// Decodes frames from one parsed AVIF file.
+/// Decodes frames from one parsed file.
 class IDecoder {
  public:
   virtual ~IDecoder() = default;
@@ -72,13 +76,13 @@ class IDecoder {
                                                  std::uint32_t pitchBytes) = 0;
 };
 
-/// Recognizes AVIF input and creates parsed decoder instances.
+/// Recognises the plugin's format by its signature and creates parsed decoder instances.
 class IDecoderFactory {
  public:
   virtual ~IDecoderFactory() = default;
-  [[nodiscard]] virtual bool looksLikeAvif(std::span<const std::byte> head) const = 0;
+  [[nodiscard]] virtual bool recognises(std::span<const std::byte> head) const = 0;
   [[nodiscard]] virtual Result<std::unique_ptr<IDecoder>> create(std::span<const std::byte> file,
                                                                  const DecoderOptions&) = 0;
 };
 
-}  // namespace avifpvd::core
+}  // namespace pvdkit::core

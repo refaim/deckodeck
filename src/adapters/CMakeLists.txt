@@ -1,7 +1,7 @@
-file(GLOB_RECURSE AVIFPVD_ADAPTER_SOURCES CONFIGURE_DEPENDS "*.cpp" "*.hpp")
+file(GLOB_RECURSE PVDKIT_WIN_SOURCES CONFIGURE_DEPENDS "win/*.cpp" "win/*.hpp")
 
-add_library(avifpvd_adapters STATIC ${AVIFPVD_ADAPTER_SOURCES})
-target_include_directories(avifpvd_adapters PUBLIC "${PROJECT_SOURCE_DIR}/src")
-# The vcpkg `avif` target carries the configuration-correct static dav1d archive, and
-# libavif-config.cmake's find_dependency(libyuv) defines the `yuv` target it links.
-target_link_libraries(avifpvd_adapters PUBLIC avif yuv avifpvd_core avifpvd_options)
+# The shared Win32 adapter: FileMapping / FileSource over CreateFileW + MapViewOfFile, UTF-8
+# paths. Codec adapters live with their plugin (plugins/<id>/src/adapters/).
+add_library(pvdkit_win STATIC ${PVDKIT_WIN_SOURCES})
+target_include_directories(pvdkit_win PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(pvdkit_win PUBLIC pvdkit_core pvdkit_options)

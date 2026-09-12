@@ -6,7 +6,7 @@
 #include "adapters/win/FileMapping.hpp"
 #include "adapters/win/Utf8.hpp"
 
-namespace avifpvd::win {
+namespace pvdkit::win {
 
 core::Result<std::unique_ptr<core::IFileData>> FileSource::open(
     const std::string_view utf8Path) {
@@ -23,4 +23,4 @@ core::Result<std::unique_ptr<core::IFileData>> FileSource::open(
       });
 }
 
-}  // namespace avifpvd::win
+}  // namespace pvdkit::win

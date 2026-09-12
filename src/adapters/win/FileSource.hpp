@@ -5,7 +5,7 @@
 
 #include "core/IFileSource.hpp"
 
-namespace avifpvd::win {
+namespace pvdkit::win {
 
 class FileSource final : public core::IFileSource {
  public:
@@ -13,4 +13,4 @@ class FileSource final : public core::IFileSource {
       std::string_view utf8Path) override;
 };
 
-}  // namespace avifpvd::win
+}  // namespace pvdkit::win

@@ -14,8 +14,9 @@
 
 #include "core/IDecoder.hpp"
 #include "core/IFileSource.hpp"
+#include "core/IImageDescriber.hpp"
 
-namespace avifpvd::core::test {
+namespace pvdkit::core::test {
 
 struct SignatureException final : std::runtime_error {
   SignatureException() : std::runtime_error("scripted signature exception") {}
@@ -35,6 +36,10 @@ struct FrameTimingException final : std::runtime_error {
 
 struct DecodeFrameException final : std::runtime_error {
   DecodeFrameException() : std::runtime_error("scripted decode exception") {}
+};
+
+struct DescribeException final : std::runtime_error {
+  DescribeException() : std::runtime_error("scripted describe exception") {}
 };
 
 inline Error error(const ErrorCode code,
@@ -163,7 +168,7 @@ private:
 };
 
 struct FactoryState {
-  bool looksLikeAvif = true;
+  bool recognises = true;
   int lookCalls = 0;
   int createCalls = 0;
   std::vector<std::byte> lookedAt;
@@ -182,14 +187,14 @@ public:
         meta_(std::move(meta)) {}
 
   [[nodiscard]] bool
-  looksLikeAvif(const std::span<const std::byte> head) const override {
+  recognises(const std::span<const std::byte> head) const override {
     auto &state = factoryState_.get();
     ++state.lookCalls;
     state.lookedAt.assign(head.begin(), head.end());
     if (state.throwOnLook) {
       throw SignatureException{};
     }
-    return state.looksLikeAvif;
+    return state.recognises;
   }
 
   [[nodiscard]] Result<std::unique_ptr<IDecoder>>
@@ -213,6 +218,33 @@ private:
   std::reference_wrapper<FactoryState> factoryState_;
   std::reference_wrapper<DecoderState> decoderState_;
   ImageMeta meta_;
+};
+
+struct DescriberState {
+  int describeCalls = 0;
+  std::optional<ImageMeta> describedMeta;
+  ImageDescription description{"Fake format", "Fake compression",
+                               "fake description"};
+  bool throwOnDescribe = false;
+};
+
+class FakeImageDescriber final : public IImageDescriber {
+public:
+  explicit FakeImageDescriber(DescriberState &state) : state_(state) {}
+
+  [[nodiscard]] ImageDescription
+  describe(const ImageMeta &imageMeta) const override {
+    auto &state = state_.get();
+    ++state.describeCalls;
+    state.describedMeta = imageMeta;
+    if (state.throwOnDescribe) {
+      throw DescribeException{};
+    }
+    return state.description;
+  }
+
+private:
+  std::reference_wrapper<DescriberState> state_;
 };
 
 inline ImageMeta meta(const std::uint32_t width = 3,
@@ -240,8 +272,8 @@ inline DecoderOptions options(const std::uint64_t maxPixels = 1'000) {
 }
 
 inline pvd::ImageInfo imageInfo(const ImageMeta &imageMeta) {
-  return pvd::ImageInfo{imageMeta.frameCount, imageMeta.animated, "AVIF", "AV1",
-                        "test image"};
+  return pvd::ImageInfo{imageMeta.frameCount, imageMeta.animated, "Fake format",
+                        "Fake compression", "test image"};
 }
 
-} // namespace avifpvd::core::test
+} // namespace pvdkit::core::test

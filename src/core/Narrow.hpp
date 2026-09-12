@@ -9,7 +9,7 @@
 
 #include "core/Error.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 
 /// Narrows a 64-bit count to `To`, refusing a value `To` cannot hold as `TooLarge`; `what` names
 /// the quantity in the error detail. Every byte count in this plugin (pixel buffer sizes, file
@@ -27,4 +27,4 @@ template <std::unsigned_integral To>
   return static_cast<To>(value);
 }
 
-}  // namespace avifpvd::core
+}  // namespace pvdkit::core

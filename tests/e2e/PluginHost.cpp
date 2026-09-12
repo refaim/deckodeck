@@ -7,7 +7,7 @@
 
 #include <doctest/doctest.h>
 
-namespace avifpvd::e2e {
+namespace pvdkit::e2e {
 namespace {
 
 std::string win32Failure(const std::string_view operation, const DWORD error) {
@@ -68,7 +68,7 @@ std::expected<PluginLibrary, std::string> PluginLibrary::load(const std::filesys
   return PluginLibrary{std::move(module), exports};
 }
 
-std::filesystem::path pluginPath() { return std::filesystem::path{AVIFPVD_PLUGIN_PATH}; }
+std::filesystem::path pluginPath() { return std::filesystem::path{PVDKIT_PLUGIN_PATH}; }
 
 PluginLibrary loadInitializedPlugin() {
   auto loaded = PluginLibrary::load(pluginPath());
@@ -80,7 +80,7 @@ PluginLibrary loadInitializedPlugin() {
 }
 
 std::filesystem::path fixturePath(const std::string_view name) {
-  return std::filesystem::path{AVIFPVD_FIXTURE_DIR} / name;
+  return std::filesystem::path{PVDKIT_FIXTURE_DIR} / name;
 }
 
 FixtureFile readFixture(const std::string_view name) {
@@ -153,4 +153,4 @@ std::optional<DecodedPage> decodePage(const PluginExports& exports, void* contex
   return decoded;
 }
 
-}  // namespace avifpvd::e2e
+}  // namespace pvdkit::e2e

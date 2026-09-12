@@ -24,10 +24,10 @@
 
 namespace {
 
-using avifpvd::core::ChromaFormat;
-using avifpvd::core::DecoderOptions;
-using avifpvd::core::ErrorCode;
-using avifpvd::pvd::PixelFormat;
+using pvdkit::core::ChromaFormat;
+using pvdkit::core::DecoderOptions;
+using pvdkit::core::ErrorCode;
+using pvdkit::pvd::PixelFormat;
 
 constexpr std::uint64_t kLibavifSizeLimit = 16384ULL * 16384ULL;
 constexpr DecoderOptions kOptions{4, false, kLibavifSizeLimit, 32768};
@@ -36,7 +36,7 @@ using Bgr = std::array<std::uint8_t, 3>;
 using Bgra = std::array<std::uint8_t, 4>;
 
 std::vector<std::byte> readFixture(const std::string_view name) {
-  const auto path = std::filesystem::path{AVIFPVD_FIXTURE_DIR} / name;
+  const auto path = std::filesystem::path{PVDKIT_FIXTURE_DIR} / name;
   const auto size = std::filesystem::file_size(path);
   std::vector<std::byte> bytes(static_cast<std::size_t>(size));
   std::ifstream stream{path, std::ios::binary};
@@ -46,7 +46,7 @@ std::vector<std::byte> readFixture(const std::string_view name) {
   return bytes;
 }
 
-std::string createError(const avifpvd::core::Result<std::unique_ptr<avifpvd::core::IDecoder>>& created) {
+std::string createError(const pvdkit::core::Result<std::unique_ptr<pvdkit::core::IDecoder>>& created) {
   return created ? std::string{} : created.error().detail;
 }
 
@@ -162,7 +162,7 @@ struct DecodedBgr {
   }
 };
 
-DecodedBgr decodeBgr(avifpvd::core::IDecoder& decoder, const std::uint32_t frame) {
+DecodedBgr decodeBgr(pvdkit::core::IDecoder& decoder, const std::uint32_t frame) {
   const auto& meta = decoder.meta();
   const std::uint32_t pitch = meta.width * 3;
   std::vector<std::byte> pixels(static_cast<std::size_t>(pitch) * meta.height);
@@ -176,7 +176,7 @@ DecodedBgr decodeBgr(avifpvd::core::IDecoder& decoder, const std::uint32_t frame
 DecodedBgr decodeFixtureBgr(const std::string_view name, const unsigned threads = kOptions.maxThreads) {
   CAPTURE(name);
   const auto bytes = readFixture(name);
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   const DecoderOptions options{threads, false, kOptions.maxPixels, kOptions.maxDimension};
   auto decoder = factory.create(bytes, options);
   CAPTURE(createError(decoder));
@@ -187,7 +187,7 @@ DecodedBgr decodeFixtureBgr(const std::string_view name, const unsigned threads 
 }  // namespace
 
 TEST_CASE("all positive fixtures expose complete container metadata") {
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   for (const auto& expected : kExpectedMeta) {
     CAPTURE(expected.name);
     const auto bytes = readFixture(expected.name);
@@ -213,7 +213,7 @@ TEST_CASE("all positive fixtures expose complete container metadata") {
 }
 
 TEST_CASE("CICP signalling is preserved for P3/PQ, Rec.2020 and identity sources") {
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
 
   auto cosmosBytes = readFixture("cosmos1650_yuv444_10bpc_p3pq.avif");
   auto cosmos = factory.create(cosmosBytes, kOptions);
@@ -244,18 +244,18 @@ TEST_CASE("a real imir property is reported as a mirror axis by the parser") {
   REQUIRE(std::to_integer<std::uint8_t>(bytes[offset + 4]) == 0x01);
   std::ranges::copy(std::as_bytes(std::span{std::string_view{"imir"}}), bytes.begin() + static_cast<std::ptrdiff_t>(offset));
 
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   auto mirrored = factory.create(bytes, kOptions);
   CAPTURE(createError(mirrored));
   REQUIRE(mirrored.has_value());
   CHECK((*mirrored)->meta().transforms.irotAngle == 0);
   REQUIRE((*mirrored)->meta().transforms.imir.has_value());
-  CHECK(*(*mirrored)->meta().transforms.imir == avifpvd::core::MirrorAxis::LeftRight);
+  CHECK(*(*mirrored)->meta().transforms.imir == pvdkit::core::MirrorAxis::LeftRight);
 }
 
 TEST_CASE("libavif rejects known transforms marked non-essential") {
   const auto bytes = readFixture("clap_irot_imir_non_essential.avif");
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   const auto created = factory.create(bytes, kOptions);
   REQUIRE_FALSE(created.has_value());
   CHECK(created.error().code == ErrorCode::ParseFailed);
@@ -275,7 +275,7 @@ TEST_CASE("an alpha item whose transforms differ from the colour item is Unsuppo
   REQUIRE(std::to_integer<std::uint8_t>(bytes[colourIrotAssociation]) == 0x85);
   bytes[colourIrotAssociation] = std::byte{0x82};
 
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   const auto created = factory.create(bytes, kOptions);
   REQUIRE_FALSE(created.has_value());
   CAPTURE(created.error().detail);
@@ -284,7 +284,7 @@ TEST_CASE("an alpha item whose transforms differ from the colour item is Unsuppo
 }
 
 TEST_CASE("animation timing is available for every sequence fixture") {
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   constexpr std::array animations{
       "colors-animated-8bpc.avif",
       "colors-animated-8bpc-alpha-exif-xmp.avif",
@@ -319,7 +319,7 @@ TEST_CASE("animation timing is available for every sequence fixture") {
 
 TEST_CASE("every frame of the synthetic sequence decodes exactly, forwards and after a backward seek") {
   auto bytes = readFixture("anim_3frames.avif");
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   auto decoder = factory.create(bytes, kOptions);
   REQUIRE(decoder.has_value());
   REQUIRE((*decoder)->meta().frameCount == 3);
@@ -414,7 +414,7 @@ TEST_CASE("10-bit P3/PQ and grid sources decode end-to-end through the adapter")
 
 TEST_CASE("alpha fixture converts to exact straight BGRA alpha") {
   auto bytes = readFixture("alpha_steps.avif");
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   auto decoder = factory.create(bytes, kOptions);
   REQUIRE(decoder.has_value());
   constexpr std::uint32_t pitch = 96 * 4;
@@ -428,7 +428,7 @@ TEST_CASE("alpha fixture converts to exact straight BGRA alpha") {
 
 TEST_CASE("decode validates capacity and reports an out-of-range frame as PageOutOfRange") {
   auto bytes = readFixture("quad_rgb_lossless.avif");
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   auto decoder = factory.create(bytes, kOptions);
   REQUIRE(decoder.has_value());
 
@@ -451,9 +451,9 @@ TEST_CASE("decode validates capacity and reports an out-of-range frame as PageOu
 }
 
 TEST_CASE("destination validation uses non-overflowing size arithmetic") {
-  using avifpvd::avif::detail::checkDestination;
+  using pvdkit::avif::detail::checkDestination;
   // width * 4 and pitch * height both exceed 32 bits; neither may wrap around.
-  const avifpvd::core::ImageMeta hugeMeta{
+  const pvdkit::core::ImageMeta hugeMeta{
       0x40000000U, 0x40000000U, 8, ChromaFormat::Yuv444, false, false, {}, 1, false, {}, false, false, false};
   const auto pitchOverflow = checkDestination(hugeMeta, PixelFormat::Bgra32, 0, 0);
   REQUIRE_FALSE(pitchOverflow.has_value());
@@ -466,7 +466,7 @@ TEST_CASE("destination validation uses non-overflowing size arithmetic") {
   CHECK(sizeOverflow.error().code == ErrorCode::Internal);
   CHECK(sizeOverflow.error().detail == "caller buffer is smaller than pitch multiplied by height");
 
-  const avifpvd::core::ImageMeta small{
+  const pvdkit::core::ImageMeta small{
       2, 3, 8, ChromaFormat::Yuv444, true, false, {}, 1, false, {}, false, false, false};
   CHECK(checkDestination(small, PixelFormat::Bgra32, 24, 8).has_value());
   CHECK(checkDestination(small, PixelFormat::Bgra32, 30, 10).has_value());
@@ -477,7 +477,7 @@ TEST_CASE("destination validation uses non-overflowing size arithmetic") {
 }
 
 TEST_CASE("the RGB target hands libavif the caller buffer, 8-bit BGR/BGRA and the thread budget") {
-  using avifpvd::avif::detail::rgbTarget;
+  using pvdkit::avif::detail::rgbTarget;
   avifImage image{};
   image.width = 5;
   image.height = 2;
@@ -503,18 +503,18 @@ TEST_CASE("the RGB target hands libavif the caller buffer, 8-bit BGR/BGRA and th
 }
 
 TEST_CASE("signature probing and hostile inputs fail without crashing") {
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   const std::array<std::byte, 11> shortInput{};
-  CHECK_FALSE(factory.looksLikeAvif({}));
-  CHECK_FALSE(factory.looksLikeAvif(shortInput));
+  CHECK_FALSE(factory.recognises({}));
+  CHECK_FALSE(factory.recognises(shortInput));
 
   auto valid = readFixture("white_1x1.avif");
-  CHECK(factory.looksLikeAvif(valid));
+  CHECK(factory.recognises(valid));
 
   for (const auto name : {"garbage.bin", "not_avif.png", "not_avif.bmp"}) {
     CAPTURE(name);
     auto bytes = readFixture(name);
-    CHECK_FALSE(factory.looksLikeAvif(bytes));
+    CHECK_FALSE(factory.recognises(bytes));
     const auto result = factory.create(bytes, kOptions);
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == ErrorCode::ParseFailed);
@@ -526,7 +526,7 @@ TEST_CASE("a file cut inside the meta box is rejected at parse time as truncated
   // truncated.avif is quad_yuv420.avif cut at 60% (211 bytes), inside the `ipco` box of `meta`.
   auto bytes = readFixture("truncated.avif");
   REQUIRE(bytes.size() == 211);
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   const auto truncated = factory.create(bytes, kOptions);
   REQUIRE_FALSE(truncated.has_value());
   CHECK(truncated.error().code == ErrorCode::ParseFailed);
@@ -540,7 +540,7 @@ TEST_CASE("decode-time libavif failures surface through the same result mapping"
   // (0x32) eleven bytes later; the checks pin the layout the corruptions below rely on.
   REQUIRE(std::to_integer<std::uint8_t>(bytes[payload]) == 0x0a);
   REQUIRE(std::to_integer<std::uint8_t>(bytes[payload + 11]) == 0x32);
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
 
   SUBCASE("a file cut inside mdat parses but fails to decode with truncated data") {
     std::vector<std::byte> cut(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(payload + 20));
@@ -572,7 +572,7 @@ TEST_CASE("decode-time libavif failures surface through the same result mapping"
 
 TEST_CASE("strict decoding rejects the legacy alpha item that lenient mode accepts") {
   auto bytes = readFixture("alpha_noispe.avif");
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   const DecoderOptions lenient{2, false, kOptions.maxPixels, kOptions.maxDimension};
   const DecoderOptions strict{2, true, kOptions.maxPixels, kOptions.maxDimension};
   CHECK(factory.create(bytes, lenient).has_value());
@@ -583,7 +583,7 @@ TEST_CASE("strict decoding rejects the legacy alpha item that lenient mode accep
 
 TEST_CASE("dimension and pixel limits map to TooLarge") {
   auto bytes = readFixture("quad_rgb_lossless.avif");
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
 
   const DecoderOptions dimensionLimit{1, false, kOptions.maxPixels, 63};
   const auto dimensionResult = factory.create(bytes, dimensionLimit);
@@ -610,7 +610,7 @@ TEST_CASE("dimension and pixel limits map to TooLarge") {
 TEST_CASE("pixel limits outside libavif's accepted range are clamped instead of failing create()") {
   // libavif 1.4.2 read.c:5292-5296 answers AVIF_RESULT_NOT_IMPLEMENTED for imageSizeLimit == 0 or
   // > AVIF_DEFAULT_IMAGE_SIZE_LIMIT; core enforces the real maxPixels in PixelBuffer::create.
-  avifpvd::avif::DecoderFactory factory;
+  pvdkit::avif::DecoderFactory factory;
   auto quad = readFixture("quad_rgb_lossless.avif");
   auto white = readFixture("white_1x1.avif");
 
@@ -683,17 +683,17 @@ TEST_CASE("every libavif result maps to one stable project error category") {
 
   for (const auto& [result, expected] : mappings) {
     CAPTURE(result);
-    CHECK(avifpvd::avif::errorCodeForResult(result) == expected);
+    CHECK(pvdkit::avif::errorCodeForResult(result) == expected);
   }
-  CHECK(avifpvd::avif::errorCodeForResult(static_cast<avifResult>(999)) == ErrorCode::Internal);
+  CHECK(pvdkit::avif::errorCodeForResult(static_cast<avifResult>(999)) == ErrorCode::Internal);
 }
 
 TEST_CASE("library version text identifies all statically linked codecs") {
-  CHECK(avifpvd::avif::libraryVersions() == "libavif 1.4.2, dav1d 1.5.3, libyuv 1916");
+  CHECK(pvdkit::avif::libraryVersions() == "libavif 1.4.2, dav1d 1.5.3, libyuv 1916");
 }
 
 TEST_CASE("metadata normalization covers invalid chroma and every transform branch") {
-  using namespace avifpvd::avif::detail;
+  using namespace pvdkit::avif::detail;
 
   CHECK(chromaFormat(AVIF_PIXEL_FORMAT_YUV444).value() == ChromaFormat::Yuv444);
   CHECK(chromaFormat(AVIF_PIXEL_FORMAT_YUV422).value() == ChromaFormat::Yuv422);
@@ -731,12 +731,12 @@ TEST_CASE("metadata normalization covers invalid chroma and every transform bran
   CHECK(topBottom->clap->width == 8);
   CHECK(topBottom->clap->height == 8);
   CHECK(topBottom->irotAngle == 3);
-  CHECK(topBottom->imir == avifpvd::core::MirrorAxis::TopBottom);
+  CHECK(topBottom->imir == pvdkit::core::MirrorAxis::TopBottom);
 
   image.imir.axis = 1;
   auto leftRight = transforms(image, diagnostics);
   REQUIRE(leftRight.has_value());
-  CHECK(leftRight->imir == avifpvd::core::MirrorAxis::LeftRight);
+  CHECK(leftRight->imir == pvdkit::core::MirrorAxis::LeftRight);
 
   image.clap.widthD = 0;
   const auto invalid = transforms(image, diagnostics);
@@ -746,26 +746,26 @@ TEST_CASE("metadata normalization covers invalid chroma and every transform bran
 
 TEST_CASE("foreign result, allocation and timing helpers cover failure boundaries") {
   avifDiagnostics diagnostics{};
-  CHECK(avifpvd::avif::detail::checkedResult(AVIF_RESULT_OK, ErrorCode::Internal, diagnostics)
+  CHECK(pvdkit::avif::detail::checkedResult(AVIF_RESULT_OK, ErrorCode::Internal, diagnostics)
             .has_value());
-  const auto failed = avifpvd::avif::detail::checkedResult(
+  const auto failed = pvdkit::avif::detail::checkedResult(
       AVIF_RESULT_REFORMAT_FAILED, ErrorCode::ConversionFailed, diagnostics);
   REQUIRE_FALSE(failed.has_value());
   CHECK(failed.error().code == ErrorCode::ConversionFailed);
   CHECK(failed.error().detail == avifResultToString(AVIF_RESULT_REFORMAT_FAILED));
 
-  CHECK(avifpvd::avif::detail::durationMilliseconds(-1.0) == 0);
-  CHECK(avifpvd::avif::detail::durationMilliseconds(0.0005) == 1);
-  CHECK(avifpvd::avif::detail::durationMilliseconds(
+  CHECK(pvdkit::avif::detail::durationMilliseconds(-1.0) == 0);
+  CHECK(pvdkit::avif::detail::durationMilliseconds(0.0005) == 1);
+  CHECK(pvdkit::avif::detail::durationMilliseconds(
             static_cast<double>(std::numeric_limits<std::uint32_t>::max())) ==
         std::numeric_limits<std::uint32_t>::max());
   // Between LONG_MAX (long is 32 bits on Windows, both architectures) and UINT32_MAX the value
   // still fits the uint32 frame time and must round, not overflow the rounding step.
-  CHECK(avifpvd::avif::detail::durationMilliseconds(3000000.0004) == 3000000000U);
-  CHECK(avifpvd::avif::detail::durationMilliseconds(4294967.2944) ==
+  CHECK(pvdkit::avif::detail::durationMilliseconds(3000000.0004) == 3000000000U);
+  CHECK(pvdkit::avif::detail::durationMilliseconds(4294967.2944) ==
         std::numeric_limits<std::uint32_t>::max() - 1);
 
-  avifpvd::avif::DecoderHandle empty;
-  CHECK_THROWS_AS(static_cast<void>(avifpvd::avif::detail::requireDecoder(std::move(empty))),
+  pvdkit::avif::DecoderHandle empty;
+  CHECK_THROWS_AS(static_cast<void>(pvdkit::avif::detail::requireDecoder(std::move(empty))),
                   std::bad_alloc);
 }

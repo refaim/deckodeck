@@ -4,7 +4,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 
 template <class F>
   requires(!std::is_void_v<std::invoke_result_t<F&&>>)
@@ -26,4 +26,4 @@ void guarded(F&& function) noexcept {
   }
 }
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

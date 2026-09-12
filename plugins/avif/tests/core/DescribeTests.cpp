@@ -6,7 +6,15 @@
 
 #include "core/Describe.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::avif {
+
+using core::ChromaFormat;
+using core::Cicp;
+using core::CropRect;
+using core::ImageMeta;
+using core::MirrorAxis;
+using core::Transforms;
+
 namespace {
 
 ImageMeta baseMeta() {
@@ -143,5 +151,21 @@ TEST_CASE("describe creates the exact full combined string") {
         "12 frames, ICC, EXIF, XMP, clap, irot 3, imir left-right");
 }
 
+TEST_CASE("Describer names the format AVIF, the codec AV1 and describes the "
+          "metadata") {
+  auto meta = baseMeta();
+  meta.hasAlpha = true;
+  const Describer describer;
+  const core::IImageDescriber &describerInterface = describer;
+
+  const auto description = describerInterface.describe(meta);
+
+  CHECK(description.formatName == "AVIF");
+  CHECK(description.compression == "AV1");
+  CHECK(description.comments == describe(meta));
+  CHECK(description.comments ==
+        "8-bit YUV 4:2:0 (limited range), CICP 1/13/6 (sRGB), straight alpha");
+}
+
 } // namespace
-} // namespace avifpvd::core
+} // namespace pvdkit::avif

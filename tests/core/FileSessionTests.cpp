@@ -11,7 +11,7 @@
 #include "Fakes.hpp"
 #include "core/FileSession.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 namespace {
 
 using test::DecoderState;
@@ -46,8 +46,8 @@ TEST_CASE("FileSession exposes its image information and rejects out-of-range "
 
   CHECK(session.imageInfo().pageCount == 2);
   CHECK(session.imageInfo().animated);
-  CHECK(session.imageInfo().formatName == "AVIF");
-  CHECK(session.imageInfo().compression == "AV1");
+  CHECK(session.imageInfo().formatName == "Fake format");
+  CHECK(session.imageInfo().compression == "Fake compression");
   CHECK(session.imageInfo().comments == "test image");
 
   const auto pageInfo = session.pageInfo(2);
@@ -155,7 +155,7 @@ TEST_CASE("decodePage emits BGRA32 pixels when alpha is present") {
 }
 
 TEST_CASE("decodePage passes through every scripted decoder error") {
-  constexpr std::array errors{ErrorCode::NotAvif,
+  constexpr std::array errors{ErrorCode::NotRecognised,
                               ErrorCode::FileOpenFailed,
                               ErrorCode::ParseFailed,
                               ErrorCode::DecodeFailed,
@@ -319,4 +319,4 @@ TEST_CASE("FileSession destruction releases file data decoder and outstanding "
 }
 
 } // namespace
-} // namespace avifpvd::core
+} // namespace pvdkit::core

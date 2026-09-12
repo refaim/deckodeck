@@ -1,5 +1,6 @@
-// Composition of the production plugin: the only place where the Win32 and libavif adapters meet
-// the core (ARCHITECTURE §3.7). `Exports.cpp` calls `makePlugin()` without knowing any of them.
+// Composition root of AVIF.pvd: the only place where the Win32 and libavif adapters, the AVIF
+// describer and the shared core meet (ARCHITECTURE §3.7). `Exports.cpp` calls `makePlugin()`
+// without knowing any of them.
 #include "pvd/PluginFactory.hpp"
 
 #include <algorithm>
@@ -9,13 +10,14 @@
 
 #include "adapters/avif/Decoder.hpp"
 #include "adapters/win/FileSource.hpp"
-#include "core/AvifPlugin.hpp"
+#include "core/CodecPlugin.hpp"
+#include "core/Describe.hpp"
 #include "core/IDecoder.hpp"
 #include "pvd/Plugin.hpp"
 #include "pvd/PluginConstants.hpp"
 #include "pvd/Types.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 namespace {
 
 constexpr std::uint64_t kMaxPixels = std::uint64_t{16384} * 16384;
@@ -26,16 +28,22 @@ core::DecoderOptions defaultOptions() {
                               kMaxDimension};
 }
 
+// Identity from the generated pvd/PluginConstants.hpp (the same values the VERSIONINFO resource
+// carries); the comments repeat the resource's text from the libraries actually linked in, and
+// the e2e version test pins the two equal.
 PluginInfo defaultInfo() {
-  return PluginInfo{kPluginPriority, std::string{kPluginName}, std::string{kPluginVersion},
+  return PluginInfo{kPluginIdentity.priority, std::string{kPluginIdentity.name},
+                    std::string{kPluginIdentity.version},
                     "AVIF decoder: " + avif::libraryVersions() + "; static build"};
 }
 
-// Owns the adapters and the core plugin in dependency order: `AvifPlugin` holds references to the
-// two members declared before it, so they are constructed first and destroyed last.
+// Owns the adapters, the describer and the core plugin in dependency order: `CodecPlugin` holds
+// references to the three members declared before it, so they are constructed first and
+// destroyed last.
 class DefaultPlugin final : public IPlugin {
  public:
-  DefaultPlugin() : plugin_{fileSource_, decoderFactory_, defaultOptions(), defaultInfo()} {}
+  DefaultPlugin()
+      : plugin_{fileSource_, decoderFactory_, describer_, defaultOptions(), defaultInfo()} {}
 
   [[nodiscard]] const PluginInfo& info() const override { return plugin_.info(); }
 
@@ -47,11 +55,12 @@ class DefaultPlugin final : public IPlugin {
  private:
   win::FileSource fileSource_;
   avif::DecoderFactory decoderFactory_;
-  core::AvifPlugin plugin_;
+  avif::Describer describer_;
+  core::CodecPlugin plugin_;
 };
 
 }  // namespace
 
 std::unique_ptr<IPlugin> makePlugin() { return std::make_unique<DefaultPlugin>(); }
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

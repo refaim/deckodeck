@@ -8,6 +8,7 @@
 
 #include <doctest/doctest.h>
 
+#include "pvd/PluginConstants.hpp"
 #include "pvd/PluginFactory.hpp"
 
 #include "Fakes.hpp"
@@ -15,10 +16,12 @@
 
 namespace {
 
+using pvdkit::pvd::kPluginIdentity;
+
 enum class FactoryMode { Fake, Null, BadAlloc, RuntimeError, Integer };
 
 FactoryMode factoryMode = FactoryMode::Null;
-avifpvd::pvd::test::FakeState* factoryState = nullptr;
+pvdkit::pvd::test::FakeState* factoryState = nullptr;
 
 void resetExports() {
   pvdExit();
@@ -42,15 +45,15 @@ class ExportsGuard {
   ExportsGuard(const ExportsGuard&) = delete;
   ExportsGuard& operator=(const ExportsGuard&) = delete;
 
-  [[nodiscard]] avifpvd::pvd::test::FakeState& state() noexcept { return state_; }
+  [[nodiscard]] pvdkit::pvd::test::FakeState& state() noexcept { return state_; }
 
  private:
-  avifpvd::pvd::test::FakeState state_;
+  pvdkit::pvd::test::FakeState state_;
 };
 
 }  // namespace
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 
 std::unique_ptr<IPlugin> makePlugin() {
   switch (factoryMode) {
@@ -68,7 +71,7 @@ std::unique_ptr<IPlugin> makePlugin() {
   return {};
 }
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd
 
 namespace {
 
@@ -76,9 +79,15 @@ TEST_CASE("exports provide safe behavior before init and after exit") {
   const ExportsGuard guard;
   pvdInfoPlugin info{};
   pvdPluginInfo(&info);
-  CHECK(info.Priority == 10);
-  CHECK(std::string_view{info.pName} == "AVIF");
-  CHECK(std::string_view{info.pVersion} == "1.0.0");
+  // pvd_tests compiles Exports.cpp against the identity tests/pvd/CMakeLists.txt declares
+  // (pvdkit_plugin_identity), the same mechanism every plugin uses; the literal values pin
+  // that the generated header carries what CMake was told.
+  CHECK(kPluginIdentity.priority == 42);
+  CHECK(kPluginIdentity.name == "TestPlugin");
+  CHECK(kPluginIdentity.version == "9.8.7");
+  CHECK(info.Priority == kPluginIdentity.priority);
+  CHECK(std::string_view{info.pName} == kPluginIdentity.name);
+  CHECK(std::string_view{info.pVersion} == kPluginIdentity.version);
   CHECK(std::string_view{info.pComments}.empty());
   CHECK_NOTHROW(pvdPluginInfo(nullptr));
 
@@ -95,7 +104,7 @@ TEST_CASE("exports provide safe behavior before init and after exit") {
   CHECK_NOTHROW(pvdExit());
 
   pvdPluginInfo(&info);
-  CHECK(info.Priority == 10);
+  CHECK(info.Priority == kPluginIdentity.priority);
 }
 
 TEST_CASE("exports forward all eight operations through a live shim") {
@@ -153,7 +162,7 @@ TEST_CASE("init rejects a null plugin and firewalls factory exceptions") {
 
   pvdInfoPlugin info{};
   pvdPluginInfo(&info);
-  CHECK(info.Priority == 10);
+  CHECK(info.Priority == kPluginIdentity.priority);
 }
 
 TEST_CASE("failed reinitialization leaves exports uninitialized") {
@@ -175,13 +184,13 @@ TEST_CASE("exceptions from a live plugin remain behind the export firewall") {
   REQUIRE(pvdInit() == PVD_CURRENT_INTERFACE_VERSION);
 
   // The shim fills the constant identity before asking the plugin, so a throwing info() leaves
-  // the host with priority 10 / "AVIF" / "1.0.0" rather than the garbage it passed in.
+  // the host with the constant identity rather than the garbage it passed in.
   state.throwPluginInfo = true;
   pvdInfoPlugin pluginInfo{3, "garbage", "garbage", "garbage"};
   CHECK_NOTHROW(pvdPluginInfo(&pluginInfo));
-  CHECK(pluginInfo.Priority == 10);
-  CHECK(std::string_view{pluginInfo.pName} == "AVIF");
-  CHECK(std::string_view{pluginInfo.pVersion} == "1.0.0");
+  CHECK(pluginInfo.Priority == kPluginIdentity.priority);
+  CHECK(std::string_view{pluginInfo.pName} == kPluginIdentity.name);
+  CHECK(std::string_view{pluginInfo.pVersion} == kPluginIdentity.version);
   CHECK(std::string_view{pluginInfo.pComments}.empty());
   state.throwPluginInfo = false;
 

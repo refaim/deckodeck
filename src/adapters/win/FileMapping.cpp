@@ -10,7 +10,7 @@
 
 #include "core/Narrow.hpp"
 
-namespace avifpvd::win {
+namespace pvdkit::win {
 namespace {
 
 core::Error fileError(const std::string_view operation, const DWORD error) {
@@ -85,4 +85,4 @@ core::Result<std::unique_ptr<FileMapping>> FileMapping::open(const std::wstring_
 
 std::span<const std::byte> FileMapping::bytes() const { return {view_.get(), size_}; }
 
-}  // namespace avifpvd::win
+}  // namespace pvdkit::win

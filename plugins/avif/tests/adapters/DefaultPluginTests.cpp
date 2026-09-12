@@ -17,12 +17,12 @@
 
 namespace {
 
-using avifpvd::core::ErrorCode;
+using pvdkit::core::ErrorCode;
 
 constexpr std::size_t kHostHeadSize = 16 * 1024;
 
 std::filesystem::path fixturePath(const std::string_view name) {
-  return std::filesystem::path{AVIFPVD_FIXTURE_DIR} / name;
+  return std::filesystem::path{PVDKIT_FIXTURE_DIR} / name;
 }
 
 std::vector<std::byte> readFixture(const std::string_view name) {
@@ -42,29 +42,29 @@ std::string utf8(const std::filesystem::path& path) {
 
 }  // namespace
 
-TEST_CASE("the production plugin reports the shared constants and the linked library versions") {
-  const auto plugin = avifpvd::pvd::makePlugin();
+TEST_CASE("the production plugin reports the generated plugin identity and the linked library versions") {
+  const auto plugin = pvdkit::pvd::makePlugin();
   REQUIRE(plugin != nullptr);
 
   const auto& info = plugin->info();
-  CHECK(info.priority == avifpvd::pvd::kPluginPriority);
+  CHECK(info.priority == pvdkit::pvd::kPluginIdentity.priority);
   CHECK(info.priority == 10);
-  CHECK(info.name == avifpvd::pvd::kPluginName);
+  CHECK(info.name == pvdkit::pvd::kPluginIdentity.name);
   CHECK(info.name == "AVIF");
-  CHECK(info.version == avifpvd::pvd::kPluginVersion);
+  CHECK(info.version == pvdkit::pvd::kPluginIdentity.version);
   CHECK(info.version == "1.0.0");
   CHECK(info.comments ==
-        "AVIF decoder: " + avifpvd::avif::libraryVersions() + "; static build");
+        "AVIF decoder: " + pvdkit::avif::libraryVersions() + "; static build");
   CHECK(info.comments.find("libavif 1.4.2") != std::string::npos);
 }
 
 TEST_CASE("the production plugin opens a fixture from memory and from disk with identical results") {
-  const auto plugin = avifpvd::pvd::makePlugin();
+  const auto plugin = pvdkit::pvd::makePlugin();
   REQUIRE(plugin != nullptr);
   const auto bytes = readFixture("anim_3frames.avif");
   const auto name = utf8(fixturePath("anim_3frames.avif"));
 
-  auto fromMemory = plugin->open(avifpvd::pvd::OpenRequest{name, 0, bytes});
+  auto fromMemory = plugin->open(pvdkit::pvd::OpenRequest{name, 0, bytes});
   REQUIRE(fromMemory.has_value());
   const auto& memoryInfo = (*fromMemory)->imageInfo();
   CHECK(memoryInfo.pageCount == 3);
@@ -74,7 +74,7 @@ TEST_CASE("the production plugin opens a fixture from memory and from disk with 
   CHECK(memoryInfo.comments.find("3 frames") != std::string::npos);
 
   const auto head = std::span{bytes}.first(std::min(bytes.size(), kHostHeadSize));
-  auto fromDisk = plugin->open(avifpvd::pvd::OpenRequest{name, bytes.size(), head});
+  auto fromDisk = plugin->open(pvdkit::pvd::OpenRequest{name, bytes.size(), head});
   REQUIRE(fromDisk.has_value());
   const auto& diskInfo = (*fromDisk)->imageInfo();
   CHECK(diskInfo.pageCount == memoryInfo.pageCount);
@@ -90,29 +90,29 @@ TEST_CASE("the production plugin opens a fixture from memory and from disk with 
 
 TEST_CASE("the production plugin uses lenient decoding") {
   // alpha_noispe.avif is accepted only with strict mode off (see DecoderTests).
-  const auto plugin = avifpvd::pvd::makePlugin();
+  const auto plugin = pvdkit::pvd::makePlugin();
   REQUIRE(plugin != nullptr);
   const auto bytes = readFixture("alpha_noispe.avif");
-  const auto opened = plugin->open(avifpvd::pvd::OpenRequest{"alpha_noispe.avif", 0, bytes});
+  const auto opened = plugin->open(pvdkit::pvd::OpenRequest{"alpha_noispe.avif", 0, bytes});
   REQUIRE(opened.has_value());
   CHECK((*opened)->imageInfo().pageCount == 1);
 }
 
-TEST_CASE("the production plugin rejects non-AVIF input as NotAvif and a missing file as FileOpenFailed") {
-  const auto plugin = avifpvd::pvd::makePlugin();
+TEST_CASE("the production plugin rejects non-AVIF input as NotRecognised and a missing file as FileOpenFailed") {
+  const auto plugin = pvdkit::pvd::makePlugin();
   REQUIRE(plugin != nullptr);
 
   for (const auto name : {"garbage.bin", "not_avif.png", "not_avif.bmp"}) {
     CAPTURE(name);
     const auto bytes = readFixture(name);
-    const auto opened = plugin->open(avifpvd::pvd::OpenRequest{name, 0, bytes});
+    const auto opened = plugin->open(pvdkit::pvd::OpenRequest{name, 0, bytes});
     REQUIRE_FALSE(opened.has_value());
-    CHECK(opened.error().code == ErrorCode::NotAvif);
+    CHECK(opened.error().code == ErrorCode::NotRecognised);
   }
 
   const auto bytes = readFixture("white_1x1.avif");
   const auto missing = plugin->open(
-      avifpvd::pvd::OpenRequest{utf8(fixturePath("does-not-exist.avif")), bytes.size(), bytes});
+      pvdkit::pvd::OpenRequest{utf8(fixturePath("does-not-exist.avif")), bytes.size(), bytes});
   REQUIRE_FALSE(missing.has_value());
   CHECK(missing.error().code == ErrorCode::FileOpenFailed);
 }

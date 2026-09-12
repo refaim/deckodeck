@@ -7,7 +7,7 @@
 
 #include "core/IFileSource.hpp"
 
-namespace avifpvd::win {
+namespace pvdkit::win {
 
 struct CloseHandleDestroy {
   using pointer = void*;
@@ -57,4 +57,4 @@ class FileMapping final : public core::IFileData {
   std::size_t size_;
 };
 
-}  // namespace avifpvd::win
+}  // namespace pvdkit::win

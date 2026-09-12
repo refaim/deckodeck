@@ -24,8 +24,8 @@ exists for audio (`.rpgmvo`/`.ogg_`) — out of scope.
 2. After substitution, the IHDR CRC (over "IHDR" + 13 data bytes, i.e. reconstructed bytes 12..28,
    CRC at 29..32) must match — this rejects garbage that merely starts with RPGMV and makes the
    version bytes (`00 03 01`) informational, not a gate (accept other versions if the CRC holds).
-3. Plain PNG (`89 50 4E 47`) → NotAvif-equivalent (`NotRecognised`; rename the ErrorCode in shared
-   core to something format-neutral as part of this task or Task 7 — `NotAvif` is AVIF-specific).
+3. Plain PNG (`89 50 4E 47`) → `NotRecognised` (the format-neutral ErrorCode; the `NotAvif`
+   rename is done, Task 7).
 4. Files inside archives (memory mode) work the same: the head is the whole file.
 
 ## Decoding
@@ -41,22 +41,33 @@ exists for audio (`.rpgmvo`/`.ogg_`) — out of scope.
 - `ImageMeta`: width, height, depth (bit depth 1/2/4/8/16), `hasAlpha` = colour type 4/6 or tRNS
   present (query `spng_get_trns`), no transforms, frameCount 1, `animated = false` (APNG is not
   supported: report 1 page even if `acTL` exists — libspng decodes the default image; document).
-  Chroma/CICP fields: whatever the Task 7 generalisation decided (e.g. `std::optional`).
+  `chroma` and `cicp` are plain fields (Task 7 decision, ARCHITECTURE §3.6): `chroma = Yuv444`
+  for RGB / RGBA / palette (colour types 2, 3, 6), `Yuv400` for greyscale with or without alpha
+  (0, 4); `cicp = {2, 2, 0, true}` (unspecified primaries/transfer, identity matrix), or
+  `{1, 13, 0, true}` when the file carries an `sRGB` chunk; `fullRange = true` always.
 - Output: **always BGRA32** (spec §4.2 — sprites/tilesets with alpha), pitch = width × 4,
   top-down, straight alpha. `PageInfo::bitsPerPixel` = depth × channels of the source (e.g. 32 for
   RGBA8, 64 for RGBA16, 8 for indexed8, 4 for indexed4) — informational, like AVIF.
-- `ImageInfo`: `formatName` "RPGMVP" for `.rpgmvp`-style files — we cannot see the extension, so
-  use "RPGMVP" always; `compression` "Deflate"; `comments` from a small describer:
+- `ImageInfo`: produced by the plugin's describer, a `core::IImageDescriber` in
+  `plugins/rpgmvp/src/core/` (namespace `pvdkit::rpgmvp`, no libspng include) returning
+  `ImageDescription{"RPGMVP", "Deflate", comments}`: `formatName` is "RPGMVP" always (we cannot
+  see the extension), `compression` "Deflate", `comments` like
   `"RPG Maker MV/MZ encrypted PNG, 8-bit RGBA, interlaced, tRNS"` (colour type name, depth,
   `interlaced` if Adam7, `palette` if indexed, `tRNS` if present, `PNG header version 0.3.1`).
-- Plugin info: priority 10, name "RPGMVP", version "1.0.0", comments
-  `"RPG Maker MV/MZ encrypted PNG decoder: libspng <ver>, zlib <ver>; static build"`.
+  `CodecPlugin` adds `pageCount` / `animated` from the meta.
+- Plugin identity: declared once in `plugins/rpgmvp/CMakeLists.txt` as
+  `pvdkit_plugin_identity(rpgmvp NAME RPGMVP VERSION 1.0.0 PRIORITY 10 DESCRIPTION "RPG Maker
+  MV/MZ encrypted PNG decoder plugin for PictureView (Far Manager)" COMMENTS "RPG Maker MV/MZ
+  encrypted PNG decoder: libspng <ver>, zlib <ver>; static build")`, the COMMENTS computed by
+  CMake from the installed libspng and zlib versions (as `plugins/avif/CMakeLists.txt` does for
+  libavif/dav1d/libyuv) and reproduced at run time in `DefaultPlugin.cpp` from
+  `spng_version_string()` / `zlibVersion()`; the shared e2e version test pins the two equal.
 
 ## Fixtures (`plugins/rpgmvp/fixtures/`, commit them, SOURCES.md with provenance + expected values)
 From Roma's sample games (`C:\Users\Roma\Desktop\rpgmvp`, permission given for small sprites), one
 per PNG kind, keep the smallest; verify each with ffprobe after decrypting with the 32-byte rule and
 record width/height/colour type/depth/interlace/tRNS and a few exact pixel values (decrypt with a
-script in `scripts/` that is also committed — `rpgmvp-decrypt.ps1`, pure PowerShell, 32-byte rule):
+committed script, `plugins/rpgmvp/scripts/rpgmvp-decrypt.ps1`, pure PowerShell, 32-byte rule):
 - `Awakening to Lust - RA26073439\www\img\system\Shadow2.rpgmvp` (RGBA8, 36×16, 400 B)
 - `Awakening to Lust - RA26073439\www\img\characters\!$cursor_small.rpgmvp` (indexed 4-bit + tRNS, 144×192)
 - `Awakening to Lust - RA26073439\www\img\system\Weapons3.rpgmvp` (indexed 8-bit + tRNS, 288×384)
@@ -76,14 +87,49 @@ script in `scripts/` that is also committed — `rpgmvp-decrypt.ps1`, pure Power
   IHDR says 100000×100000 (size limit → TooLarge before allocation), an APNG wrapped as rpgmvp
   (decodes first frame, 1 page).
 
+## Steps (ARCHITECTURE §6, the monorepo checklist)
+1. `vcpkg.json`: feature `rpgmvp` (`libspng`, which pulls `zlib`), added to `default-features`.
+2. `plugins/rpgmvp/CMakeLists.txt`: `find_package(SPNG CONFIG REQUIRED)` (check the name the
+   port exports), the comments string, `pvdkit_plugin_identity(rpgmvp ...)` as above,
+   `rpgmvp_core` (`src/core/**`: the describer and the detection/CRC logic), `rpgmvp_adapter`
+   (`src/adapters/spng/**`), `rpgmvp_composition` (`src/DefaultPlugin.cpp`),
+   `pvdkit_add_plugin(rpgmvp LINK rpgmvp_composition README package/README.txt.in LICENSES libspng
+   "libspng (BSD-2-Clause)" zlib "zlib (zlib licence)")`, `add_subdirectory(tests)` under
+   `BUILD_TESTING`.
+3. `plugins/rpgmvp/package/README.txt.in` (install, what is supported, limitations; the
+   placeholders `pvdkit_add_plugin` provides), `plugins/rpgmvp/README.md`,
+   `plugins/rpgmvp/DESIGN.md` (the adapter, the describer, the fixtures, the exclusions),
+   `plugins/rpgmvp/fixtures/SOURCES.md`.
+4. `tests/guard/GuardTests.cpp`: extend the codec-header regex (`codecHeader`) with `spng.h` and
+   add it to the "foreign headers are restricted to adapters and Exports" self-test.
+5. Tests: `plugins/rpgmvp/tests/{core,adapters,e2e}` with `rpgmvp_core_tests`,
+   `rpgmvp_adapter_tests` (own `add_executable`) and
+   `pvdkit_add_plugin_e2e_tests(rpgmvp FIXTURES ... SOURCES ...)`, which also registers
+   `rpgmvp_check_imports` and `rpgmvp_check_exports` (Release configuration).
+Nothing under `src/`, `scripts/` or `CMakePresets.json` changes.
+
 ## Tests
 Same structure as AVIF: adapter tests on fixtures (every kind, exact BGRA pixels for a few files,
 16-bit → 8-bit rounding, tRNS → alpha, interlaced == non-interlaced pixels for the same image if a
 pair exists — make one with ffmpeg), the detection function unit-tested exhaustively (CRC math with
-hand-computed vectors), e2e through `LoadLibrary(RPGMVP.pvd)` in disk and memory mode incl. the
-`.png_` file, callback/abort, close with un-freed page, concurrency, rejection list; VERSIONINFO
-read-back; x64 and x86; coverage 100/100 on `plugins/rpgmvp/src/**` and shared code; check-imports.
+hand-computed vectors), the describer's words for every colour type, e2e through
+`LoadLibrary(RPGMVP.pvd)` in disk and memory mode incl. the `.png_` file, callback/abort, close
+with un-freed page, concurrency, rejection list; VERSIONINFO read-back (shared test); x64 and
+x86; coverage 100/100 on `plugins/rpgmvp/src/**` and shared code (`scripts/coverage.ps1`, both
+presets, with every plugin enabled); `rpgmvp_check_imports` / `rpgmvp_check_exports`.
 
 ## Rules
 As AGENTS.md: TDD, no commits, no worktrees, `PVDKIT_BUILD_SUFFIX=-t8`, zero warnings both
 architectures, never touch `C:\Tools\FarManager`, do not run Far. Report with all outputs.
+
+## Carried-over nits from the Task 7 review (do them as part of this task)
+1. `cmake/pvdkit-plugin.cmake` — `pvdkit_add_plugin` must assert that the plugin `id` equals the
+   directory name under `plugins/` (coverage.ps1 derives the id from the path); a mismatch must be
+   a configure-time error, not a misleading coverage failure.
+2. `scripts/coverage.ps1` — restrict the plugin id in the profile-name regex to `[A-Za-z0-9_]+`
+   so an id like `avif-2` cannot match `avif`'s pattern.
+3. `tests/guard/GuardTests.cpp` — reject a plugin header whose root-relative name also exists
+   under shared `src/` (e.g. `plugins/<id>/src/core/Error.hpp` shadowing the shared one); add the
+   self-test in both polarities.
+4. Keep the AVIF `DESCRIPTION` as is ("PictureView (Far Manager)"); use the same wording for
+   RPGMVP.

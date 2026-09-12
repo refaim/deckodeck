@@ -1,15 +1,50 @@
-# AVIF.pvd — architecture
+# pvdkit — architecture
 
-Status: v1 design, 2026-09-09. Owner: orchestrator. Implementers: Codex agents. Reviewers: Opus agents.
-Rules that constrain this design live in `AGENTS.md`. Interface declarations below are canonical:
-implement them as written; if something is genuinely impossible, report instead of improvising.
+Status: v2 design, 2026-09-12 (v1 was the single-plugin AVIF.pvd design of 2026-09-09; Task 7
+turned it into this monorepo). Owner: orchestrator. Implementers: Codex/Claude agents. Reviewers:
+Opus agents. Rules that constrain this design live in `AGENTS.md`. Interface declarations below
+are canonical: implement them as written; if something is genuinely impossible, report instead
+of improvising. Plugin-specific design (what AVIF.pvd does with libavif, its fixtures, its
+limitations) lives next to the plugin: `plugins/avif/DESIGN.md`.
+
+## 0. Shape of the repository
+
+```
+pvdkit/
+  src/pvd/            shared: the PVD boundary (Types, Plugin, Progress, Shim, ContextHandle,
+                      Firewall, PvdApi, PluginFactory, PluginIdentity, Exports.cpp, Plugin.def,
+                      Plugin.rc, PluginConstants.hpp.in)                      → pvdkit_pvd
+  src/core/           shared: Error, Narrow, PixelBuffer, Transform, IDecoder, IFileSource,
+                      IImageDescriber, CodecPlugin, FileSession                → pvdkit_core
+  src/adapters/win/   shared: FileMapping, FileSource, Utf8                    → pvdkit_win
+  plugins/<id>/       one directory per plugin (today: avif → AVIF.pvd)
+    CMakeLists.txt    identity (name, version, priority), libraries, composition, packaging
+    src/core/         plugin decisions without the codec library (e.g. the describer)  → <id>_core
+    src/adapters/     the codec adapter(s)                                     → <id>_adapter
+    src/DefaultPlugin.cpp   the composition root: pvd::makePlugin()            → <id>_composition
+    tests/core/ tests/adapters/ tests/e2e/   the plugin's tests
+    fixtures/  scripts/  package/README.txt.in  README.md  DESIGN.md
+  tests/pvd/ tests/core/ tests/adapters/ tests/guard/   shared tests
+  tests/e2e/          the shared host driver + VERSIONINFO test, compiled into every plugin's e2e
+  cmake/pvdkit-plugin.cmake   pvdkit_plugin_identity / pvdkit_add_plugin / pvdkit_add_plugin_e2e_tests
+  scripts/            coverage, check-imports, check-exports, build-all, package (all plugins)
+  ports/ triplets/ vcpkg.json CMakePresets.json   one toolchain and one manifest for the kit
+  docs/               this file and the task history
+```
+
+Every plugin is one DLL `<NAME>.pvd` = the shared `Exports.cpp` + `Plugin.def` + `Plugin.rc`
+compiled against the plugin's generated identity, linked with `pvdkit_pvd` and the plugin's
+composition root. Every plugin ships x64 and x86 with the same guarantees: static CRT,
+`KERNEL32.dll` as the only import, the eight bare exports, 100 % line and branch coverage of
+`src/**` and `plugins/*/src/**`, a VERSIONINFO resource, a zip per architecture.
 
 ## 1. What the host expects (PVD interface v1, summary)
 
 Source of truth: `third_party/pvd/PictureViewPlugin.h`. Key semantics:
 
 - Eight `extern "C" __stdcall` exports: `pvdInit`, `pvdExit`, `pvdPluginInfo`, `pvdFileOpen`,
-  `pvdPageInfo`, `pvdPageDecode`, `pvdPageFree`, `pvdFileClose`. Listed in `src/pvd/AVIF.def`.
+  `pvdPageInfo`, `pvdPageDecode`, `pvdPageFree`, `pvdFileClose`. Listed in `src/pvd/Plugin.def`,
+  identical for every plugin.
 - All strings are UTF-8. Strings we hand to the host must stay valid: plugin-info strings for the
   process lifetime, file-info strings until `pvdFileClose`.
 - `pvdInit` returns `PVD_CURRENT_INTERFACE_VERSION` (1), or 0 on failure.
@@ -29,7 +64,7 @@ Source of truth: `third_party/pvd/PictureViewPlugin.h`. Key semantics:
 - `pvdFileClose(ctx)`: destroy the context, including any pages not freed.
 - Nothing may ever propagate out of an export: no exceptions, no crashes on hostile input.
 
-Existing bundled decoders import only `KERNEL32.dll` and `msvcrt.dll`; ours imports `KERNEL32.dll`
+Existing bundled decoders import only `KERNEL32.dll` and `msvcrt.dll`; ours import `KERNEL32.dll`
 only (static CRT).
 
 ## 2. Layering
@@ -38,41 +73,55 @@ only (static CRT).
 host (0PictureView.dll)
    │ C ABI (8 exports)
    ▼
-src/pvd/Exports.cpp ── composition root + 8 one-line forwards (raw pointers allowed here)
+src/pvd/Exports.cpp ── composition root + 8 one-line forwards (raw pointers allowed here);
+                       compiled once per plugin against that plugin's pvd/PluginConstants.hpp
 src/pvd/Shim        ── marshalling C structs ⇄ C++ values, firewall, ContextHandle
    │ IPlugin / IFileSession (C++ values only)
    ▼
-src/core            ── all decisions: AvifPlugin, FileSession, Transform, Describe, PixelBuffer
-   │ IFileSource / IDecoderFactory / IDecoder (C++ values only)
+src/core            ── all format-neutral decisions: CodecPlugin, FileSession, Transform, PixelBuffer
+   │ IFileSource / IDecoderFactory / IDecoder / IImageDescriber (C++ values only)
    ▼
 src/adapters/win    ── FileMapping over CreateFileW/CreateFileMappingW/MapViewOfFile, Utf8→wide
-src/adapters/avif   ── Decoder over libavif (dav1d + libyuv inside), one-to-one, no decisions
+plugins/<id>/src/core      ── the plugin's decisions without its library (IImageDescriber, ...)
+plugins/<id>/src/adapters  ── the codec adapter (IDecoderFactory/IDecoder), one-to-one, no decisions
+plugins/<id>/src/DefaultPlugin.cpp ── pvd::makePlugin(): owns FileSource, the factory, the
+                                      describer and a CodecPlugin, in that order
 ```
 
 Dependency direction is downwards for *implementations*. Two headers are shared boundary contracts,
 not layers: `src/pvd/Types.hpp` and `src/pvd/Plugin.hpp` define the values and interfaces that
-`core` implements, so `core` may include exactly those two (plus `core/**`). `core` never includes
-`pvd/Shim.hpp`, `pvd/ContextHandle.hpp`, `pvd/Firewall.hpp`, `pvd/PluginFactory.hpp`, `<windows.h>`
-or `avif/avif.h`. `pvd` (shim side) and `adapters` never include each other; they meet only in
-`Exports.cpp` / `DefaultPlugin.cpp`.
+`core` implements, so `core` (shared or a plugin's) may include exactly those two (plus `core/**`).
+`core` never includes `pvd/Shim.hpp`, `pvd/ContextHandle.hpp`, `pvd/Firewall.hpp`,
+`pvd/PluginFactory.hpp`, `pvd/PluginConstants.hpp`, `<windows.h>` or a codec header. `pvd` (shim
+side) and `adapters` never include each other; they meet only in `Exports.cpp` /
+`DefaultPlugin.cpp`.
+
+Include ownership across roots: shared `src/**` never includes anything under `plugins/**`; a
+plugin includes shared headers and its own, never another plugin's. Each plugin has its own
+include root (`plugins/<id>/src`), so plugin code says `#include "adapters/avif/Decoder.hpp"` and
+`#include "core/Describe.hpp"` exactly like shared code says `#include "core/Error.hpp"`; the
+build enforces the ownership (the shared libraries do not see the plugin roots) and the guard test
+enforces it independently by resolving every include against the source roots (§5).
 
 Everything is a value or a `std::unique_ptr`. Objects that are injected by reference (`IFileSource&`,
-`IDecoderFactory&`) outlive their users by construction (composition root owns them in declaration
-order). Classes holding references delete copy and move.
+`IDecoderFactory&`, `const IImageDescriber&`) outlive their users by construction (the composition
+root owns them in declaration order). Classes holding references delete copy and move.
 
 ## 3. Canonical interfaces
 
-Namespace for everything: `avifpvd`. Sub-namespaces `pvd`, `core`, `win`, `avif`.
+Namespace for everything shared: `pvdkit`, with sub-namespaces `pvd`, `core`, `win`. A plugin
+uses a sub-namespace named after itself for all of its code (`pvdkit::avif`), including the
+describer it places under `src/core/`.
 
 ### 3.1 `src/core/Error.hpp`
 
 ```cpp
 enum class ErrorCode {
-  NotAvif,            // signature check failed → host tries the next decoder
+  NotRecognised,      // signature check failed → host tries the next decoder
   FileOpenFailed,     // could not open/map the file by name
-  ParseFailed,        // libavif could not parse the container
-  DecodeFailed,       // AV1 decode failed
-  ConversionFailed,   // YUV→RGB failed
+  ParseFailed,        // the container could not be parsed
+  DecodeFailed,       // bitstream decode failed
+  ConversionFailed,   // colour conversion to BGR/BGRA failed
   PageOutOfRange,     // page index ≥ page count
   Aborted,            // host callback asked us to stop
   TooLarge,           // exceeds DecoderOptions limits, or a byte count this process cannot address
@@ -132,7 +181,7 @@ class IPlugin {
 };
 ```
 
-### 3.4 `src/pvd/Shim.hpp`, `ContextHandle.hpp`, `Firewall.hpp`
+### 3.4 `src/pvd/Shim.hpp`, `ContextHandle.hpp`, `Firewall.hpp`, `PluginIdentity.hpp`
 
 - `Firewall`: `template <class F> auto guarded(F&& f, decltype(f()) fallback) noexcept` — runs `f`,
   returns `fallback` on any exception. A `void` overload swallows. This is the only `catch (...)` in
@@ -140,48 +189,81 @@ class IPlugin {
 - `ContextHandle`: `void* toHost(std::unique_ptr<IFileSession>)`,
   `std::unique_ptr<IFileSession> fromHost(void*)`, `IFileSession* borrow(void*)` (the pointer stays on
   the adapter line: callers immediately dereference or check null).
-- `Shim` (constructed over `IPlugin&`, non-copyable):
+- `PluginIdentity` (`src/pvd/PluginIdentity.hpp`): `struct { std::uint32_t priority;
+  std::string_view name, version; }` — the constant identity of one plugin, literal-backed (the
+  host receives `data()` as C strings). The shared layer only forwards a value it is given; each
+  plugin's value `kPluginIdentity` comes from its generated `pvd/PluginConstants.hpp` (§3.4a).
+- `Shim` (constructed over `IPlugin&` and a `PluginIdentity`, non-copyable):
   `UINT32 init()`, `void exit()`, `void pluginInfo(pvdInfoPlugin*)`,
   `BOOL fileOpen(const char*, INT64, const BYTE*, UINT32, pvdInfoImage*, void**)`,
   `BOOL pageInfo(void*, UINT32, pvdInfoPage*)`,
   `BOOL pageDecode(void*, UINT32, pvdInfoDecode*, pvdDecodeCallback, void*)`,
   `void pageFree(void*, pvdInfoDecode*)`, `void fileClose(void*)`.
   Every method body is `return guarded([&] { ... }, FALSE);`. Null host pointers → `FALSE`/no-op.
+  `pluginInfo` first writes the identity (`fillDefaultPluginInfo(output, identity)`: priority,
+  name, version, empty comments) and only then consults `IPlugin::info()`, so a throwing `info()`
+  leaves the host with the constant identity.
   `fileOpen` builds `OpenRequest`, calls `IPlugin::open`, on success fills `pvdInfoImage` from
   `ImageInfo` (strings via `c_str()` of strings owned by the session) and stores the context.
   `pageDecode` builds a `Progress` capturing the raw callback + context in a lambda, then fills
   `pvdInfoDecode` from `DecodedPage`. `pageFree` calls `freePage(span over pImage)` — the span length
   is unknown to the host, so the session matches by `data()` only.
-- `Exports.cpp`: composition root. `pvdInit` creates `std::unique_ptr<IPlugin>` via
-  `pvd::makePlugin()` (declared in `src/pvd/PluginFactory.hpp`, **defined** in
-  `src/adapters/DefaultPlugin.cpp` so that the pvd layer can be built and unit-tested with a
-  test-provided definition before the adapters exist) and a `Shim` over it (both in a
-  `std::optional`/`unique_ptr` static); `pvdExit` resets. If an export is called without a live shim: `pvdPluginInfo` fills the constant
-  name/version/priority with empty comments; the others return `FALSE`/no-op. Everything is a
-  one-line forward wrapped in `guarded`.
+- `Exports.cpp`: the shared composition root, compiled once into every plugin DLL (and into
+  `pvd_tests`). `pvdInit` creates `std::unique_ptr<IPlugin>` via `pvd::makePlugin()` (declared in
+  `src/pvd/PluginFactory.hpp`, **defined** in the plugin's `DefaultPlugin.cpp`, or by the test) and
+  a `Shim` over it and `kPluginIdentity`; `pvdExit` resets. If an export is called without a live
+  shim: `pvdPluginInfo` fills the identity with empty comments; the others return `FALSE`/no-op.
+  Everything is a one-line forward wrapped in `guarded`. It is the only shared file that may
+  include the generated `pvd/PluginConstants.hpp` (guard rule).
 - `PvdApi.hpp` includes `<Windows.h>` (lean, `NOMINMAX`) and the SDK header inside `extern "C"`
-  exactly once, for `Shim`, `Exports.cpp` and the tests. `PluginConstants.hpp` holds
-  `kPluginPriority = 10`, `kPluginName = "AVIF"`, `kPluginVersion = "1.0.0"`: `Shim::pluginInfo`
-  writes them (with empty comments) before it consults `IPlugin::info()`, so a throwing `info()`
-  leaves the host with the constant identity, and `DefaultPlugin` builds its `PluginInfo` from
-  the same constants.
+  exactly once, for `Shim`, `Exports.cpp` and the tests.
 - Exports on x86: the eight functions are `__stdcall`, so their symbols are `_pvdInit@0`,
-  `_pvdFileOpen@28`, ... while the host resolves the bare names. `AVIF.def` lists the bare names
+  `_pvdFileOpen@28`, ... while the host resolves the bare names. `Plugin.def` lists the bare names
   and is the one source of truth for both architectures: lld-link (like link.exe) resolves an
   undecorated `.def` name to the decorated `__stdcall` symbol itself, so the x86 export table
   reads `pvdInit`, `pvdFileOpen`, ... with no alias lines, no `#ifdef _M_IX86` and no
-  `/EXPORT` pragmas. `scripts/check-exports.ps1` (ctest `check_exports`, Release) pins the
+  `/EXPORT` pragmas. `scripts/check-exports.ps1` (ctest `<id>_check_exports`, Release) pins the
   export table to exactly those eight bare names on both architectures; the e2e host driver
   (`GetProcAddress` by bare name) is the behavioural acceptance test.
-- Version identity: `project(VERSION)` in `CMakeLists.txt` is the single source of the version.
-  `src/pvd/CMakeLists.txt` generates `pvd/Version.hpp` from `src/pvd/Version.hpp.in` (version,
-  `AVIFPVD_AUTHOR` / `AVIFPVD_COPYRIGHT` cache variables, and the plugin comments built from the
-  library versions vcpkg installed); `PluginConstants.hpp` `static_assert`s that `kPluginVersion`
-  equals it, and `src/pvd/AVIF.rc` (llvm-rc) embeds it as the VERSIONINFO resource of `AVIF.pvd`
-  (`FileVersion`/`ProductVersion`, `CompanyName`, `LegalCopyright`, `FileDescription`,
-  `ProductName`/`InternalName`/`OriginalFilename` = `AVIF.pvd`, `Comments` = the `pvdPluginInfo`
-  comments). The e2e test reads the block back with `GetFileVersionInfoW`/`VerQueryValueW`
-  (`version.lib` is linked into `e2e_tests` only) and compares it with the running plugin.
+
+### 3.4a Plugin identity: one source of truth per plugin
+
+Decision (Task 7, open point 2). A plugin's name, version and priority are declared exactly once,
+in its `CMakeLists.txt`:
+
+```cmake
+pvdkit_plugin_identity(avif NAME AVIF VERSION 1.0.0 PRIORITY 10
+                       DESCRIPTION "AVIF decoder plugin for PictureView (Far Manager)"
+                       COMMENTS "AVIF decoder: libavif <v>, dav1d <v>, libyuv <v>; static build")
+```
+
+`pvdkit_plugin_identity` (`cmake/pvdkit-plugin.cmake`) configures `src/pvd/PluginConstants.hpp.in`
+into `<build>/generated/<id>/pvd/PluginConstants.hpp` and publishes that directory through the
+INTERFACE target `<id>_identity`. The generated header carries the macros
+`PVDKIT_PLUGIN_NAME`, `_FILENAME` (`<NAME>.pvd`), `_PRIORITY`, `_VERSION_MAJOR/MINOR/PATCH`,
+`_VERSION`, `_AUTHOR`, `_COPYRIGHT` (from the `PVDKIT_AUTHOR` / `PVDKIT_COPYRIGHT` cache
+variables), `_DESCRIPTION`, `_COMMENTS`, and — outside `RC_INVOKED` — the C++ constant
+`inline constexpr PluginIdentity kPluginIdentity{priority, name, version}` with `static_assert`s
+that the views are literal-backed (null-terminated). Consumers:
+
+- `src/pvd/Exports.cpp` (the `Shim`'s identity and the pre-`pvdInit` `pvdPluginInfo` answer);
+- `plugins/<id>/src/DefaultPlugin.cpp` (`PluginInfo{kPluginIdentity.priority, name, version, comments}`
+  — the comments are built at run time from the linked libraries, and the e2e version test pins
+  them equal to the resource's `PVDKIT_PLUGIN_COMMENTS`);
+- `src/pvd/Plugin.rc`, the one VERSIONINFO resource for every plugin (`FileVersion` /
+  `ProductVersion`, `CompanyName`, `LegalCopyright`, `FileDescription`, `ProductName` /
+  `InternalName` / `OriginalFilename` = `<NAME>.pvd`, `Comments`), compiled by llvm-rc once per
+  plugin target;
+- `tests/e2e/VersionResourceTests.cpp` (reads the block back with `GetFileVersionInfoW` /
+  `VerQueryValueW`, `version.lib` linked into the e2e test only, and compares it with the running
+  plugin's `pvdPluginInfo`);
+- the package manifest `<build>/plugins/<id>/package/manifest.json` and README that
+  `pvdkit_add_plugin` writes for `scripts/package.ps1`.
+
+The shared static library `pvdkit_pvd` carries no identity at all. `pvd_tests` compiles
+`Exports.cpp` against its own generated identity (`TestPlugin` 9.8.7, priority 42) through the
+same function, which is how the test proves the plumbing rather than a constant. There is no
+project-wide version: the kit has none, each plugin has its own.
 
 ### 3.5 `src/core/IFileSource.hpp`
 
@@ -190,22 +272,22 @@ class IFileData { public: virtual ~IFileData() = default; [[nodiscard]] virtual 
 class IFileSource { public: virtual ~IFileSource() = default; [[nodiscard]] virtual Result<std::unique_ptr<IFileData>> open(std::string_view utf8Path) = 0; };
 ```
 
-### 3.6 `src/core/IDecoder.hpp`
+### 3.6 `src/core/IDecoder.hpp`, `src/core/IImageDescriber.hpp`
 
 ```cpp
 enum class ChromaFormat { Yuv444, Yuv422, Yuv420, Yuv400 };
 struct Cicp { std::uint16_t primaries, transfer, matrix; bool fullRange; };
 struct CropRect { std::uint32_t x, y, width, height; };
 enum class MirrorAxis { TopBottom, LeftRight };   // named after the effect, never a magic number
-struct Transforms {
+struct Transforms {                               // every field at its default = "none"
   std::optional<CropRect> clap;       // already converted from clap fractions to a pixel rect by the adapter
   std::uint8_t irotAngle = 0;         // 0..3 quarter turns, anti-clockwise (HEIF 'irot')
   std::optional<MirrorAxis> imir;
 };
 struct ImageMeta {
   std::uint32_t width, height;        // coded size, before transforms
-  std::uint8_t depth;                 // 8, 10, 12
-  ChromaFormat chroma;
+  std::uint8_t depth;                 // bits per sample of the source (8, 10, 12, ...)
+  ChromaFormat chroma;                // sample layout in CICP terms (see below)
   bool hasAlpha, alphaPremultiplied;
   Cicp cicp;
   std::uint32_t frameCount;           // ≥ 1
@@ -228,11 +310,36 @@ class IDecoder {
 class IDecoderFactory {
  public:
   virtual ~IDecoderFactory() = default;
-  [[nodiscard]] virtual bool looksLikeAvif(std::span<const std::byte> head) const = 0;
+  [[nodiscard]] virtual bool recognises(std::span<const std::byte> head) const = 0;   // signature only
   [[nodiscard]] virtual Result<std::unique_ptr<IDecoder>> create(std::span<const std::byte> file,
                                                                  const DecoderOptions&) = 0;  // parses
 };
+struct ImageDescription { std::string formatName, compression, comments; };
+class IImageDescriber {
+ public:
+  virtual ~IImageDescriber() = default;
+  [[nodiscard]] virtual ImageDescription describe(const ImageMeta& meta) const = 0;
+};
 ```
+
+Decisions (Task 7, open point 1):
+
+- `Transforms` stays a shared concept and `Transform` stays in `src/core`: `Transforms{}` is a
+  valid "none", HEIF-family formats all carry clap/irot/imir, and a format without them simply
+  leaves the struct empty so `FileSession` never calls `Transform::apply`. No transform step is
+  injected.
+- `chroma` and `cicp` stay plain (non-optional) fields. They are the ISO/IEC 23091-2 signalling of
+  the coded samples, and CICP itself has a spelling for every case: an RGB format reports
+  `Yuv444` (no subsampling) with `cicp.matrix = 0` (identity) and `fullRange = true` — for sRGB
+  PNG that is exactly `{1, 13, 0, true}`, for unknown colour `{2, 2, 0, true}` — and greyscale is
+  `Yuv400`. Nothing in the shared core reads them; only a plugin's describer does, and it is free
+  to print them or not. An `std::optional` would have added branches to every describer for a
+  case CICP already expresses.
+- The host-facing words (`formatName`, `compression`, `comments`) are produced by the plugin's
+  `IImageDescriber`; `CodecPlugin` derives `pageCount` and `animated` from `ImageMeta` and
+  assembles `ImageInfo`. An interface rather than a callback because everything else injected into
+  core is an interface held by reference, and because the fake in `tests/core/Fakes.hpp` can then
+  record what it was asked to describe.
 
 ### 3.7 Core classes
 
@@ -259,16 +366,12 @@ class IDecoderFactory {
   installed `avif/avif.h` and cite both in a code comment). `irot` angle n = n × 90° anti-clockwise.
   `imir` semantics follow the installed `avif.h` comment for `axis`; the adapter maps the number to
   `MirrorAxis`. Unit tests use 2×3 / 3×2 synthetic images with hand-derived expected outputs.
-- `Describe` (`src/core/Describe.hpp/.cpp`): `std::string describe(const ImageMeta&)`. Format:
-  `"<depth>-bit YUV 4:2:0 (limited range), CICP 1/13/6, straight alpha, 12 frames, ICC, EXIF, XMP, clap, irot 1, imir top-bottom"`.
-  Items absent are omitted; `Yuv400` prints `YUV 4:0:0 (monochrome)`; premultiplied prints
-  `premultiplied alpha`; still image prints no frames item; full range prints `full range`.
-  Well-known CICP triples get a suffix: `1/13/6` → `(sRGB)`, `1/1/1` → `(BT.709)`,
-  `9/16/9` → `(BT.2020 PQ)`, `9/18/9` → `(BT.2020 HLG)`, `12/16/12` → `(P3 PQ)`; `2/2/2` → `(unspecified)`.
-- `AvifPlugin : pvd::IPlugin` (`src/core/AvifPlugin.hpp/.cpp`), ctor `(IFileSource&, IDecoderFactory&, DecoderOptions, PluginInfo)`.
-  `open()`: `looksLikeAvif(head)` else `NotAvif`; if `fileSize == 0` data = `head`, else
+- `CodecPlugin : pvd::IPlugin` (`src/core/CodecPlugin.hpp/.cpp`), ctor
+  `(IFileSource&, IDecoderFactory&, const IImageDescriber&, DecoderOptions, PluginInfo)`.
+  `open()`: `recognises(head)` else `NotRecognised`; if `fileSize == 0` data = `head`, else
   `fileSource.open(name)` → `IFileData` owned by the session; `factory.create(data, options)`;
-  build `ImageInfo{frameCount, animated, "AVIF", "AV1", describe(meta)}`; return `FileSession`.
+  `describer.describe(meta)`; build `ImageInfo{frameCount, animated, formatName, compression,
+  comments}`; return `FileSession`. It is the same class for every plugin.
 - `FileSession : pvd::IFileSession` (`src/core/FileSession.hpp/.cpp`): owns
   `std::unique_ptr<IFileData>` (null in memory mode), `std::unique_ptr<IDecoder>`, `ImageInfo`,
   `std::vector<std::unique_ptr<PixelBuffer>> outstanding_`, `DecoderOptions`.
@@ -279,14 +382,13 @@ class IDecoderFactory {
     if any transform present → `Transform::apply` into a new buffer; `progress.report(2, 3)`;
     move buffer into `outstanding_`; return the view. Any `false` from `report` → `Aborted`.
   - `freePage(span)`: erase the buffer whose `bytes().data() == span.data()`; return whether found.
-- `DefaultPlugin` (`src/adapters/DefaultPlugin.cpp`): defines `pvd::makePlugin()`
-  returning an object that owns `win::FileSource`, `avif::DecoderFactory`, and `core::AvifPlugin`
-  (declared in that order) and forwards `IPlugin`. Options: `maxThreads = max(1, hardware_concurrency())`,
-  `strict = false`, `maxPixels = 16384 × 16384`, `maxDimension = 32768`.
-  `PluginInfo{10, "AVIF", "1.0.0", "AVIF decoder: libavif <ver>, dav1d <ver>, libyuv <ver>; static build"}`
-  (versions from `avifVersion()`, `dav1d_version()`, `LIBYUV_VERSION`).
+- A plugin's composition root (`plugins/<id>/src/DefaultPlugin.cpp`) defines `pvd::makePlugin()`
+  returning an object that owns `win::FileSource`, the plugin's `IDecoderFactory`, its
+  `IImageDescriber` and a `core::CodecPlugin` (declared in that order) and forwards `IPlugin`.
+  It chooses the `DecoderOptions` and builds `PluginInfo` from `kPluginIdentity` plus run-time
+  library versions. AVIF's values: `plugins/avif/DESIGN.md`.
 
-### 3.8 Adapters
+### 3.8 Shared adapter
 
 - `win::FileMapping` (`src/adapters/win/FileMapping.hpp/.cpp`): RAII over `CreateFileW` (read,
   share read/write/delete, `FILE_FLAG_SEQUENTIAL_SCAN`), `CreateFileMappingW(PAGE_READONLY)`,
@@ -300,32 +402,17 @@ class IDecoderFactory {
   spelling) are never touched — a `\\.\` file path ≥ `MAX_PATH` will not open, that is the caller's
   choice; and if `GetFullPathNameW` returns a path that already carries one of these prefixes it is
   used as is.
-  The `imageSizeLimit` handed to libavif is clamped to `[1, AVIF_DEFAULT_IMAGE_SIZE_LIMIT]` (libavif
-  rejects anything else); the real `maxPixels` limit is enforced by `PixelBuffer::create` in core.
-  The `file` span given to `DecoderFactory::create` must outlive the decoder (libavif keeps pointers
-  into it); `FileSession` guarantees this by declaring the file data before the decoder.
-- `avif::Decoder` (`src/adapters/avif/Decoder.hpp/.cpp`): `std::unique_ptr<avifDecoder, Destroy>`;
-  `create()`: `avifDecoderCreate`, set `maxThreads`, `strictFlags = strict ? AVIF_STRICT_ENABLED : AVIF_STRICT_DISABLED`,
-  `imageSizeLimit`, `imageDimensionLimit`, `avifDecoderSetIOMemory`, `avifDecoderParse`, then fill
-  `ImageMeta` from `decoder->image` (width/height/depth/yuvFormat/yuvRange/colorPrimaries/
-  transferCharacteristics/matrixCoefficients, `alphaPresent`, `alphaPremultiplied`, `imageCount`,
-  `transformFlags` + `clap` (via `avifCropRectFromCleanApertureBox`; invalid → `InvalidTransform`),
-  `irot.angle`, `imir.axis`, `icc.size`, `exif.size`, `xmp.size`). Maps `avifResult` to `ErrorCode`
-  with `avifResultToString` in `detail`.
-  `frameTiming`: `avifDecoderNthImageTiming` → `lround(duration × 1000)` clamped to `uint32`.
-  `decodeFrame`: `avifDecoderNthImage`; `avifRGBImageSetDefaults`; `depth = 8`;
-  `format = BGRA or BGR`; `alphaPremultiplied = AVIF_FALSE` (straight alpha out);
-  `chromaUpsampling = AVIF_CHROMA_UPSAMPLING_AUTOMATIC`; `pixels = dst.data()`, `rowBytes = pitch`;
-  `avifImageYUVToRGB`. No allocation inside the adapter.
-  `DecoderFactory::looksLikeAvif` = `avifPeekCompatibleFileType` (returns false for short spans).
-- Grid images, progressive files, 10/12-bit sources, image sequences: handled by libavif; we only
-  pass through. HDR (PQ/HLG) is **not** tone-mapped in v1: colours are converted by matrix only.
-  ICC profiles are ignored (the PVD interface has no colour management), as in every bundled decoder.
+- The `file` span given to an `IDecoderFactory::create` must outlive the decoder (codec libraries
+  keep pointers into it); `FileSession` guarantees this by declaring the file data before the decoder.
+- Codec adapters are one-to-one over their library and contain no decisions; the AVIF one is
+  described in `plugins/avif/DESIGN.md`.
 
 ## 4. Build
 
 - CMake ≥ 3.28, presets in `CMakePresets.json`: `debug`, `release`, `coverage` (x64) and
-  `debug-x86`, `release-x86`, `coverage-x86` (32-bit; all Ninja, clang-cl, lld-link). The x86
+  `debug-x86`, `release-x86`, `coverage-x86` (32-bit; all Ninja, clang-cl, lld-link). The names
+  are unchanged from v1; every preset builds every plugin. `-DPVDKIT_PLUGINS=<id>[;<id>]`
+  restricts the build (and the vcpkg manifest features, see below) to those plugins. The x86
   presets differ from the x64 ones only in `VCPKG_TARGET_TRIPLET = x86-windows-static-clang`;
   `cmake/vcpkg-root.cmake` reads `triplets/<triplet>.cmake` to pick the chainload toolchain
   (`cmake/clang-cl-x86.toolchain.cmake`: the same x64-hosted clang-cl cross-compiling with
@@ -333,107 +420,148 @@ class IDecoderFactory {
   that maps an architecture to its toolchain. The x86 triplet also sets `VCPKG_LOAD_VCVARS_ENV ON`:
   vcpkg does not load vcvars for chainloaded triplets, and without it meson (dav1d) activates
   `vcvars64.bat` itself and links i686 objects against the x64 CRT (`_mainCRTStartup` unresolved).
-  The plugin is `build/release-x86<suffix>/src/pvd/AVIF.pvd` (`IMAGE_FILE_MACHINE_I386`).
-  `release`: `/O2 /GL-`? no LTO needed; `/MT`, `/DEBUG:NONE`. `coverage`: `/Od /Zi /MT`
-  + `-fprofile-instr-generate -fcoverage-mapping` on `src/**` and tests.
+  A plugin lands in `build/<preset><suffix>/plugins/<id>/<NAME>.pvd` (x86 builds are
+  `IMAGE_FILE_MACHINE_I386`).
+  `release`: `/O2`, `/MT`, `/DEBUG:NONE`. `coverage`: `/Od /Zi /MT`
+  + `-fprofile-instr-generate -fcoverage-mapping` on every target.
 - Common flags: `/clang:-std=c++23 /W4 /WX /permissive- /utf-8 /EHsc /Zc:preprocessor`
   plus `-Wno-` nothing unless justified. `static_assert(__cplusplus >= 202302L)` in `src/core/Error.hpp`.
   The `coverage-x86` build links `clang_rt.profile-i386.lib` from the x86-hosted LLVM of the same
   Build Tools explicitly (the x64-hosted one ships only the x86_64 runtime, so clang names an
   arch-less `clang_rt.profile.lib` that exists nowhere; `/NODEFAULTLIB` drops that name).
-- Resources: `project(... LANGUAGES CXX RC)`; `src/pvd/AVIF.rc` is compiled by llvm-rc (from the
-  chainload toolchain) and linked into `AVIF.pvd`; it adds no imports (`check_imports`).
-- vcpkg manifest `vcpkg.json`: `libavif[dav1d]`, `doctest`. Custom triplet
-  `triplets/x64-windows-static-clang.cmake` = `x64-windows-static` + chainload
-  `cmake/clang-cl.toolchain.cmake` so libyuv gets its SIMD paths (vcpkg#28446) and everything is one
-  toolchain. Set `VCPKG_OVERLAY_TRIPLETS` in the presets. If dav1d's meson build refuses clang-cl,
-  report; do not silently fall back.
-  The chainload toolchain sets only: compilers, linker, resource compiler, and
-  `CMAKE_MSVC_RUNTIME_LIBRARY`. It must **not** replace `CMAKE_AR` or override CMake's archive rules:
-  libavif 1.4.2's `merge_static_libs.cmake` mis-detects clang-cl (it tests the Clang compiler id
-  before `MSVC`), and the fix for that is an **overlay port** `ports/libavif` (copy of the vcpkg port
-  plus one patch that checks `MSVC` first so the merge uses the lib.exe-style bundling, with
-  `CMAKE_LIBTOOL`/llvm-lib), registered through `VCPKG_OVERLAY_PORTS` in the presets.
-- Targets: `avifpvd_core` (static), `avifpvd_pvd` (static, Shim/ContextHandle/Firewall),
-  `avifpvd_adapters` (static, links `avif`, `dav1d`, `yuv`), `avifpvd` (SHARED; `OUTPUT_NAME AVIF`,
-  `SUFFIX .pvd`, `PREFIX ""`, `/DEF:src/pvd/AVIF.def`), tests: `pvd_tests`, `core_tests`,
-  `adapter_tests`, `e2e_tests`, `guard_tests`. Per-directory `CMakeLists.txt` with
-  `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` so parallel agents do not fight over one file.
-- `scripts/check-imports.ps1`: fails unless the import table of `AVIF.pvd` is exactly `KERNEL32.dll`
-  (uses `dumpbin /dependents` from Build Tools, or `llvm-readobj --coff-imports`). Registered as a
-  ctest test in the release presets (`check_imports`). `scripts/check-exports.ps1` (`check_exports`)
-  does the same for the export table: exactly the eight bare `pvd*` names.
-- Build directories: `build/<preset>$env{AVIFPVD_BUILD_SUFFIX}` so several agents can build the
+- Resources: `project(... LANGUAGES CXX RC)`; `src/pvd/Plugin.rc` is compiled by llvm-rc (from the
+  chainload toolchain) once per plugin and linked into its DLL; it adds no imports (`check_imports`).
+- vcpkg manifest `vcpkg.json`: `doctest` for the kit, and one **feature per plugin id** carrying
+  that plugin's libraries (`avif` → `libavif[dav1d]`, which pulls `libyuv`); `default-features`
+  lists every plugin, and `cmake/vcpkg-root.cmake` maps `PVDKIT_PLUGINS` to
+  `VCPKG_MANIFEST_FEATURES` (+ `VCPKG_MANIFEST_NO_DEFAULT_FEATURES`) so a restricted build installs
+  only what it needs. Custom triplets `triplets/x64-windows-static-clang.cmake` /
+  `x86-windows-static-clang.cmake` = static + chainload `cmake/clang-cl(-x86).toolchain.cmake`
+  so every port gets the same toolchain (and libyuv its SIMD paths, vcpkg#28446). The chainload
+  toolchain sets only compilers, linker, resource compiler and `CMAKE_MSVC_RUNTIME_LIBRARY`; the
+  overlay port `ports/libavif` (registered through `VCPKG_OVERLAY_PORTS`) carries the clang-cl
+  fix for libavif's static-library merge, see `plugins/avif/DESIGN.md`. Changing a toolchain file
+  changes every port's ABI hash, i.e. rebuilds the ports once.
+- Targets. Shared: `pvdkit_options` (INTERFACE flags), `pvdkit_core`, `pvdkit_pvd`,
+  `pvdkit_win` (all static). Per plugin, from `cmake/pvdkit-plugin.cmake`:
+  - `pvdkit_plugin_identity(<id> ...)` → `<id>_identity` (INTERFACE, generated header, §3.4a);
+  - the plugin's own `add_library` calls: `<id>_core` (static, `src/core/**`), `<id>_adapter`
+    (static, `src/adapters/**`, links the codec ports), `<id>_composition` (static,
+    `src/DefaultPlugin.cpp`, links the two plus `pvdkit_win`, `pvdkit_pvd`, `<id>_identity`);
+  - `pvdkit_add_plugin(<id> LINK <id>_composition README package/README.txt.in LICENSES <port> <name> ...)`
+    → `<id>_plugin` (SHARED; `OUTPUT_NAME <NAME>`, `SUFFIX .pvd`, `PREFIX ""`; sources =
+    `Exports.cpp` + `Plugin.def` + `Plugin.rc` read from properties of `pvdkit_pvd`) and the
+    package staging `<bindir>/package/` (`README.txt` configured from the plugin's template with
+    name/version/priority/description/comments and architecture/author/copyright, `LICENSES.txt`
+    assembled from vcpkg's `share/<port>/copyright` files, `manifest.json` = name, version,
+    architecture, file name);
+  - tests: `<id>_core_tests`, `<id>_adapter_tests` (the plugin's own `add_executable`), and
+    `pvdkit_add_plugin_e2e_tests(<id> FIXTURES <dir> SOURCES ...)` → `<id>_e2e_tests` (in
+    coverage builds with the ctest `ENVIRONMENT` property
+    `LLVM_PROFILE_FILE=<build>/pvdkit-<id>-%p-%m.profraw`, so the coverage gate can tell this
+    DLL's profile from every other plugin's) plus the ctest entries `<id>_check_imports` and
+    `<id>_check_exports` (Release configuration).
+  Shared tests: `pvd_tests` (compiles `Exports.cpp` against `pvd_tests_identity`), `core_tests`,
+  `adapter_tests` (win), `guard_tests`. Per-directory `CMakeLists.txt` with
+  `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`; the top level globs `plugins/*/CMakeLists.txt` the
+  same way, so a new plugin is a new directory and nothing else.
+- `scripts/check-imports.ps1`: fails unless the import table of the given DLL is exactly `KERNEL32.dll`
+  (`llvm-readobj --coff-imports`). `scripts/check-exports.ps1`: exactly the eight bare `pvd*` names.
+  Both are registered per plugin as ctest tests in the release presets.
+- Build directories: `build/<preset>$env{PVDKIT_BUILD_SUFFIX}` so several agents can build the
   same tree concurrently without sharing a Ninja/CMake state directory.
-- `scripts/coverage.ps1 [-Preset coverage|coverage-x86]`: configures+builds the preset, runs the
-  five test executables under `LLVM_PROFILE_FILE`, merges with `llvm-profdata`, runs `llvm-cov report` with
-  `-ignore-filename-regex` excluding `tests/`, `third_party/`, `vcpkg`, prints the totals, writes HTML
-  to `build/coverage/html`, exits 1 unless lines == 100% and branches == 100% for `src/**`.
-  The same 100 % gate applies to both presets.
-- `scripts/build-all.ps1`: builds `release` and `release-x86`, runs both gates on each DLL and
-  copies them to `dist/x64/AVIF.pvd` and `dist/x86/AVIF.pvd`. `scripts/package.ps1`: the same from
-  scratch (suffix `-pkg`), then `dist/AVIF-<version>-x64.zip` and `-x86.zip` (`AVIF.pvd`,
-  `README.txt`, `LICENSES.txt` from vcpkg's `share/<port>/copyright` files) with their SHA-256.
+- `scripts/coverage.ps1 [-Preset coverage|coverage-x86]`: configures+builds the preset, runs every
+  ctest executable under `LLVM_PROFILE_FILE` (`pvdkit-%p-%m.profraw`; each `<id>_e2e_tests`
+  overrides it through its ctest `ENVIRONMENT` property, set by `pvdkit_add_plugin_e2e_tests` in
+  coverage builds, with `pvdkit-<id>-%p-%m.profraw`), merges with `llvm-profdata`, runs
+  `llvm-cov report` over the test executables **and every `*.pvd` under `build/.../plugins`**
+  with `-ignore-filename-regex` excluding `tests/`, `third_party/`, `vcpkg`, requires that each DLL
+  wrote its own profile — a check per plugin id: among the `pvdkit-<id>-*` files only, a process
+  that left two raw profiles whose merge shows `Exports.cpp` functions executed in that DLL's
+  mapping; `Exports.cpp` is identical in every plugin DLL, so without the id another plugin's
+  e2e process would satisfy the mapping just as well — requires every `.cpp` / executable `.hpp`
+  under `src/**` and `plugins/*/src/**` to appear in the report, prints the totals, writes HTML
+  to `build/<preset><suffix>/html`, exits 1 unless lines == 100 % and branches == 100 %. The same
+  gate applies to both presets. It is a whole-tree gate: run it with every plugin enabled.
+- `scripts/build-all.ps1`: builds `release` and `release-x86`, discovers every plugin through its
+  `package/manifest.json`, runs both gates on each DLL and copies them to `dist/x64/<NAME>.pvd`
+  and `dist/x86/<NAME>.pvd`. `scripts/package.ps1`: the same from scratch (suffix `-pkg`), checks
+  each DLL's `FileVersion` against the manifest, then `dist/<NAME>-<version>-{x64,x86}.zip`
+  (`<NAME>.pvd`, `README.txt`, `LICENSES.txt` from the staging directory) with their SHA-256.
 
 ## 5. Tests
 
-- Framework: doctest (vcpkg). One executable per directory: `pvd_tests`, `core_tests`,
-  `adapter_tests`, `e2e_tests`, `guard_tests`. Parallel agents own disjoint directories.
+- Framework: doctest (vcpkg). Shared executables: `pvd_tests`, `core_tests`, `adapter_tests`,
+  `guard_tests`; per plugin: `<id>_core_tests`, `<id>_adapter_tests`, `<id>_e2e_tests`. Parallel
+  agents own disjoint directories.
 - `tests/pvd`: `Firewall`, `ContextHandle`, `Shim` (fake `IPlugin`/`IFileSession`: success, every
-  `ErrorCode`, throwing, null host pointers, callback abort), `Progress`.
-- `tests/core`: `PixelBuffer`, `Transform`
-  (all angles, both axes, crop, combined, invalid crop), `Describe` (every branch), `AvifPlugin`
-  and `FileSession` on fake `IFileSource`/`IDecoderFactory`/`IDecoder` (memory mode vs file mode,
-  open failure, parse failure, page range, decode failure, conversion failure, abort at each step,
-  transforms present/absent, alpha/no alpha, animated timing, freePage known/unknown, size limit).
+  `ErrorCode`, throwing, null host pointers, callback abort; the identity fallback with a test
+  `PluginIdentity`), `Progress`, `Exports.cpp` with a test `makePlugin()` and the generated
+  `pvd_tests` identity (42 / `TestPlugin` / 9.8.7).
+- `tests/core`: `PixelBuffer`, `Transform` (all angles, both axes, crop, combined, invalid crop),
+  `CodecPlugin` and `FileSession` on fake `IFileSource`/`IDecoderFactory`/`IDecoder`/`IImageDescriber`
+  (memory mode vs file mode, open failure, parse failure, page range, decode failure, conversion
+  failure, abort at each step, transforms present/absent, alpha/no alpha, animated timing,
+  freePage known/unknown, size limit, the describer's words and the meta it receives, exception
+  propagation from every collaborator).
 - `tests/adapters`: `FileMapping`/`FileSource` on temp files (normal, empty, missing, non-ASCII
-  name, long path); `avif::Decoder` on fixtures (meta for each fixture, timing for animations,
-  decode into caller buffer, buffer too small, truncated file, non-AVIF, strict vs lenient).
-- `tests/e2e`: `LoadLibraryW(AVIF.pvd)`, `GetProcAddress` all 8, drive them like the host: init →
-  pluginInfo (priority 10, name "AVIF", version "1.0.0") → fileOpen from disk and from memory
-  (`lFileSize = 0`) → pageInfo → pageDecode with and without callback, callback abort → pageFree →
-  fileClose → exit. Pixel assertions on synthetic fixtures (exact for lossless RGB, ±2 for YUV),
-  page count / frame times on animations, dimensions after irot on rotated fixtures, rejection of
-  PNG/BMP/garbage/truncated input, no crash on all libavif fixtures listed below.
-- `tests/guard`: walks `src/` and fails on forbidden tokens: `new `, `new(`, `delete `, `malloc`,
-  `calloc`, `realloc`, `free(`, `shared_ptr`, `weak_ptr`, `reinterpret_cast` outside adapters/pvd,
-  `#include <windows.h>` / `avif/avif.h` outside `src/adapters/**` and `src/pvd/Exports.cpp`,
-  `catch (` outside `Firewall.hpp`, `LCOV_EXCL`, `__builtin_unreachable`, `[[assume`.
-  Comments and string literals are stripped before matching so the rule text itself does not trip it.
+  name, long path).
+- `tests/e2e`: not an executable but the shared host driver (`PluginHost.hpp/.cpp`: `LoadLibraryW`,
+  `GetProcAddress` of all eight, open in disk and memory mode, decode helpers) and
+  `VersionResourceTests.cpp` (VERSIONINFO vs generated identity vs `pvdPluginInfo`), compiled
+  into every plugin's `<id>_e2e_tests` with `PVDKIT_PLUGIN_PATH` / `PVDKIT_FIXTURE_DIR` set for
+  that plugin. The plugin adds its own `E2eTests.cpp` (fixture expectations, pixel checks, the
+  rejection list, concurrency).
+- `tests/guard`: walks `src/` and every `plugins/*/src/` and fails on forbidden tokens: `new `,
+  `new(`, `delete `, `malloc`, `calloc`, `realloc`, `free(`, `shared_ptr`, `weak_ptr`,
+  `reinterpret_cast` outside adapters/pvd, `#include <windows.h>` outside `src/adapters/**`,
+  `plugins/*/src/adapters/**`, `src/pvd/Exports.cpp` and `src/pvd/PvdApi.hpp` (the same set
+  AGENTS.md rule 4 names), codec headers (`avif/avif.h`, `dav1d/dav1d.h`; extend the list with
+  each plugin's library) outside those adapters and `Exports.cpp`, `catch (`
+  outside `Firewall.hpp`, `LCOV_EXCL`, `__builtin_unreachable`, `[[assume`. Layering rules,
+  re-expressed for the two-root tree (Task 7, open point 3), the same under `src/` and under
+  `plugins/<id>/src/`:
+  - `core/**` includes no `pvd/` header other than `pvd/Types.hpp` and `pvd/Plugin.hpp` (allowlist);
+  - `pvd/**` includes no `adapters/` header; only `pvd/Exports.cpp` includes `pvd/PluginFactory.hpp`
+    or the generated `pvd/PluginConstants.hpp`;
+  - `adapters/**` includes no `pvd/` header at all;
+  - `plugins/<id>/src/DefaultPlugin.cpp` is the only file allowed outside the three layer
+    directories, and may include `pvd/PluginFactory.hpp`, `pvd/PluginConstants.hpp`, `pvd/Plugin.hpp`,
+    `pvd/Types.hpp`, adapters and core;
+  - include ownership: every `#include` is resolved against an index of the headers under each
+    source root, the includer's own root and the shared root first. What resolves there is the
+    includer's own header — every plugin has a `core/Describe.hpp`, and each may include its own
+    copy regardless of the namesakes under the other plugin roots. Only an include that resolves
+    in no allowed root but does resolve under a foreign root is a violation: for shared code any
+    `plugins/*/src`, for a plugin another plugin's root (includes that resolve nowhere — std, SDK,
+    vcpkg — are ignored by this rule).
+  Comments and string literals are stripped before matching so the rule text itself does not trip
+  it. Every rule has self-tests in both polarities on synthetic paths and a fake two-plugin index.
 
-## 6. Fixtures (`tests/fixtures/`)
+## 6. Adding a plugin (what Task 8 does)
 
-`SOURCES.md` lists every file: origin URL + commit, licence, what it exercises, expected values.
-Committed to the repo so builds are offline. Keep the total under ~10 MB.
-
-From `https://github.com/AOMediaCodec/libavif/tree/<pinned commit>/tests/data` (BSD-2-Clause; read
-`tests/data/README.md` there and copy any per-file notices):
-`white_1x1.avif`, `io/kodim03_yuv420_8bpc.avif`, `io/cosmos1650_yuv444_10bpc_p3pq.avif`,
-`alpha_noispe.avif`, `abc_color_irot_alpha_irot.avif`, `abc_color_irot_alpha_NOirot.avif`,
-`clap_irot_imir_non_essential.avif`, `clop_irot_imor.avif`, `sofa_grid1x5_420.avif`,
-`color_grid_alpha_nogrid.avif`, `colors-animated-8bpc.avif`,
-`colors-animated-8bpc-alpha-exif-xmp.avif`, `colors-animated-12bpc-keyframes-0-2-3.avif`,
-`colors_hdr_rec2020.avif`, `colors_sdr_srgb.avif`, `paris_icc_exif_xmp.avif`,
-`draw_points_idat_progressive.avif`, `extended_pixi.avif`, `weld_sato_12B_8B_q0.avif`.
-
-Synthetic, generated by `scripts/make-synthetic-fixtures.ps1` with the installed ffmpeg (has
-`libaom-av1` and the `avif` muxer) and committed:
-- `quad_rgb_lossless.avif`: 64×64, four solid quadrants (red, green, blue, white), `-pix_fmt gbrp`
-  + `-aom-params lossless=1` → exact RGB round trip (identity matrix).
-- `quad_yuv420.avif`: same picture, `yuv420p` limited range, lossy default → ±2 tolerance.
-- `alpha_steps.avif`: `yuva444p`, lossless, three vertical bands with alpha 0 / 128 / 255 over a
-  solid colour.
-- `anim_3frames.avif`: three solid frames (red, green, blue), 100 ms / 200 ms / 300 ms.
-- `gray_400.avif`: `gray` pixel format (monochrome 4:0:0).
-- `tenbit_444.avif`: `yuv444p10le`, lossless.
-- Negatives: `not_avif.png`, `not_avif.bmp`, `garbage.bin` (random 4 KiB), `truncated.avif`
-  (`quad_yuv420.avif` cut at 60%).
+1. `plugins/<id>/CMakeLists.txt`: `find_package` the codec, compute the comments string,
+   `pvdkit_plugin_identity(<id> NAME <NAME> VERSION x.y.z PRIORITY n DESCRIPTION ... COMMENTS ...)`,
+   `add_library(<id>_core ...)`, `add_library(<id>_adapter ...)`, `add_library(<id>_composition
+   src/DefaultPlugin.cpp)`, `pvdkit_add_plugin(<id> LINK <id>_composition README package/README.txt.in
+   LICENSES <port> "<name (licence)>" ...)`, `add_subdirectory(tests)` under `BUILD_TESTING`.
+2. `vcpkg.json`: a feature `<id>` with the codec ports; add it to `default-features`.
+3. `src/adapters/<lib>/`: `IDecoderFactory` (`recognises` = signature check on the head,
+   `create` = parse) and `IDecoder` over the library, one-to-one, no decisions.
+   `src/core/`: the `IImageDescriber` and any other decision that needs no library.
+   `src/DefaultPlugin.cpp`: `pvd::makePlugin()` owning `win::FileSource`, the factory, the
+   describer and a `core::CodecPlugin`.
+4. `fixtures/` + `fixtures/SOURCES.md`, `tests/core`, `tests/adapters`, `tests/e2e/E2eTests.cpp` +
+   `pvdkit_add_plugin_e2e_tests(<id> FIXTURES ... SOURCES ...)`, `package/README.txt.in`,
+   `README.md`, `DESIGN.md`.
+5. Extend the guard's codec-header list with the new library's header. Nothing under `src/`,
+   `scripts/` or `CMakePresets.json` changes.
 
 ## 7. Concurrency and lifetime
 
 - The host may decode several files at once (prefetch). Every session is independent; the only
-  process-wide state is the composition root created in `pvdInit`. libavif/dav1d are thread-safe
-  across decoder instances.
+  process-wide state is the composition root created in `pvdInit`. Codec libraries must be
+  thread-safe across decoder instances (libavif/dav1d are).
 - A `DecodedPage` view is valid until `freePage` or session destruction, whichever comes first.
 - In memory mode the file bytes belong to the host and are valid until `pvdFileClose` (SDK
   guarantee); the session stores only a `std::span` and no `IFileData`.
@@ -443,7 +571,9 @@ Synthetic, generated by `scripts/make-synthetic-fixtures.ps1` with the installed
   that the C++ `catch (...)` firewall does not see. This is the same behaviour as the bundled
   decoders that map files (e.g. BMP.pvd) and is accepted for v1.
 
-## 8. Out of scope for v1 (document, do not implement)
+## 8. Out of scope (document, do not implement)
 
-HDR tone mapping, ICC colour management, gain maps, progressive preview rendering, layered/`a1lx`
-selection, EXIF orientation (AVIF says `irot`/`imir` win), 16-bit output.
+Colour management of any kind (the PVD interface has none), 16-bit output, per-plugin
+configuration files, a plugin that serves several formats from one DLL (one format per plugin
+keeps the identity, the priority and the packaging one-dimensional). Format-specific exclusions:
+the plugin's `DESIGN.md`.

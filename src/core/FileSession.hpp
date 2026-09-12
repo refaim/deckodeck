@@ -11,7 +11,7 @@
 #include "core/PixelBuffer.hpp"
 #include "pvd/Plugin.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 
 class FileSession final : public pvd::IFileSession {
 public:
@@ -40,4 +40,4 @@ private:
   DecoderOptions options_;
 };
 
-} // namespace avifpvd::core
+} // namespace pvdkit::core

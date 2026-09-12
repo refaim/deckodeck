@@ -6,7 +6,7 @@
 
 #include "core/Error.hpp"
 
-namespace avifpvd::win {
+namespace pvdkit::win {
 
 // Internal helpers exposed for unit tests; not part of the adapter contract.
 namespace detail {
@@ -26,4 +26,4 @@ namespace detail {
 /// `FileOpenFailed` when Win32 cannot normalise the path (e.g. beyond the 32767-character limit).
 [[nodiscard]] core::Result<std::wstring> toWin32Path(std::wstring_view path);
 
-}  // namespace avifpvd::win
+}  // namespace pvdkit::win

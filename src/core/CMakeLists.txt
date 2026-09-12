@@ -1,5 +1,7 @@
-file(GLOB_RECURSE AVIFPVD_CORE_SOURCES CONFIGURE_DEPENDS "*.cpp" "*.hpp")
+file(GLOB_RECURSE PVDKIT_CORE_SOURCES CONFIGURE_DEPENDS "*.cpp" "*.hpp")
 
-add_library(avifpvd_core STATIC ${AVIFPVD_CORE_SOURCES})
-target_include_directories(avifpvd_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(avifpvd_core PUBLIC avifpvd_options)
+# Format-neutral decisions: CodecPlugin, FileSession, Transform, PixelBuffer, Narrow, Error and
+# the IDecoder / IFileSource / IImageDescriber contracts the plugins implement.
+add_library(pvdkit_core STATIC ${PVDKIT_CORE_SOURCES})
+target_include_directories(pvdkit_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(pvdkit_core PUBLIC pvdkit_options)

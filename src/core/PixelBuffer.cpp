@@ -7,7 +7,7 @@
 
 #include "core/Narrow.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 
 namespace {
 
@@ -80,4 +80,4 @@ PixelView PixelBuffer::view() const noexcept {
   return PixelView{bytes(), width_, height_, bytesPerPixel_, pitchBytes_};
 }
 
-} // namespace avifpvd::core
+} // namespace pvdkit::core

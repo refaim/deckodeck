@@ -6,7 +6,7 @@
 
 #include "Fakes.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 namespace {
 
 TEST_CASE("context handle round trip preserves identity and unique ownership") {
@@ -33,4 +33,4 @@ TEST_CASE("null context conversions remain empty") {
 }
 
 }  // namespace
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

@@ -4,7 +4,7 @@ param(
   [string]$Path
 )
 
-# The export table of AVIF.pvd must be exactly the eight PVD entry points under their bare
+# The export table of every plugin DLL must be exactly the eight PVD entry points under their bare
 # names: no leading underscore and no @N (the __stdcall decoration x86 gives the symbols), and
 # nothing else. 0PictureView.dll resolves them with GetProcAddress by these names.
 $ErrorActionPreference = "Stop"

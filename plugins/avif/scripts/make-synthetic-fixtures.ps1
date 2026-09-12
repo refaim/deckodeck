@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($Destination)) {
-  $Destination = Join-Path $PSScriptRoot "..\tests\fixtures"
+  $Destination = Join-Path $PSScriptRoot "..\fixtures"
 }
 
 function Invoke-FFmpeg {
@@ -48,7 +48,7 @@ Invoke-FFmpeg @(
   (Join-Path $Destination "alpha_steps.avif")
 )
 
-$animationDirectory = Join-Path ([IO.Path]::GetTempPath()) "avifpvd-animation-$([Guid]::NewGuid())"
+$animationDirectory = Join-Path ([IO.Path]::GetTempPath()) "pvdkit-animation-$([Guid]::NewGuid())"
 New-Item -ItemType Directory -Path $animationDirectory | Out-Null
 try {
   $redFrame = Join-Path $animationDirectory "red.png"

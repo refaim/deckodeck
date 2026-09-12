@@ -6,7 +6,7 @@
 #include "core/IDecoder.hpp"
 #include "core/PixelBuffer.hpp"
 
-namespace avifpvd::core::Transform {
+namespace pvdkit::core::Transform {
 
 [[nodiscard]] Result<CropRect> validatedCrop(const CropRect &rect,
                                              std::uint32_t imageWidth,
@@ -17,4 +17,4 @@ displaySize(const ImageMeta &meta) noexcept;
 [[nodiscard]] Result<PixelBuffer>
 apply(const Transforms &transforms, PixelView view, std::uint64_t maxPixels);
 
-} // namespace avifpvd::core::Transform
+} // namespace pvdkit::core::Transform

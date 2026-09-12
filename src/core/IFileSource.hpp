@@ -7,7 +7,7 @@
 
 #include "core/Error.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 
 /// Provides a read-only view of owned file bytes.
 class IFileData {
@@ -23,4 +23,4 @@ class IFileSource {
   [[nodiscard]] virtual Result<std::unique_ptr<IFileData>> open(std::string_view utf8Path) = 0;
 };
 
-}  // namespace avifpvd::core
+}  // namespace pvdkit::core

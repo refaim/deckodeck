@@ -5,7 +5,7 @@
 
 #include "core/Transform.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 namespace {
 
 Error outOfRange() {
@@ -110,4 +110,4 @@ bool FileSession::freePage(const std::span<const std::byte> pixels) {
   return true;
 }
 
-} // namespace avifpvd::core
+} // namespace pvdkit::core

@@ -14,7 +14,7 @@
 
 #include "PluginHost.hpp"
 
-namespace avifpvd::e2e {
+namespace pvdkit::e2e {
 namespace {
 
 using Bgr = std::vector<std::uint8_t>;
@@ -28,7 +28,7 @@ struct FixtureExpectation {
   bool alpha;             // decoded as BGRA 32 (else BGR 24)
 };
 
-// Every fixture from tests/fixtures/SOURCES.md that libavif accepts; page sizes come from the
+// Every fixture from plugins/avif/fixtures/SOURCES.md that libavif accepts; page sizes come from the
 // same table (ffprobe) with the `irot` swap applied for the rotated files.
 constexpr std::array kFixtures{
     FixtureExpectation{"white_1x1.avif", 1, 1, 1, 24, false},
@@ -574,4 +574,4 @@ TEST_CASE("four threads decode the same fixture concurrently with identical resu
   exports.exit();
 }
 
-}  // namespace avifpvd::e2e
+}  // namespace pvdkit::e2e

@@ -6,7 +6,7 @@
 
 #include "core/Narrow.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 namespace {
 
 TEST_CASE("narrow keeps a 64-bit count that fits the target type") {
@@ -49,4 +49,4 @@ TEST_CASE("narrow to size_t follows the address width of the build") {
 }
 
 } // namespace
-} // namespace avifpvd::core
+} // namespace pvdkit::core

@@ -10,7 +10,7 @@
 
 #include "core/IDecoder.hpp"
 
-namespace avifpvd::avif {
+namespace pvdkit::avif {
 
 struct DecoderDestroy {
   void operator()(avifDecoder* decoder) const noexcept;
@@ -78,7 +78,7 @@ class Decoder final : public core::IDecoder {
 
 class DecoderFactory final : public core::IDecoderFactory {
  public:
-  [[nodiscard]] bool looksLikeAvif(std::span<const std::byte> head) const override;
+  [[nodiscard]] bool recognises(std::span<const std::byte> head) const override;
   /// Parses `file` and returns a decoder over it. `file` must outlive the returned decoder:
   /// `avifDecoderSetIOMemory` installs a persistent memory reader and libavif keeps pointers into
   /// `file` for every later `avifDecoderNthImage` call. `core::FileSession` guarantees this by
@@ -87,4 +87,4 @@ class DecoderFactory final : public core::IDecoderFactory {
       std::span<const std::byte> file, const core::DecoderOptions& options) override;
 };
 
-}  // namespace avifpvd::avif
+}  // namespace pvdkit::avif

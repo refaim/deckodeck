@@ -1,11 +1,11 @@
 #include "core/Error.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 
 std::string_view name(const ErrorCode code) {
   switch (code) {
-    case ErrorCode::NotAvif:
-      return "NotAvif";
+    case ErrorCode::NotRecognised:
+      return "NotRecognised";
     case ErrorCode::FileOpenFailed:
       return "FileOpenFailed";
     case ErrorCode::ParseFailed:
@@ -30,4 +30,4 @@ std::string_view name(const ErrorCode code) {
   return "Unknown";
 }
 
-}  // namespace avifpvd::core
+}  // namespace pvdkit::core

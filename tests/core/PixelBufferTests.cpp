@@ -6,7 +6,7 @@
 
 #include "core/PixelBuffer.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 namespace {
 
 TEST_CASE(
@@ -81,4 +81,4 @@ TEST_CASE("PixelBuffer rejects overflowing storage arithmetic") {
 }
 
 } // namespace
-} // namespace avifpvd::core
+} // namespace pvdkit::core

@@ -7,12 +7,12 @@
 
 #include "core/Error.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 namespace {
 
 TEST_CASE("every error code has a stable diagnostic name") {
   constexpr std::array expected{
-      std::pair{ErrorCode::NotAvif, std::string_view{"NotAvif"}},
+      std::pair{ErrorCode::NotRecognised, std::string_view{"NotRecognised"}},
       std::pair{ErrorCode::FileOpenFailed, std::string_view{"FileOpenFailed"}},
       std::pair{ErrorCode::ParseFailed, std::string_view{"ParseFailed"}},
       std::pair{ErrorCode::DecodeFailed, std::string_view{"DecodeFailed"}},
@@ -35,4 +35,4 @@ TEST_CASE("an unknown error value has a diagnostic name") {
 }
 
 }  // namespace
-}  // namespace avifpvd::core
+}  // namespace pvdkit::core

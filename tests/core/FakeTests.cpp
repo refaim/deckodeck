@@ -1,6 +1,6 @@
 // Exception propagation through the real core entry points (AGENTS rule 5):
 // core never catches, so an exception thrown by a dependency must leave
-// AvifPlugin / FileSession unchanged and leak nothing.
+// CodecPlugin / FileSession unchanged and leak nothing.
 
 #include <cstddef>
 #include <cstdint>
@@ -12,14 +12,14 @@
 #include <doctest/doctest.h>
 
 #include "Fakes.hpp"
-#include "core/AvifPlugin.hpp"
+#include "core/CodecPlugin.hpp"
 #include "core/FileSession.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 namespace {
 
 pvd::PluginInfo pluginInfo() {
-  return pvd::PluginInfo{10, "AVIF", "1.0.0", "static decoder"};
+  return pvd::PluginInfo{10, "Fake", "1.0.0", "static decoder"};
 }
 
 std::unique_ptr<IDecoder> decoder(const ImageMeta &imageMeta,
@@ -47,7 +47,7 @@ std::vector<unsigned> pixelIds(const pvd::DecodedPage &page,
   return result;
 }
 
-TEST_CASE("AvifPlugin::open propagates an exception from looksLikeAvif "
+TEST_CASE("CodecPlugin::open propagates an exception from recognises "
           "without opening or parsing") {
   test::FileSourceState fileState;
   test::FactoryState factoryState;
@@ -55,7 +55,9 @@ TEST_CASE("AvifPlugin::open propagates an exception from looksLikeAvif "
   test::DecoderState decoderState;
   test::FakeFileSource source(fileState);
   test::FakeDecoderFactory factory(factoryState, decoderState, test::meta());
-  AvifPlugin plugin(source, factory, test::options(), pluginInfo());
+  test::DescriberState describerState;
+  test::FakeImageDescriber describer(describerState);
+  CodecPlugin plugin(source, factory, describer, test::options(), pluginInfo());
   const std::vector head{std::byte{1}};
 
   CHECK_THROWS_AS(static_cast<void>(
@@ -69,7 +71,7 @@ TEST_CASE("AvifPlugin::open propagates an exception from looksLikeAvif "
   CHECK(decoderState.destructions == 0);
 }
 
-TEST_CASE("AvifPlugin::open propagates an exception from IFileSource::open "
+TEST_CASE("CodecPlugin::open propagates an exception from IFileSource::open "
           "without creating a decoder") {
   test::FileSourceState fileState;
   fileState.throwOnOpen = true;
@@ -77,7 +79,9 @@ TEST_CASE("AvifPlugin::open propagates an exception from IFileSource::open "
   test::DecoderState decoderState;
   test::FakeFileSource source(fileState);
   test::FakeDecoderFactory factory(factoryState, decoderState, test::meta());
-  AvifPlugin plugin(source, factory, test::options(), pluginInfo());
+  test::DescriberState describerState;
+  test::FakeImageDescriber describer(describerState);
+  CodecPlugin plugin(source, factory, describer, test::options(), pluginInfo());
   const std::vector head{std::byte{1}};
 
   CHECK_THROWS_AS(static_cast<void>(
@@ -91,7 +95,7 @@ TEST_CASE("AvifPlugin::open propagates an exception from IFileSource::open "
   CHECK(decoderState.destructions == 0);
 }
 
-TEST_CASE("AvifPlugin::open propagates an exception from "
+TEST_CASE("CodecPlugin::open propagates an exception from "
           "IDecoderFactory::create and releases the opened file data") {
   test::FileSourceState fileState;
   fileState.fileBytes = {std::byte{1}, std::byte{2}};
@@ -100,7 +104,9 @@ TEST_CASE("AvifPlugin::open propagates an exception from "
   test::DecoderState decoderState;
   test::FakeFileSource source(fileState);
   test::FakeDecoderFactory factory(factoryState, decoderState, test::meta());
-  AvifPlugin plugin(source, factory, test::options(), pluginInfo());
+  test::DescriberState describerState;
+  test::FakeImageDescriber describer(describerState);
+  CodecPlugin plugin(source, factory, describer, test::options(), pluginInfo());
   const std::vector head{std::byte{1}};
 
   CHECK_THROWS_AS(static_cast<void>(
@@ -112,6 +118,30 @@ TEST_CASE("AvifPlugin::open propagates an exception from "
   CHECK(factoryState.createdFrom == fileState.fileBytes);
   CHECK(fileState.dataDestructions == 1);
   CHECK(decoderState.destructions == 0);
+}
+
+TEST_CASE("CodecPlugin::open propagates an exception from "
+          "IImageDescriber::describe and releases the decoder and file data") {
+  test::FileSourceState fileState;
+  fileState.fileBytes = {std::byte{1}, std::byte{2}};
+  test::FactoryState factoryState;
+  test::DecoderState decoderState;
+  test::FakeFileSource source(fileState);
+  test::FakeDecoderFactory factory(factoryState, decoderState, test::meta());
+  test::DescriberState describerState;
+  describerState.throwOnDescribe = true;
+  test::FakeImageDescriber describer(describerState);
+  CodecPlugin plugin(source, factory, describer, test::options(), pluginInfo());
+  const std::vector head{std::byte{1}};
+
+  CHECK_THROWS_AS(static_cast<void>(
+                      plugin.open(pvd::OpenRequest{"throw.avif", 2, head})),
+                  test::DescribeException);
+
+  CHECK(factoryState.createCalls == 1);
+  CHECK(describerState.describeCalls == 1);
+  CHECK(fileState.dataDestructions == 1);
+  CHECK(decoderState.destructions == 1);
 }
 
 TEST_CASE("FileSession::pageInfo propagates an exception from frameTiming and "
@@ -233,4 +263,4 @@ TEST_CASE("FileSession::decodePage propagates an exception from the Progress "
 }
 
 } // namespace
-} // namespace avifpvd::core
+} // namespace pvdkit::core

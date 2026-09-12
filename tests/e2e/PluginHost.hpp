@@ -1,6 +1,6 @@
 #pragma once
 
-// Drives a built AVIF.pvd exactly the way 0PictureView.dll does: LoadLibraryW, GetProcAddress of
+// Drives a built plugin (.pvd) exactly the way 0PictureView.dll does: LoadLibraryW, GetProcAddress of
 // the eight exports, then the C ABI. Nothing here links against the plugin's static libraries.
 
 #include <cstddef>
@@ -16,7 +16,7 @@
 
 #include "pvd/PvdApi.hpp"
 
-namespace avifpvd::e2e {
+namespace pvdkit::e2e {
 
 /// The eight entry points, typed exactly as the SDK header declares them, so a signature or
 /// calling-convention drift between the header and this driver fails to compile here.
@@ -51,7 +51,7 @@ class PluginLibrary {
   PluginExports exports_;
 };
 
-/// The path of the AVIF.pvd this test binary was configured against.
+/// The path of the plugin this test binary was configured against (PVDKIT_PLUGIN_PATH).
 [[nodiscard]] std::filesystem::path pluginPath();
 
 /// Loads the plugin and calls pvdInit; REQUIREs both to succeed.
@@ -99,4 +99,4 @@ struct DecodedPage {
                                                     std::uint32_t page, pvdDecodeCallback callback,
                                                     void* callbackContext);
 
-}  // namespace avifpvd::e2e
+}  // namespace pvdkit::e2e

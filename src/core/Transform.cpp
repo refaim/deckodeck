@@ -6,7 +6,7 @@
 #include <optional>
 #include <utility>
 
-namespace avifpvd::core::Transform {
+namespace pvdkit::core::Transform {
 namespace {
 
 CropRect fullImage(const PixelView view) noexcept {
@@ -160,4 +160,4 @@ Result<PixelBuffer> apply(const Transforms &transforms, const PixelView view,
                    maxPixels);
 }
 
-} // namespace avifpvd::core::Transform
+} // namespace pvdkit::core::Transform

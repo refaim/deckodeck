@@ -10,7 +10,7 @@
       "name": "base",
       "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/${presetName}$env{AVIFPVD_BUILD_SUFFIX}",
+      "binaryDir": "${sourceDir}/build/${presetName}$env{PVDKIT_BUILD_SUFFIX}",
       "toolchainFile": "${sourceDir}/cmake/vcpkg-root.cmake",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64/bin/clang-cl.exe",
@@ -37,7 +37,7 @@
       "displayName": "Debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "AVIFPVD_COVERAGE": "OFF"
+        "PVDKIT_COVERAGE": "OFF"
       }
     },
     {
@@ -46,7 +46,7 @@
       "displayName": "Release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "AVIFPVD_COVERAGE": "OFF"
+        "PVDKIT_COVERAGE": "OFF"
       }
     },
     {
@@ -55,7 +55,7 @@
       "displayName": "Coverage",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "AVIFPVD_COVERAGE": "ON"
+        "PVDKIT_COVERAGE": "ON"
       }
     },
     {
@@ -64,7 +64,7 @@
       "displayName": "Debug (x86)",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "AVIFPVD_COVERAGE": "OFF"
+        "PVDKIT_COVERAGE": "OFF"
       }
     },
     {
@@ -73,7 +73,7 @@
       "displayName": "Release (x86)",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "AVIFPVD_COVERAGE": "OFF"
+        "PVDKIT_COVERAGE": "OFF"
       }
     },
     {
@@ -82,7 +82,7 @@
       "displayName": "Coverage (x86)",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "AVIFPVD_COVERAGE": "ON"
+        "PVDKIT_COVERAGE": "ON"
       }
     }
   ],

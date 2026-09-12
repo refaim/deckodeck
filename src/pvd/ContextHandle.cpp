@@ -3,7 +3,7 @@
 #include <memory>
 #include <utility>
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 
 void* toHost(std::unique_ptr<IFileSession> session) noexcept { return session.release(); }
 
@@ -13,4 +13,4 @@ std::unique_ptr<IFileSession> fromHost(void* context) noexcept {
 
 IFileSession* borrow(void* context) noexcept { return static_cast<IFileSession*>(context); }
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

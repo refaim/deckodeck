@@ -4,10 +4,10 @@
 
 #include "pvd/Plugin.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 
 [[nodiscard]] void* toHost(std::unique_ptr<IFileSession> session) noexcept;
 [[nodiscard]] std::unique_ptr<IFileSession> fromHost(void* context) noexcept;
 [[nodiscard]] IFileSession* borrow(void* context) noexcept;
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

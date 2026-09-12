@@ -16,10 +16,10 @@
 #include "core/Error.hpp"
 #include "pvd/Plugin.hpp"
 
-namespace avifpvd::pvd::test {
+namespace pvdkit::pvd::test {
 
 inline constexpr std::array allErrorCodes{
-    core::ErrorCode::NotAvif,          core::ErrorCode::FileOpenFailed,
+    core::ErrorCode::NotRecognised,          core::ErrorCode::FileOpenFailed,
     core::ErrorCode::ParseFailed,      core::ErrorCode::DecodeFailed,
     core::ErrorCode::ConversionFailed, core::ErrorCode::PageOutOfRange,
     core::ErrorCode::Aborted,          core::ErrorCode::TooLarge,
@@ -168,4 +168,4 @@ class FakePlugin final : public IPlugin {
   FakeState& state_;
 };
 
-}  // namespace avifpvd::pvd::test
+}  // namespace pvdkit::pvd::test

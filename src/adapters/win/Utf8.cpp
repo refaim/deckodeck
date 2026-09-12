@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-namespace avifpvd::win {
+namespace pvdkit::win {
 namespace {
 
 constexpr std::wstring_view kExtendedPrefix = LR"(\\?\)";
@@ -86,4 +86,4 @@ core::Result<std::wstring> toWin32Path(const std::wstring_view path) {
   return fullPathName(path).transform(extended);
 }
 
-}  // namespace avifpvd::win
+}  // namespace pvdkit::win

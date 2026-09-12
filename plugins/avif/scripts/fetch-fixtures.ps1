@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($Destination)) {
-  $Destination = Join-Path $PSScriptRoot "..\tests\fixtures"
+  $Destination = Join-Path $PSScriptRoot "..\fixtures"
 }
 
 $commit = "66663952a677bb8a13ea1530d5694775d7d143d4"

@@ -8,7 +8,7 @@
 
 #include "pvd/PvdApi.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 namespace {
 
 enum class Failure { None, BadAlloc, RuntimeError, Integer };
@@ -60,4 +60,4 @@ TEST_CASE("guarded preserves PVD scalar return types") {
 }
 
 }  // namespace
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

@@ -15,8 +15,12 @@
 #include "Fakes.hpp"
 #include "pvd/PvdApi.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 namespace {
+
+// The identity Exports.cpp would hand to a real Shim comes from the plugin's generated
+// pvd/PluginConstants.hpp; the shim itself only forwards whatever it is given.
+constexpr PluginIdentity kIdentity{42, "Fake", "9.8.7"};
 
 struct CallbackObservation {
   std::uint32_t step = 0;
@@ -40,7 +44,7 @@ void openSession(Shim& shim, pvdInfoImage& imageInfo, void*& context) {
 TEST_CASE("shim marshals every successful operation and preserves session storage") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
 
   CHECK(shim.init() == PVD_CURRENT_INTERFACE_VERSION);
   CHECK_NOTHROW(shim.exit());
@@ -99,7 +103,7 @@ TEST_CASE("shim marshals every successful operation and preserves session storag
 TEST_CASE("two sessions live at once are independent and closed one at a time") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage firstImage{};
   pvdInfoImage secondImage{};
   void* first = nullptr;
@@ -142,7 +146,7 @@ TEST_CASE("two sessions live at once are independent and closed one at a time") 
 TEST_CASE("a decoded pitch that does not fit INT32 is refused instead of wrapping negative") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage imageInfo{};
   void* context = nullptr;
   openSession(shim, imageInfo, context);
@@ -169,7 +173,7 @@ TEST_CASE("fileOpen identifies memory mode and sets animated flag iff requested"
   test::FakeState state;
   state.imageInfo.animated = false;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   constexpr std::array bytes{std::byte{0x0A}, std::byte{0x0B}};
   pvdInfoImage imageInfo{};
   void* context = nullptr;
@@ -185,7 +189,7 @@ TEST_CASE("fileOpen identifies memory mode and sets animated flag iff requested"
 TEST_CASE("callback return value reaches the session progress object") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage imageInfo{};
   void* context = nullptr;
   openSession(shim, imageInfo, context);
@@ -202,7 +206,7 @@ TEST_CASE("callback return value reaches the session progress object") {
 TEST_CASE("each expected open error maps to FALSE without a session leak") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage imageInfo{};
   void* context = nullptr;
 
@@ -218,7 +222,7 @@ TEST_CASE("each expected open error maps to FALSE without a session leak") {
 TEST_CASE("each expected page error maps to FALSE") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage imageInfo{};
   void* context = nullptr;
   openSession(shim, imageInfo, context);
@@ -236,7 +240,7 @@ TEST_CASE("each expected page error maps to FALSE") {
 TEST_CASE("each expected decode error maps to FALSE") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage imageInfo{};
   void* context = nullptr;
   openSession(shim, imageInfo, context);
@@ -254,7 +258,7 @@ TEST_CASE("each expected decode error maps to FALSE") {
 TEST_CASE("null host pointers are rejected or ignored") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage imageInfo{};
   pvdInfoPage pageInfo{};
   pvdInfoDecode decodeInfo{};
@@ -282,7 +286,7 @@ TEST_CASE("null host pointers are rejected or ignored") {
 TEST_CASE("null decoded image is ignored by pageFree") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage imageInfo{};
   void* context = nullptr;
   openSession(shim, imageInfo, context);
@@ -297,7 +301,7 @@ TEST_CASE("a null successful session is rejected") {
   test::FakeState state;
   state.returnNullSession = true;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
   pvdInfoImage imageInfo{};
   void* context = nullptr;
 
@@ -309,16 +313,16 @@ TEST_CASE("a null successful session is rejected") {
 TEST_CASE("exceptions from every plugin and session operation are firewalled") {
   test::FakeState state;
   test::FakePlugin plugin{state};
-  Shim shim{plugin};
+  Shim shim{plugin, kIdentity};
 
   // A throwing info() must leave the host with the plugin's constant identity, never with the
   // garbage it passed in: the shim fills the defaults before it asks the plugin.
   state.throwPluginInfo = true;
   pvdInfoPlugin pluginInfo{5, "garbage", "garbage", "garbage"};
   CHECK_NOTHROW(shim.pluginInfo(&pluginInfo));
-  CHECK(pluginInfo.Priority == 10);
-  CHECK(std::string_view{pluginInfo.pName} == "AVIF");
-  CHECK(std::string_view{pluginInfo.pVersion} == "1.0.0");
+  CHECK(pluginInfo.Priority == 42);
+  CHECK(std::string_view{pluginInfo.pName} == "Fake");
+  CHECK(std::string_view{pluginInfo.pVersion} == "9.8.7");
   CHECK(std::string_view{pluginInfo.pComments}.empty());
   state.throwPluginInfo = false;
 
@@ -356,4 +360,4 @@ TEST_CASE("exceptions from every plugin and session operation are firewalled") {
 }
 
 }  // namespace
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

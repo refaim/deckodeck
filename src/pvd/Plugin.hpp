@@ -8,7 +8,7 @@
 #include "core/Error.hpp"
 #include "pvd/Types.hpp"
 
-namespace avifpvd::pvd {
+namespace pvdkit::pvd {
 
 /// Defines one independently opened PictureView file session.
 class IFileSession {
@@ -28,4 +28,4 @@ class IPlugin {
   [[nodiscard]] virtual core::Result<std::unique_ptr<IFileSession>> open(const OpenRequest&) = 0;
 };
 
-}  // namespace avifpvd::pvd
+}  // namespace pvdkit::pvd

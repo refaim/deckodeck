@@ -1,0 +1,41 @@
+@PVDKIT_PLUGIN_NAME@.pvd @PVDKIT_PLUGIN_VERSION@ (@PVDKIT_PLUGIN_ARCHITECTURE@) - @PVDKIT_PLUGIN_DESCRIPTION@
+
+INSTALL
+  Copy @PVDKIT_PLUGIN_NAME@.pvd next to 0PictureView.dll in PictureView's plugin folder
+  (typically %FARPROFILE%\Plugins\PictureView or <Far>\Plugins\PictureView) and
+  restart Far Manager. This build is for the @PVDKIT_PLUGIN_BITS@ Far Manager / PictureView;
+  the other architecture is a separate package. The plugin registers with
+  priority @PVDKIT_PLUGIN_PRIORITY@ and is picked up by PictureView's automatic format detection.
+
+WHAT IS SUPPORTED
+  - Still images and image sequences (avis): every frame is a page with its
+    display time.
+  - 8, 10 and 12-bit sources, 4:4:4 / 4:2:2 / 4:2:0 / 4:0:0, grid images,
+    progressive files.
+  - Alpha (straight, 32-bit BGRA output); opaque images are 24-bit BGR.
+  - clap, irot and imir transformative properties, applied in that order.
+  - Files from archives and virtual panels (the host hands over the whole file
+    in memory).
+  - Statically linked: imports KERNEL32.dll only; no runtime, WIC codec or
+    GDI+ needed.
+
+LIMITATIONS
+  - HDR (PQ/HLG) sources are converted by matrix only; there is no tone mapping.
+  - ICC profiles are ignored (the PVD interface has no colour management).
+  - Gain maps, layered (a1lx) selection, progressive preview rendering and
+    16-bit output are not supported; EXIF orientation is not applied (AVIF's
+    irot/imir take precedence by specification).
+  - clap/irot/imir properties not marked essential are refused by libavif.
+  - Images are limited to 16384 x 16384 pixels in area (268 megapixels) and
+    32768 pixels per side.
+
+AUTHOR
+  @PVDKIT_PLUGIN_AUTHOR@
+  @PVDKIT_PLUGIN_COPYRIGHT@
+
+VERSION
+  @PVDKIT_PLUGIN_VERSION@ (@PVDKIT_PLUGIN_COMMENTS@)
+
+LICENCES
+  The plugin bundles libavif, dav1d and libyuv; their licence texts are in
+  LICENSES.txt.

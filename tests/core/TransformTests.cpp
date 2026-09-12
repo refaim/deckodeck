@@ -11,7 +11,7 @@
 
 #include "core/Transform.hpp"
 
-namespace avifpvd::core {
+namespace pvdkit::core {
 namespace {
 
 struct TestImage {
@@ -294,4 +294,4 @@ TEST_CASE("apply propagates invalid crops and output size limits") {
 }
 
 } // namespace
-} // namespace avifpvd::core
+} // namespace pvdkit::core
