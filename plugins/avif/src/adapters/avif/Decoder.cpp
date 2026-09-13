@@ -234,6 +234,11 @@ namespace pvdkit::avif
         return meta_;
     }
 
+    std::span<const std::byte> Decoder::iccProfile() const
+    {
+        return std::as_bytes(std::span{decoder_->image->icc.data, decoder_->image->icc.size});
+    }
+
     core::Result<core::FrameTiming> Decoder::frameTiming(const std::uint32_t frame) const
     {
         avifImageTiming timing{};

@@ -98,6 +98,10 @@ namespace pvdkit::e2e
     {
         pvdInfoPage page{};
         pvdInfoDecode decode{};
+        // PictureView allocates the undocumented x64 ICC fields immediately after pvdInfoDecode.
+        // Keep matching storage in the host driver so an experiment DLL can be exercised safely.
+        const BYTE *pIccProfile = nullptr;
+        UINT32 cbIccProfile = 0;
 
         [[nodiscard]] std::uint32_t bytesPerPixel() const noexcept
         {
@@ -109,6 +113,13 @@ namespace pvdkit::e2e
         /// All rows, tightly packed, for whole-image comparisons.
         [[nodiscard]] std::vector<std::byte> pixels() const;
     };
+
+#if defined(_WIN64)
+    static_assert(offsetof(DecodedPage, pIccProfile) - offsetof(DecodedPage, decode) ==
+                  offsetof(pvdInfoDecodeEx, pIccProfile));
+    static_assert(offsetof(DecodedPage, cbIccProfile) - offsetof(DecodedPage, decode) ==
+                  offsetof(pvdInfoDecodeEx, cbIccProfile));
+#endif
 
     /// Whether a positive top-down pitch can hold one row of a supported host pixel layout.
     /// The kit emits tight 24/32/64-bit rows; the host contract also permits padded 64-bit rows.

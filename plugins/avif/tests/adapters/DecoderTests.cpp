@@ -345,9 +345,23 @@ TEST_CASE("all positive fixtures expose complete container metadata")
         CHECK(meta.transforms.irotAngle == expected.irotAngle);
         CHECK(meta.transforms.imir.has_value() == expected.imir);
         CHECK(meta.hasIcc == expected.icc);
+        CHECK(meta.hasIcc == !(*created)->iccProfile().empty());
         CHECK(meta.hasExif == expected.exif);
         CHECK(meta.hasXmp == expected.xmp);
     }
+}
+
+TEST_CASE("AVIF exposes decoder-owned ICC bytes")
+{
+    auto bytes = readFixture("paris_icc_exif_xmp.avif");
+    pvdkit::avif::DecoderFactory factory;
+    auto created = factory.create(bytes, kOptions);
+    REQUIRE(created.has_value());
+    const auto profile = (*created)->iccProfile();
+    REQUIRE(profile.size() > 40);
+    CHECK((*created)->meta().hasIcc);
+    CHECK(std::ranges::equal(profile.subspan<36, 4>(),
+                             std::array{std::byte{'a'}, std::byte{'c'}, std::byte{'s'}, std::byte{'p'}}));
 }
 
 TEST_CASE("CICP signalling is preserved for P3/PQ, Rec.2020 and identity sources")

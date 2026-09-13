@@ -59,11 +59,15 @@ namespace pvdkit::rpgmvp::tests
             pvdInfoPage page{};
             REQUIRE(shim.pageInfo(context, 0, &page) == TRUE);
             CHECK(page.lWidth == item.width);
-            pvdInfoDecode decoded{};
+            pvdInfoDecodeEx extended{};
+            auto &decoded = *reinterpret_cast<pvdInfoDecode *>(&extended);
             REQUIRE(shim.pageDecode(context, 0, &decoded, nullptr, nullptr) == TRUE);
             CHECK(decoded.nBPP == 64);
             CHECK(decoded.lImagePitch == static_cast<INT32>(item.width * 8U));
-            CHECK(decoded.Flags == item.flags);
+            const auto iccFlags = pvd::detail::iccExperimentEnabled() ? UINT32{PVD_IDF_ICC_PROFILE} : UINT32{0};
+            CHECK(decoded.Flags == (item.flags | iccFlags));
+            CHECK((extended.pIccProfile != nullptr) == pvd::detail::iccExperimentEnabled());
+            CHECK((extended.cbIccProfile != 0) == pvd::detail::iccExperimentEnabled());
 
             shim.pageFree(context, &decoded);
             shim.fileClose(context);

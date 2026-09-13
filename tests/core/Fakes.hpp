@@ -78,6 +78,7 @@ namespace pvdkit::core::test
         bool throwOnTiming = false;
         bool throwOnDecode = false;
         std::uint32_t durationMs = 125;
+        std::vector<std::byte> iccProfile;
         int destructions = 0;
     };
 
@@ -95,6 +96,11 @@ namespace pvdkit::core::test
         [[nodiscard]] const ImageMeta &meta() const override
         {
             return meta_;
+        }
+
+        [[nodiscard]] std::span<const std::byte> iccProfile() const override
+        {
+            return state_.get().iccProfile;
         }
 
         [[nodiscard]] Result<FrameTiming> frameTiming(const std::uint32_t frame) const override

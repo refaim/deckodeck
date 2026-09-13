@@ -13,6 +13,33 @@
 namespace pvdkit::pvd
 {
 
+    std::optional<UINT32> detail::iccExtensionSize(const std::size_t profileSize) noexcept
+    {
+        if (profileSize > std::numeric_limits<UINT32>::max()) {
+            return std::nullopt;
+        }
+        return static_cast<UINT32>(profileSize);
+    }
+
+    void detail::writeIccExtension(pvdInfoDecodeEx &output, const std::span<const std::byte> profile) noexcept
+    {
+        static_cast<void>(iccExtensionSize(profile.size()).transform([&](const UINT32 profileSize) {
+            output.pIccProfile = reinterpret_cast<const BYTE *>(profile.data());
+            output.cbIccProfile = profileSize;
+            output.Flags |= PVD_IDF_ICC_PROFILE;
+            return true;
+        }));
+    }
+
+    bool detail::iccExperimentEnabled() noexcept
+    {
+#if defined(PVDKIT_EXPERIMENT_ICC) && defined(_WIN64)
+        return true;
+#else
+        return false;
+#endif
+    }
+
     void fillDefaultPluginInfo(pvdInfoPlugin *output, const PluginIdentity &identity) noexcept
     {
         if (output == nullptr) {
@@ -158,6 +185,12 @@ namespace pvdkit::pvd
                 output->nBPP = decoded->bitsPerPixel;
                 output->nColorsUsed = 0;
                 output->lImagePitch = static_cast<INT32>(decoded->pitchBytes);
+#if defined(PVDKIT_EXPERIMENT_ICC) && defined(_WIN64)
+                if (!decoded->iccProfile.empty()) {
+                    auto &extended = *reinterpret_cast<pvdInfoDecodeEx *>(output);
+                    detail::writeIccExtension(extended, decoded->iccProfile);
+                }
+#endif
                 return BOOL{1};
             },
             BOOL{0});

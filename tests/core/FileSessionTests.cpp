@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -130,6 +131,7 @@ namespace pvdkit::core
         TEST_CASE("decodePage emits BGR24 pixels and all progress steps")
         {
             DecoderState state;
+            state.iccProfile = {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
             const auto imageMeta = test::meta();
             FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
             std::vector<std::pair<std::uint32_t, std::uint32_t>> reports;
@@ -144,6 +146,7 @@ namespace pvdkit::core
             CHECK(decoded->bitsPerPixel == 24);
             CHECK(decoded->pitchBytes == 9);
             CHECK_FALSE(decoded->hasAlpha);
+            CHECK(std::ranges::equal(decoded->iccProfile, state.iccProfile));
             CHECK(decoded->pixels.size() == 18);
             CHECK(pixelIds(*decoded, 3, 3) == std::vector<unsigned>{1, 2, 3, 4, 5, 6});
             CHECK(state.decodedFrames == std::vector<std::uint32_t>{0});

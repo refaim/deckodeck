@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -192,6 +193,85 @@ namespace pvdkit::pvd
             CHECK(decoded.Flags == PVD_IDF_ALPHA);
 
             shim.pageFree(context, &decoded);
+            shim.fileClose(context);
+        }
+
+        TEST_CASE("the ICC extension writer fills the observed BMP-compatible x64 layout")
+        {
+            constexpr std::array profile{std::byte{0x00}, std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
+            pvdInfoDecodeEx decoded{};
+
+            detail::writeIccExtension(decoded, profile);
+
+            CHECK(PVD_IDF_ICC_PROFILE == UINT32{4});
+            CHECK(decoded.Flags == PVD_IDF_ICC_PROFILE);
+            CHECK(decoded.pIccProfile == reinterpret_cast<const BYTE *>(profile.data()));
+            CHECK(decoded.cbIccProfile == profile.size());
+        }
+
+        TEST_CASE("ICC extension sizes narrow exactly through the UINT32 boundary")
+        {
+            constexpr auto maximum = std::numeric_limits<UINT32>::max();
+
+            REQUIRE(detail::iccExtensionSize(static_cast<std::size_t>(maximum)).has_value());
+            CHECK(*detail::iccExtensionSize(static_cast<std::size_t>(maximum)) == maximum);
+            if constexpr (std::numeric_limits<std::size_t>::max() > maximum) {
+                CHECK_FALSE(detail::iccExtensionSize(static_cast<std::size_t>(maximum) + 1U).has_value());
+            }
+        }
+
+        TEST_CASE("pageDecode writes the ICC extension only in the enabled x64 experiment build")
+        {
+            test::FakeState state;
+            state.decodedHasAlpha = true;
+            state.decodedIccProfile = {std::byte{0x10}, std::byte{0x20}, std::byte{0x30}};
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            pvdInfoImage imageInfo{};
+            void *context = nullptr;
+            openSession(shim, imageInfo, context);
+
+            const BYTE untouchedByte = 0;
+            const auto *untouchedPointer = &untouchedByte;
+            pvdInfoDecodeEx decoded{};
+            decoded.pIccProfile = untouchedPointer;
+            decoded.cbIccProfile = 0xA5A5A5A5U;
+            REQUIRE(shim.pageDecode(context, 0, reinterpret_cast<pvdInfoDecode *>(&decoded), nullptr, nullptr) == TRUE);
+
+            if (detail::iccExperimentEnabled()) {
+                CHECK(decoded.Flags == (PVD_IDF_ALPHA | PVD_IDF_ICC_PROFILE));
+                CHECK(decoded.pIccProfile == reinterpret_cast<const BYTE *>(state.decodedIccProfile.data()));
+                CHECK(decoded.cbIccProfile == state.decodedIccProfile.size());
+            } else {
+                CHECK(decoded.Flags == PVD_IDF_ALPHA);
+                CHECK(decoded.pIccProfile == untouchedPointer);
+                CHECK(decoded.cbIccProfile == 0xA5A5A5A5U);
+            }
+
+            shim.pageFree(context, reinterpret_cast<pvdInfoDecode *>(&decoded));
+            shim.fileClose(context);
+        }
+
+        TEST_CASE("an empty ICC profile never changes extension storage")
+        {
+            test::FakeState state;
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            pvdInfoImage imageInfo{};
+            void *context = nullptr;
+            openSession(shim, imageInfo, context);
+
+            const BYTE untouchedByte = 0;
+            const auto *untouchedPointer = &untouchedByte;
+            pvdInfoDecodeEx decoded{};
+            decoded.pIccProfile = untouchedPointer;
+            decoded.cbIccProfile = 0xA5A5A5A5U;
+            REQUIRE(shim.pageDecode(context, 0, reinterpret_cast<pvdInfoDecode *>(&decoded), nullptr, nullptr) == TRUE);
+            CHECK(decoded.Flags == 0);
+            CHECK(decoded.pIccProfile == untouchedPointer);
+            CHECK(decoded.cbIccProfile == 0xA5A5A5A5U);
+
+            shim.pageFree(context, reinterpret_cast<pvdInfoDecode *>(&decoded));
             shim.fileClose(context);
         }
 

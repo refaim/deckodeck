@@ -252,16 +252,17 @@ namespace pvdkit::sequence
             enforceInvariant(checkImageInfo(imageInfo));
 
             CallbackState callbackState{abortEnabled, abortPolicy.callbackIndex};
-            pvdInfoDecode decoded{};
+            pvdInfoDecodeEx decoded{};
+            auto &documented = *reinterpret_cast<pvdInfoDecode *>(&decoded);
             const auto decodeSucceeded =
-                shim.pageDecode(context, pageIndex, &decoded, progressCallback, &callbackState) != FALSE;
+                shim.pageDecode(context, pageIndex, &documented, progressCallback, &callbackState) != FALSE;
             if (decodeSucceeded) {
                 enforceInvariant(
                     checkInvariant(!callbackState.aborted, "pvdPageDecode succeeded after the callback aborted"));
-                enforceInvariant(checkDecoded(pageInfo, decoded));
-                touchImage(pageInfo, decoded);
+                enforceInvariant(checkDecoded(pageInfo, documented));
+                touchImage(pageInfo, documented);
                 ++report.decoded;
-                shim.pageFree(context, &decoded);
+                shim.pageFree(context, &documented);
             } else if (callbackState.aborted) {
                 ++report.aborted;
             } else {

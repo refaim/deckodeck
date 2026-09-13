@@ -103,7 +103,8 @@ namespace pvdkit::core
         auto retained = std::make_unique<PixelBuffer>(std::move(buffer));
         const auto view = retained->view();
         outstanding_.push_back(std::move(retained));
-        return pvd::DecodedPage{view.pixels, view.bytesPerPixel * 8, view.pitchBytes, meta.hasAlpha};
+        return pvd::DecodedPage{view.pixels, view.bytesPerPixel * 8, view.pitchBytes, meta.hasAlpha,
+                                decoder_->iccProfile()};
     }
 
     bool FileSession::freePage(const std::span<const std::byte> pixels)

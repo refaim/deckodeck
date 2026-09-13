@@ -29,10 +29,25 @@ and the decrypt script's inverse `-Wrap` mode:
 | `rgba8_noninterlaced_700x700_kamen.rpgmvp` | 17,092 | non-Adam7 RGBA8 re-encoding; decoded pixels equal the Adam7 Kamen file |
 | `rgba8_srgb_48x48.rpgmvp` | 757 | RGBA8 reference fixture with canonical sRGB intent-0 chunk inserted after IHDR |
 | `apng_4x4.rpgmvp` | 245 | two-frame RGB8 APNG; deliberately reported and decoded as one default-image page |
+| `icc_swapped_rb_64x64.png` / `.rpgmvp` | 2,586 / 2,602 | RGB8 quadrants: red, green, blue, mid-grey; embeds the generated 2,560-byte test profile with the `rXYZ` and `bXYZ` payloads swapped; adapter pixels remain exact BGR and unchanged by the profile |
+| `icc_srgb_64x64.rpgmvp` | 2,602 | Same exact quadrants with the generated profile's normal sRGB colourants as the colour-management control |
 
 The 4-bit indexed game fixture covers libspng's sub-byte palette-depth behavior. ffmpeg's PNG
 encoder emitted `pal8` rather than a reliable 2-bit indexed PNG without pngquant, so no synthetic
 2-bit palette fixture was added.
+
+The ICC bytes are generated from scratch by `scripts/make-synthetic-fixtures.ps1`; they contain no
+third-party profile bytes and are MIT-licensed as part of pvdkit. The deterministic ICC v2.1 display
+profile identifies itself as `pvdkit sRGB-equivalent test profile`, uses D50 for its header and
+`wtpt`, and uses the standard Bradford-adapted D50 sRGB `rXYZ`, `gXYZ`, and `bXYZ` colourants. Its
+three TRC entries share one 1,024-sample `curv` payload implementing the piecewise sRGB transfer
+function instead of approximating it with gamma 2.2. The swapped variant exchanges only the
+equal-sized `rXYZ` and `bXYZ` payloads. The zero profile ID remains valid for this ICC v2 profile.
+Quoted `exiftool "-ICC_Profile:all"` verification reports signature `acsp`, version 2.1.0, the
+profile description and MIT copyright; the swapped profile reports red
+`(0.1431, 0.06059, 0.7141)` and blue `(0.4361, 0.2225, 0.0139)`, the reverse of the control. The
+committed `.png` twin retains the swapped profile so GDI+'s no-colour-management path is the
+like-for-like Far reference.
 
 Exact conversion observations: the cursor's BGRA pixels (0,0) and (17,0) are `(0,0,0,0)` and
 `(78,224,255,222)`. The RGBA16 source's first samples are R=`0xFFFF`, G=`0xFFFF`, B=`0xFFFF`,

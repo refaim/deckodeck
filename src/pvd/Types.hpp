@@ -47,6 +47,7 @@ namespace pvdkit::pvd
         std::uint32_t bitsPerPixel = 0; ///< 24, 32 or 64.
         std::uint32_t pitchBytes = 0;   ///< Width times bytes per pixel, without padding.
         bool hasAlpha = false;          ///< The alpha channel carries information rather than being fully opaque.
+        std::span<const std::byte> iccProfile; ///< Decoder-owned bytes, valid for the session lifetime.
     };
 
     /// Carries the host-provided inputs needed to open an image.

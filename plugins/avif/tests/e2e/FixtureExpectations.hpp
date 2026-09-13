@@ -15,6 +15,7 @@ namespace pvdkit::avif::tests
         std::uint32_t pages;
         std::uint32_t pageBpp;
         bool alpha;
+        bool icc = false;
     };
 
     // Every fixture from plugins/avif/fixtures/SOURCES.md that libavif accepts; page sizes come
@@ -34,7 +35,7 @@ namespace pvdkit::avif::tests
         FixtureExpectation{"colors-animated-12bpc-keyframes-0-2-3.avif", 64, 64, 5, 48, true},
         FixtureExpectation{"colors_hdr_rec2020.avif", 200, 200, 1, 30, false},
         FixtureExpectation{"colors_sdr_srgb.avif", 200, 200, 1, 24, false},
-        FixtureExpectation{"paris_icc_exif_xmp.avif", 403, 302, 1, 24, false},
+        FixtureExpectation{"paris_icc_exif_xmp.avif", 403, 302, 1, 24, false, true},
         FixtureExpectation{"draw_points_idat_progressive.avif", 33, 11, 1, 32, true},
         FixtureExpectation{"extended_pixi.avif", 4, 4, 1, 24, false},
         FixtureExpectation{"weld_sato_12B_8B_q0.avif", 1024, 684, 1, 36, false},

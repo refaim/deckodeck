@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <zlib.h>
 
@@ -144,6 +145,18 @@ namespace pvdkit::rpgmvp
             return meta;
         }
 
+        core::Result<std::vector<std::byte>> readIccProfile(spng_ctx &context)
+        {
+            spng_iccp profile{};
+            return detail::chunkPresent(spng_get_iccp(&context, &profile)).transform([&](const bool present) {
+                if (!present) {
+                    return std::vector<std::byte>{};
+                }
+                const auto bytes = std::as_bytes(std::span{profile.profile, profile.profile_len});
+                return std::vector<std::byte>{bytes.begin(), bytes.end()};
+            });
+        }
+
     } // namespace
 
     void ContextDestroy::operator()(spng_ctx *context) const noexcept
@@ -248,14 +261,19 @@ namespace pvdkit::rpgmvp
     }
 
     Decoder::Decoder(Key, const std::span<const std::byte> file, const core::ImageMeta meta,
-                     const core::DecoderOptions options) noexcept
-        : file_(file), meta_(meta), options_(options)
+                     const core::DecoderOptions options, std::vector<std::byte> iccProfile) noexcept
+        : file_(file), meta_(meta), options_(options), iccProfile_(std::move(iccProfile))
     {
     }
 
     const core::ImageMeta &Decoder::meta() const
     {
         return meta_;
+    }
+
+    std::span<const std::byte> Decoder::iccProfile() const
+    {
+        return iccProfile_;
     }
 
     core::Result<core::FrameTiming> Decoder::frameTiming(const std::uint32_t frame) const
@@ -324,10 +342,13 @@ namespace pvdkit::rpgmvp
                 const auto hasTransparency = detail::chunkPresent(spng_get_trns(bundle->context.get(), &transparency));
                 std::uint8_t renderingIntent = 0;
                 const auto hasSrgb = detail::chunkPresent(spng_get_srgb(bundle->context.get(), &renderingIntent));
-                return detail::combineChunkPresence(hasTransparency, hasSrgb).transform([&](const auto presence) {
-                    const core::ImageMeta meta = imageMeta(ihdr, presence.first, presence.second);
-                    return std::unique_ptr<core::IDecoder>{
-                        std::make_unique<Decoder>(Decoder::Key{}, file, meta, options)};
+                return detail::combineChunkPresence(hasTransparency, hasSrgb).and_then([&](const auto presence) {
+                    return readIccProfile(*bundle->context).transform([&](std::vector<std::byte> profile) {
+                        core::ImageMeta meta = imageMeta(ihdr, presence.first, presence.second);
+                        meta.hasIcc = !profile.empty();
+                        return std::unique_ptr<core::IDecoder>{
+                            std::make_unique<Decoder>(Decoder::Key{}, file, meta, options, std::move(profile))};
+                    });
                 });
             });
     }

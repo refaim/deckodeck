@@ -1,11 +1,26 @@
 #pragma once
 
+#include <cstddef>
+#include <optional>
+
 #include "pvd/Plugin.hpp"
 #include "pvd/PluginIdentity.hpp"
 #include "pvd/PvdApi.hpp"
 
 namespace pvdkit::pvd
 {
+
+    namespace detail
+    {
+
+        /// Writes the experimentally observed x64 fields. `Shim` calls this only in an enabled x64
+        /// build. Profiles that do not fit the extension's UINT32 byte count leave every extension
+        /// field untouched.
+        void writeIccExtension(pvdInfoDecodeEx &output, std::span<const std::byte> profile) noexcept;
+        [[nodiscard]] std::optional<UINT32> iccExtensionSize(std::size_t profileSize) noexcept;
+        [[nodiscard]] bool iccExperimentEnabled() noexcept;
+
+    } // namespace detail
 
     /// Fills `output` with the constant `identity` (priority, name, version, empty comments). Used
     /// both when no plugin is alive and as the fallback that `Shim::pluginInfo` writes before it asks

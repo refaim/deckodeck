@@ -68,6 +68,29 @@ namespace pvdkit::e2e
             return fixture.alpha ? 32U : 24U;
         }
 
+        void checkDecodeFlags(const DecodedPage &decoded, const bool expectedAlpha, const bool profileAvailable)
+        {
+            const auto alphaFlags = expectedAlpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0};
+            constexpr bool kExperimentEnabled = PVDKIT_E2E_EXPECT_ICC_EXPERIMENT != 0;
+            const auto expectedProfile = profileAvailable && kExperimentEnabled;
+            const auto iccFlags = expectedProfile ? UINT32{PVD_IDF_ICC_PROFILE} : UINT32{0};
+            CHECK(decoded.decode.Flags == (alphaFlags | iccFlags));
+            CHECK((decoded.pIccProfile != nullptr) == expectedProfile);
+            CHECK((decoded.cbIccProfile != 0) == expectedProfile);
+        }
+
+        template <std::size_t Size>
+        void checkProfile(const BYTE *profile, const UINT32 size, const UINT32 expectedSize,
+                          const std::size_t knownOffset, const std::array<BYTE, Size> &knownBytes)
+        {
+            REQUIRE(profile != nullptr);
+            REQUIRE(size == expectedSize);
+            const std::span<const BYTE> bytes{profile, size};
+            CHECK(std::ranges::equal(bytes.subspan<36, 4>(), std::array<BYTE, 4>{'a', 'c', 's', 'p'}));
+            REQUIRE(knownOffset + knownBytes.size() <= bytes.size());
+            CHECK(std::ranges::equal(bytes.subspan(knownOffset, knownBytes.size()), knownBytes));
+        }
+
     } // namespace
 
     TEST_CASE("RPGMVP.pvd identifies itself through the eight-export host boundary")
@@ -111,7 +134,9 @@ namespace pvdkit::e2e
             CHECK(disk.page.decode.lImagePitch == static_cast<INT32>(expected.width * (expectedOutputBpp / 8U)));
             CHECK(disk.page.decode.pPalette == nullptr);
             CHECK(disk.page.decode.nColorsUsed == 0);
-            CHECK(disk.page.decode.Flags == (expected.alpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0}));
+            checkDecodeFlags(disk.page, expected.alpha, expected.icc);
+            CHECK(memory.page.decode.Flags == disk.page.decode.Flags);
+            checkDecodeFlags(memory.page, expected.alpha, expected.icc);
             CHECK(memory.page.pixels() == disk.page.pixels());
             CHECK(text(memory.image.info.pComments) == text(disk.image.info.pComments));
             freeAndClose(exports, disk);
@@ -119,6 +144,39 @@ namespace pvdkit::e2e
         }
         exports.exit();
     }
+
+#if PVDKIT_E2E_EXPECT_ICC_EXPERIMENT
+    TEST_CASE("the enabled x64 DLL keeps the real RPGMVP ICC profile alive until file close")
+    {
+        constexpr UINT32 kProfileSize = 2560;
+        constexpr std::size_t kKnownOffset = 448;
+        constexpr std::array<BYTE, 12> kSwappedRedBytes{0x00, 0x00, 0x24, 0xA2, 0x00, 0x00,
+                                                        0x0F, 0x83, 0x00, 0x00, 0xB6, 0xCF};
+        const auto plugin = loadInitializedPlugin();
+        const auto &exports = plugin.exports();
+        const auto file = readFixture("icc_swapped_rb_64x64.rpgmvp");
+        auto image = openImage(exports, file, OpenMode::Disk);
+        REQUIRE(image.has_value());
+
+        auto first = decodePage(exports, image->context, 0, nullptr, nullptr);
+        REQUIRE(first.has_value());
+        REQUIRE((first->decode.Flags & PVD_IDF_ICC_PROFILE) != 0);
+        checkProfile(first->pIccProfile, first->cbIccProfile, kProfileSize, kKnownOffset, kSwappedRedBytes);
+        const auto *retainedProfile = first->pIccProfile;
+        const auto retainedSize = first->cbIccProfile;
+
+        exports.pageFree(image->context, &first->decode);
+        auto again = decodePage(exports, image->context, 0, nullptr, nullptr);
+        REQUIRE(again.has_value());
+        REQUIRE((again->decode.Flags & PVD_IDF_ICC_PROFILE) != 0);
+        checkProfile(again->pIccProfile, again->cbIccProfile, kProfileSize, kKnownOffset, kSwappedRedBytes);
+        checkProfile(retainedProfile, retainedSize, kProfileSize, kKnownOffset, kSwappedRedBytes);
+
+        exports.pageFree(image->context, &again->decode);
+        exports.fileClose(image->context);
+        exports.exit();
+    }
+#endif
 
     TEST_CASE("synthetic greyscale and 16-bit fixtures produce exact BGR values")
     {
@@ -148,14 +206,14 @@ namespace pvdkit::e2e
         auto rgba16 = openAndDecode(exports, readFixture("rgba16_60x20_par.rpgmvp"), OpenMode::Disk);
         CHECK(rgba16.page.decode.nBPP == 64);
         CHECK(rgba16.page.decode.lImagePitch == 480);
-        CHECK(rgba16.page.decode.Flags == PVD_IDF_ALPHA);
+        checkDecodeFlags(rgba16.page, true, true);
         CHECK(rgba16.page.pixel(0, 0) == Pixel{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00});
         freeAndClose(exports, rgba16);
 
         auto rgb16 = openAndDecode(exports, readFixture("rgb16_88x4a.rpgmvp"), OpenMode::Memory);
         CHECK(rgb16.page.decode.nBPP == 64);
         CHECK(rgb16.page.decode.lImagePitch == 704);
-        CHECK(rgb16.page.decode.Flags == 0);
+        checkDecodeFlags(rgb16.page, false, true);
         CHECK(rgb16.page.pixel(0, 0) == Pixel{0xF4, 0x3B, 0x60, 0x60, 0x96, 0x1B, 0xFF, 0xFF});
         freeAndClose(exports, rgb16);
         exports.exit();

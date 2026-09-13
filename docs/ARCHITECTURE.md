@@ -155,6 +155,7 @@ struct DecodedPage {                     // a view; pixel memory is owned by the
   std::uint32_t bitsPerPixel = 0;        // 24, 32 or 64
   std::uint32_t pitchBytes = 0;          // width * bytesPerPixel, no padding
   bool hasAlpha = false;                 // alpha carries information, rather than being fully opaque
+  std::span<const std::byte> iccProfile; // decoder-owned bytes; empty when there is no profile
 };
 struct OpenRequest {
   std::string_view utf8FileName;
@@ -219,7 +220,11 @@ class IPlugin {
   `ImageInfo` (strings via `c_str()` of strings owned by the session) and stores the context.
   `pageDecode` builds a `Progress` capturing the raw callback + context in a lambda, then fills
   `pvdInfoDecode` from `DecodedPage`, including undocumented `PVD_IDF_ALPHA` bit 2 when `hasAlpha`
-  is true (`PvdApi.hpp` owns the declaration and records the 2021.4.19 BMP.pvd provenance).
+  is true (`PvdApi.hpp` owns the declaration and records the 2021.4.19 BMP.pvd provenance). The
+  experimental `PVDKIT_EXPERIMENT_ICC` build definition is private to `pvdkit_pvd`: on x64 only,
+  a non-empty `DecodedPage::iccProfile` also sets undocumented flag bit 4 and writes its address and
+  `UINT32` size through `pvdInfoDecodeEx`; a profile larger than `UINT32_MAX` is omitted completely
+  (no flag, pointer or size). Default builds and every x86 build touch only the public structure.
   `pageFree` calls `freePage(span over pImage)` — the span length
   is unknown to the host, so the session matches by `data()` only.
 - `Exports.cpp`: the shared composition root, compiled once into every plugin DLL (and into
@@ -230,7 +235,11 @@ class IPlugin {
   Everything is a one-line forward wrapped in `guarded`. It is the only shared file that may
   include the generated `pvd/PluginConstants.hpp` (guard rule).
 - `PvdApi.hpp` includes `<Windows.h>` (lean, `NOMINMAX`) and the SDK header inside `extern "C"`
-  exactly once, for `Shim`, `Exports.cpp` and the tests.
+  exactly once, for `Shim`, `Exports.cpp` and the tests. It also declares the observed extension
+  layout: the documented `pvdInfoDecode` fields followed by `const BYTE *pIccProfile` and
+  `UINT32 cbIccProfile`. Static assertions pin those fields to x64 offsets `0x20` and `0x28`, as
+  written by BMP.pvd from PictureView 2021.4.19 for a BITMAPV5 embedded profile. The x86 layout is
+  unverified and the shim never writes it there.
 - Exports on x86: the eight functions are `__stdcall`, so their symbols are `_pvdInit@0`,
   `_pvdFileOpen@28`, ... while the host resolves the bare names. `Plugin.def` lists the bare names
   and is the one source of truth for both architectures: lld-link (like link.exe) resolves an
@@ -323,6 +332,7 @@ class IDecoder {
  public:
   virtual ~IDecoder() = default;
   [[nodiscard]] virtual const ImageMeta& meta() const = 0;
+  [[nodiscard]] virtual std::span<const std::byte> iccProfile() const = 0; // owned for decoder lifetime
   [[nodiscard]] virtual Result<FrameTiming> frameTiming(std::uint32_t frame) const = 0;
   // Decodes frame `frame` and converts it to `format` (Bgra64 uses 16-bit little-endian samples)
   // into `dst` with `pitchBytes` per row (rows top-down, coded size).
@@ -344,6 +354,11 @@ class IImageDescriber {
   [[nodiscard]] virtual ImageDescription describe(const ImageMeta& meta) const = 0;
 };
 ```
+
+`ImageMeta::hasIcc` is exactly `!IDecoder::iccProfile().empty()`. The adapter owns the bytes for
+the decoder lifetime: libavif's image owns its `image.icc` allocation; RPGMVP copies the span
+returned by `spng_get_iccp` while the parse context is alive because libspng frees that allocation
+with the context. `FileSession::decodePage` forwards the decoder span in every `DecodedPage`.
 
 Decisions (Task 7, open point 1):
 
@@ -408,7 +423,8 @@ Decisions (Task 7, open point 1):
     `hasAlpha`, else `Bgr24`); `decodeFrame`; propagate `meta.hasAlpha` independently of layout;
     `progress.report(1, 3)`;
     if any transform present → `Transform::apply` into a new buffer; `progress.report(2, 3)`;
-    move buffer into `outstanding_`; return the view. Any `false` from `report` → `Aborted`.
+    move buffer into `outstanding_`; return the view together with the decoder-owned ICC profile
+    span. Any `false` from `report` → `Aborted`.
   - `freePage(span)`: erase the buffer whose `bytes().data() == span.data()`; return whether found.
 - A plugin's composition root (`plugins/<id>/src/DefaultPlugin.cpp`) defines `pvd::makePlugin()`
   returning an object that owns `win::FileSource`, the plugin's `IDecoderFactory`, its

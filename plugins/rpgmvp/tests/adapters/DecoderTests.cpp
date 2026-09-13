@@ -161,11 +161,44 @@ TEST_CASE("factory reports metadata for every supported PNG source shape")
         CHECK_FALSE(meta.transforms.clap.has_value());
         CHECK(meta.transforms.irotAngle == 0);
         CHECK_FALSE(meta.transforms.imir.has_value());
-        CHECK_FALSE(meta.hasIcc);
+        const bool expectedIcc = item.name == "rgba16_60x20_par.rpgmvp" || item.name == "rgb16_88x4a.rpgmvp";
+        CHECK(meta.hasIcc == expectedIcc);
+        CHECK(meta.hasIcc == !(*created)->iccProfile().empty());
         CHECK_FALSE(meta.hasExif);
         CHECK_FALSE(meta.hasXmp);
         CHECK(meta.indexed == item.indexed);
         CHECK(meta.interlaced == item.interlaced);
+    }
+}
+
+TEST_CASE("embedded ICC profiles and exact quadrant pixels survive the RPGMVP adapter")
+{
+    DecoderFactory factory;
+    for (const auto name : {"icc_swapped_rb_64x64.rpgmvp", "icc_srgb_64x64.rpgmvp"}) {
+        CAPTURE(name);
+        auto bytes = fixture(name);
+        auto created = factory.create(bytes, kOptions);
+        REQUIRE(created.has_value());
+        const auto profile = (*created)->iccProfile();
+        REQUIRE(profile.size() == 2560);
+        CHECK((*created)->meta().hasIcc);
+        CHECK((*created)->meta().hasIcc == !profile.empty());
+        CHECK(std::ranges::equal(profile.first<4>(),
+                                 std::array{std::byte{0x00}, std::byte{0x00}, std::byte{0x0A}, std::byte{0x00}}));
+        CHECK(std::ranges::equal(profile.subspan<36, 4>(),
+                                 std::array{std::byte{'a'}, std::byte{'c'}, std::byte{'s'}, std::byte{'p'}}));
+
+        constexpr std::uint32_t pitch = 64U * 3U;
+        std::vector<std::byte> pixels(std::size_t{pitch} * 64U);
+        REQUIRE((*created)->decodeFrame(0, PixelFormat::Bgr24, pixels, pitch));
+        const auto pixel = [&](const std::uint32_t x, const std::uint32_t y) {
+            const auto offset = static_cast<std::size_t>(y) * pitch + static_cast<std::size_t>(x) * 3U;
+            return std::array{pixels[offset], pixels[offset + 1U], pixels[offset + 2U]};
+        };
+        CHECK(pixel(16, 16) == std::array{std::byte{0}, std::byte{0}, std::byte{255}});
+        CHECK(pixel(48, 16) == std::array{std::byte{0}, std::byte{255}, std::byte{0}});
+        CHECK(pixel(16, 48) == std::array{std::byte{255}, std::byte{0}, std::byte{0}});
+        CHECK(pixel(48, 48) == std::array{std::byte{128}, std::byte{128}, std::byte{128}});
     }
 }
 
