@@ -72,8 +72,9 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 ## Known limitations
 
 - ICC profiles are not applied: PictureView ignores them and pvdkit does not have a CMS yet.
-- Gain maps, layered (`a1lx`) selection and progressive preview rendering are not supported; EXIF
-  orientation is not applied (AVIF's `irot`/`imir` take precedence by spec).
+- EXIF orientation is honoured when the file has no `irot`/`imir`; those AVIF transforms take
+  precedence by spec.
+- Gain maps, layered (`a1lx`) selection and progressive preview rendering are not supported.
 - Files are mapped with `FILE_SHARE_WRITE | FILE_SHARE_DELETE` so Far can keep working with them.
   If another process truncates a file while a page is being decoded, reading the mapped view
   raises a structured exception that the C++ firewall cannot catch - the same behaviour as the

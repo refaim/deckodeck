@@ -156,7 +156,7 @@ struct DecodedPage {                     // a view; pixel memory is owned by the
   std::uint32_t bitsPerPixel = 0;        // 24, 32 or 64
   std::uint32_t pitchBytes = 0;          // width * bytesPerPixel, no padding
   bool hasAlpha = false;                 // alpha carries information, rather than being fully opaque
-  std::span<const std::byte> iccProfile; // decoder-owned bytes; empty when there is no profile
+  std::uint8_t hostOrientation = 0;      // 0..7, PictureView's orientation code
 };
 struct OpenRequest {
   std::string_view utf8FileName;
@@ -221,11 +221,10 @@ class IPlugin {
   `ImageInfo` (strings via `c_str()` of strings owned by the session) and stores the context.
   `pageDecode` builds a `Progress` capturing the raw callback + context in a lambda, then fills
   `pvdInfoDecode` from `DecodedPage`, including undocumented `PVD_IDF_ALPHA` bit 2 when `hasAlpha`
-  is true (`PvdApi.hpp` owns the declaration and records the 2021.4.19 BMP.pvd provenance). The
-  experimental `PVDKIT_EXPERIMENT_ICC` build definition is private to `pvdkit_pvd`: on x64 only,
-  a non-empty `DecodedPage::iccProfile` also sets undocumented flag bit 4 and writes its address and
-  `UINT32` size through `pvdInfoDecodeEx`; a profile larger than `UINT32_MAX` is omitted completely
-  (no flag, pointer or size). Default builds and every x86 build touch only the public structure.
+  is true and `DecodedPage::hostOrientation << PVD_IDF_ORIENTATION_SHIFT` in the high nibble.
+  `PvdApi.hpp` owns both declarations and records their provenance; the recovered host behaviour and
+  EXIF-to-code table live in [`docs/host/pictureview-abi.md`](host/pictureview-abi.md). The shim writes
+  only the documented `pvdInfoDecode` fields.
   `pageFree` calls `freePage(span over pImage)` — the span length
   is unknown to the host, so the session matches by `data()` only.
 - `Exports.cpp`: the shared composition root, compiled once into every plugin DLL (and into
@@ -236,11 +235,9 @@ class IPlugin {
   Everything is a one-line forward wrapped in `guarded`. It is the only shared file that may
   include the generated `pvd/PluginConstants.hpp` (guard rule).
 - `PvdApi.hpp` includes `<Windows.h>` (lean, `NOMINMAX`) and the SDK header inside `extern "C"`
-  exactly once, for `Shim`, `Exports.cpp` and the tests. It also declares the observed extension
-  layout: the documented `pvdInfoDecode` fields followed by `const BYTE *pIccProfile` and
-  `UINT32 cbIccProfile`. Static assertions pin those fields to x64 offsets `0x20` and `0x28`, as
-  written by BMP.pvd from PictureView 2021.4.19 for a BITMAPV5 embedded profile. The x86 layout is
-  unverified and the shim never writes it there.
+  exactly once, for `Shim`, `Exports.cpp` and the tests. It also declares the two observed decode
+  flag conventions used by the shim: alpha bit 2 and the PictureView orientation code beginning at
+  bit 4. Their binary provenance is recorded in [`docs/host/pictureview-abi.md`](host/pictureview-abi.md).
 - Exports on x86: the eight functions are `__stdcall`, so their symbols are `_pvdInit@0`,
   `_pvdFileOpen@28`, ... while the host resolves the bare names. `Plugin.def` lists the bare names
   and is the one source of truth for both architectures: lld-link (like link.exe) resolves an
@@ -322,6 +319,7 @@ struct ImageMeta {                    // every scalar has a default: an empty Im
   bool indexed = false;                 // source stores palette indices; depth is the index width (1/2/4/8)
   bool interlaced = false;              // source is stored progressively (PNG Adam7; informational only)
   std::optional<float> masteringPeakNits; // HDR mastering/content peak in cd/m2, when supplied
+  std::uint8_t exifOrientation = 0;      // 0 = absent/ignored; 1..8 are EXIF orientation values
 };
 struct FrameTiming { std::uint32_t durationMs; };
 struct DecoderOptions {
@@ -361,7 +359,8 @@ class IImageDescriber {
 `ImageMeta::hasIcc` is exactly `!IDecoder::iccProfile().empty()`. The adapter owns the bytes for
 the decoder lifetime: libavif's image owns its `image.icc` allocation; RPGMVP copies the span
 returned by `spng_get_iccp` while the parse context is alive because libspng frees that allocation
-with the context. `FileSession::decodePage` forwards the decoder span in every `DecodedPage`.
+with the context. The accessor is retained for a future colour-management pipeline; ICC bytes are
+not part of the PVD boundary.
 
 Decisions (Task 7, open point 1):
 
@@ -369,6 +368,10 @@ Decisions (Task 7, open point 1):
   valid "none", HEIF-family formats all carry clap/irot/imir, and a format without them simply
   leaves the struct empty so `FileSession` never calls `Transform::apply`. No transform step is
   injected.
+- `exifOrientation` is normalized to 0 or 1..8 by a codec adapter. `FileSession` maps it to the
+  host's orientation code only when `Transforms{}` is empty, so pixels are never transformed by
+  both the shared kernel and PictureView. An AVIF adapter ignores EXIF orientation whenever `irot`
+  or `imir` is present, following their MIAF precedence.
 - `chroma` and `cicp` stay plain (non-optional) fields. They are the ISO/IEC 23091-2 signalling of
   the coded samples, and CICP itself has a spelling for every case: an RGB format reports
   `Yuv444` (no subsampling) with `cicp.matrix = 0` (identity) and `fullRange = true` — for sRGB
@@ -435,14 +438,15 @@ Decisions (Task 7, open point 1):
   - `pageInfo(p)`: range check; `displaySize(meta)`;
     `bitsPerPixel = indexed ? depth : depth × (hasAlpha ? 4 : 3)` (informational, so indexed4
     reports 4 and 10-bit RGBA reports 40); `frameTimeMs` = `frameTiming(p)` when animated else 0.
+    EXIF orientation does not alter these dimensions because PictureView applies that rotation.
   - `decodePage(p, progress)`: range check; `progress.report(0, 3)`; allocate `PixelBuffer` at coded
     size (`Bgra64` with 8 bytes/pixel when colour presentation is needed, or when
     `deepOutput && depth > 8`; otherwise `Bgra32` if `hasAlpha`, else `Bgr24`); `decodeFrame`;
     apply `colour::Presentation` in place to each BGRA64 row before any geometric transform;
     propagate `meta.hasAlpha` independently of layout; `progress.report(1, 3)`;
     if any transform present → `Transform::apply` into a new buffer; `progress.report(2, 3)`;
-    move buffer into `outstanding_`; return the view together with the decoder-owned ICC profile
-    span. Any `false` from `report` → `Aborted`.
+    move buffer into `outstanding_`; return the view with the EXIF-to-PictureView orientation code,
+    gated off whenever a shared transform is present. Any `false` from `report` → `Aborted`.
   - `freePage(span)`: erase the buffer whose `bytes().data() == span.data()`; return whether found.
 - A plugin's composition root (`plugins/<id>/src/DefaultPlugin.cpp`) defines `pvd::makePlugin()`
   returning an object that owns `win::FileSource`, the plugin's `IDecoderFactory`, its
@@ -788,9 +792,11 @@ Decisions (Task 7, open point 1):
 
 ## 8. Out of scope (document, do not implement)
 
-CICP-described colour is converted for display by `src/core/colour`. ICC profiles are not applied:
-the host ignores them and pvdkit does not have a CMS yet. The PVD interface provides no
-user-adjustable exposure or tone controls, and gain maps are not supported. Also out of scope are
+CICP-described colour is converted for display by `src/core/colour`. ICC profiles are retained by
+decoder adapters for a future CMS but are neither applied nor forwarded through PVD; the host facts
+behind that decision are in [`docs/host/pictureview-abi.md`](host/pictureview-abi.md). The PVD
+interface provides no user-adjustable exposure or tone controls, and gain maps are not supported.
+Also out of scope are
 per-plugin configuration files and a plugin that serves several formats from one DLL (one format
 per plugin keeps the identity, the priority and the packaging one-dimensional). Format-specific
 exclusions live in the plugin's `DESIGN.md`.

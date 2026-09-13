@@ -69,6 +69,7 @@ namespace pvdkit::core
         bool interlaced = false; ///< Source is stored progressively (for example, PNG Adam7).
         /// HDR mastering/content peak in cd/m2 when the container exposes one.
         std::optional<float> masteringPeakNits{};
+        std::uint8_t exifOrientation = 0; ///< 0 = absent/ignored; 1..8 use the EXIF orientation values.
     };
 
     /// Holds the display duration of one decoded frame.

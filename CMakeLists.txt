@@ -10,7 +10,6 @@ project(pvdkit LANGUAGES CXX RC)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 option(PVDKIT_COVERAGE "Instrument every target for llvm-cov" OFF)
-option(PVDKIT_EXPERIMENT_ICC "Expose decoded ICC profiles through PictureView's undocumented x64 extension" OFF)
 # The `asan` preset (x64, RelWithDebInfo so /MT and the release ports stay): AddressSanitizer on
 # every target including the plugin DLLs, unoptimised and with symbols so a report names the
 # line. LeakSanitizer is not part of it: clang 19's Windows runtime answers "detect_leaks is not

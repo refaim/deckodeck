@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 
+#include "core/Transform.hpp"
 #include "core/colour/Pipeline.hpp"
 #include "core/colour/Primaries.hpp"
 #include "core/colour/Transfer.hpp"
@@ -133,6 +134,9 @@ namespace pvdkit::avif
         }
         if (meta.hasExif) {
             append(description, "EXIF");
+        }
+        if (meta.exifOrientation != 0 && !core::Transform::hasTransforms(meta.transforms)) {
+            append(description, "EXIF orientation " + std::to_string(meta.exifOrientation));
         }
         if (meta.hasXmp) {
             append(description, "XMP");

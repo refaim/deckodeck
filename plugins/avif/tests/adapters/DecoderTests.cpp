@@ -83,18 +83,25 @@ namespace
         bool icc;
         bool exif;
         bool xmp;
+        std::uint8_t exifOrientation = 0;
     };
 
     constexpr std::array kExpectedMeta{
         ExpectedMeta{"white_1x1.avif", 1, 1, 8, ChromaFormat::Yuv444, false, 1, false, 0, false, false, false, false},
         ExpectedMeta{"kodim03_yuv420_8bpc.avif", 768, 512, 8, ChromaFormat::Yuv420, false, 1, false, 0, false, false,
                      false, false},
+        ExpectedMeta{"kodim03_exif_orientation_6.avif", 768, 512, 8, ChromaFormat::Yuv420, false, 1, false, 0, false,
+                     false, true, false, 6},
+        ExpectedMeta{"kodim03_exif_orientation_3.avif", 768, 512, 8, ChromaFormat::Yuv420, false, 1, false, 0, false,
+                     false, true, false, 3},
         ExpectedMeta{"cosmos1650_yuv444_10bpc_p3pq.avif", 1024, 428, 10, ChromaFormat::Yuv444, false, 1, false, 0,
                      false, false, false, false},
         ExpectedMeta{"alpha_noispe.avif", 80, 80, 8, ChromaFormat::Yuv444, true, 1, false, 0, false, false, false,
                      false},
         ExpectedMeta{"abc_color_irot_alpha_irot.avif", 512, 256, 8, ChromaFormat::Yuv444, true, 1, false, 1, false,
                      false, false, false},
+        ExpectedMeta{"abc_color_irot_alpha_irot_plus_exif6.avif", 512, 256, 8, ChromaFormat::Yuv444, true, 1, false, 1,
+                     false, false, true, false, 0},
         ExpectedMeta{"abc_color_irot_alpha_NOirot.avif", 512, 256, 8, ChromaFormat::Yuv444, true, 1, false, 1, false,
                      false, false, false},
         ExpectedMeta{"clop_irot_imor.avif", 12, 34, 10, ChromaFormat::Yuv444, true, 1, false, 1, false, false, false,
@@ -106,7 +113,7 @@ namespace
         ExpectedMeta{"colors-animated-8bpc.avif", 150, 150, 8, ChromaFormat::Yuv420, false, 5, false, 0, false, false,
                      false, false},
         ExpectedMeta{"colors-animated-8bpc-alpha-exif-xmp.avif", 150, 150, 8, ChromaFormat::Yuv420, true, 5, false, 0,
-                     false, false, true, true},
+                     false, false, true, true, 1},
         ExpectedMeta{"colors-animated-12bpc-keyframes-0-2-3.avif", 64, 64, 12, ChromaFormat::Yuv422, true, 5, false, 0,
                      false, false, false, false},
         ExpectedMeta{"colors_hdr_rec2020.avif", 200, 200, 10, ChromaFormat::Yuv444, false, 1, false, 0, false, false,
@@ -114,7 +121,7 @@ namespace
         ExpectedMeta{"colors_sdr_srgb.avif", 200, 200, 8, ChromaFormat::Yuv444, false, 1, false, 0, false, false, false,
                      false},
         ExpectedMeta{"paris_icc_exif_xmp.avif", 403, 302, 8, ChromaFormat::Yuv444, false, 1, false, 0, false, true,
-                     true, true},
+                     true, true, 1},
         ExpectedMeta{"draw_points_idat_progressive.avif", 33, 11, 8, ChromaFormat::Yuv444, true, 1, false, 0, false,
                      false, false, false},
         ExpectedMeta{"extended_pixi.avif", 4, 4, 8, ChromaFormat::Yuv420, false, 1, false, 0, false, false, false,
@@ -348,9 +355,42 @@ TEST_CASE("all positive fixtures expose complete container metadata")
         CHECK(meta.hasIcc == !(*created)->iccProfile().empty());
         CHECK(meta.hasExif == expected.exif);
         CHECK(meta.hasXmp == expected.xmp);
+        CHECK(meta.exifOrientation == expected.exifOrientation);
         const auto expectedPeak = expected.name == "colors_hdr_rec2020.avif" ? std::optional{470.0F} : std::nullopt;
         CHECK(meta.masteringPeakNits == expectedPeak);
     }
+}
+
+TEST_CASE("EXIF orientation parsing accepts only values 1..8 and yields to irot or imir")
+{
+    for (std::uint8_t orientation = 1; orientation <= 8; ++orientation) {
+        CHECK(pvdkit::avif::detail::normalizedExifOrientation(orientation) == orientation);
+    }
+    CHECK(pvdkit::avif::detail::normalizedExifOrientation(0) == 0);
+    CHECK(pvdkit::avif::detail::normalizedExifOrientation(9) == 0);
+    CHECK(pvdkit::avif::detail::normalizedExifOrientation(255) == 0);
+
+    auto bytes = readFixture("kodim03_exif_orientation_6.avif");
+    const auto decoder = std::unique_ptr<avifDecoder, AvifDecoderDestroy>{avifDecoderCreate()};
+    REQUIRE(decoder != nullptr);
+    REQUIRE(avifDecoderSetIOMemory(decoder.get(), reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()) ==
+            AVIF_RESULT_OK);
+    REQUIRE(avifDecoderParse(decoder.get()) == AVIF_RESULT_OK);
+    REQUIRE(pvdkit::avif::detail::exifOrientation(*decoder->image) == 6);
+
+    std::size_t offset = decoder->image->exif.size;
+    REQUIRE(avifGetExifOrientationOffset(decoder->image->exif.data, decoder->image->exif.size, &offset) ==
+            AVIF_RESULT_OK);
+    REQUIRE(offset < decoder->image->exif.size);
+    for (const auto transform : {AVIF_TRANSFORM_IROT, AVIF_TRANSFORM_IMIR}) {
+        decoder->image->transformFlags = transform;
+        CHECK(pvdkit::avif::detail::exifOrientation(*decoder->image) == 0);
+    }
+
+    avifImage invalidExif{};
+    std::array<std::uint8_t, 1> invalidPayload{};
+    invalidExif.exif = avifRWData{invalidPayload.data(), invalidPayload.size()};
+    CHECK(pvdkit::avif::detail::exifOrientation(invalidExif) == 0);
 }
 
 TEST_CASE("AVIF CLLI maxCLL supplies the HDR mastering peak")

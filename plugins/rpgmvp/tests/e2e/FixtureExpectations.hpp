@@ -14,7 +14,6 @@ namespace pvdkit::rpgmvp::tests
         std::uint32_t height;
         std::uint32_t sourceBpp;
         bool alpha;
-        bool icc = false;
     };
 
     inline constexpr std::array kAccepted{
@@ -22,11 +21,11 @@ namespace pvdkit::rpgmvp::tests
         FixtureExpectation{"indexed4_trns_144x192_cursor.rpgmvp", 144, 192, 4, true},
         FixtureExpectation{"indexed8_trns_288x384_weapons3.rpgmvp", 288, 384, 8, true},
         FixtureExpectation{"rgb8_816x624_gameover.rpgmvp", 816, 624, 24, false},
-        FixtureExpectation{"rgba16_60x20_par.rpgmvp", 60, 20, 64, true, true},
+        FixtureExpectation{"rgba16_60x20_par.rpgmvp", 60, 20, 64, true},
         FixtureExpectation{"indexed8_trns_82x38_shadow2.png_", 82, 38, 8, true},
         FixtureExpectation{"rgba8_576x384_lolded.png_", 576, 384, 32, true},
         FixtureExpectation{"rgba8_adam7_700x700_kamen.png_", 700, 700, 32, true},
-        FixtureExpectation{"rgb16_88x4a.rpgmvp", 88, 4, 48, false, true},
+        FixtureExpectation{"rgb16_88x4a.rpgmvp", 88, 4, 48, false},
         FixtureExpectation{"rgba8_48x48.rpgmvp", 48, 48, 32, true},
         FixtureExpectation{"rgba8_srgb_48x48.rpgmvp", 48, 48, 32, true},
         FixtureExpectation{"gray8_16x8.rpgmvp", 16, 8, 24, false},
@@ -34,8 +33,8 @@ namespace pvdkit::rpgmvp::tests
         FixtureExpectation{"gray1_16x8.rpgmvp", 16, 8, 3, false},
         FixtureExpectation{"rgba8_noninterlaced_700x700_kamen.rpgmvp", 700, 700, 32, true},
         FixtureExpectation{"apng_4x4.rpgmvp", 4, 4, 24, false},
-        FixtureExpectation{"icc_swapped_rb_64x64.rpgmvp", 64, 64, 24, false, true},
-        FixtureExpectation{"icc_srgb_64x64.rpgmvp", 64, 64, 24, false, true},
+        FixtureExpectation{"icc_swapped_rb_64x64.rpgmvp", 64, 64, 24, false},
+        FixtureExpectation{"icc_srgb_64x64.rpgmvp", 64, 64, 24, false},
     };
 
     inline constexpr std::array<std::string_view, 8> kRejected{

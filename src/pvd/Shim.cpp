@@ -13,35 +13,6 @@
 namespace pvdkit::pvd
 {
 
-    std::optional<UINT32> detail::iccExtensionSize(const std::size_t profileSize) noexcept
-    {
-        if constexpr (std::numeric_limits<std::size_t>::max() > std::numeric_limits<UINT32>::max()) {
-            if (profileSize > std::numeric_limits<UINT32>::max()) {
-                return std::nullopt;
-            }
-        }
-        return static_cast<UINT32>(profileSize);
-    }
-
-    void detail::writeIccExtension(pvdInfoDecodeEx &output, const std::span<const std::byte> profile) noexcept
-    {
-        static_cast<void>(iccExtensionSize(profile.size()).transform([&](const UINT32 profileSize) {
-            output.pIccProfile = reinterpret_cast<const BYTE *>(profile.data());
-            output.cbIccProfile = profileSize;
-            output.Flags |= PVD_IDF_ICC_PROFILE;
-            return true;
-        }));
-    }
-
-    bool detail::iccExperimentEnabled() noexcept
-    {
-#if defined(PVDKIT_EXPERIMENT_ICC) && defined(_WIN64)
-        return true;
-#else
-        return false;
-#endif
-    }
-
     void fillDefaultPluginInfo(pvdInfoPlugin *output, const PluginIdentity &identity) noexcept
     {
         if (output == nullptr) {
@@ -183,16 +154,11 @@ namespace pvdkit::pvd
                 }
                 output->pImage = const_cast<BYTE *>(reinterpret_cast<const BYTE *>(decoded->pixels.data()));
                 output->pPalette = nullptr;
-                output->Flags = decoded->hasAlpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0};
+                output->Flags = (decoded->hasAlpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0}) |
+                                (static_cast<UINT32>(decoded->hostOrientation) << PVD_IDF_ORIENTATION_SHIFT);
                 output->nBPP = decoded->bitsPerPixel;
                 output->nColorsUsed = 0;
                 output->lImagePitch = static_cast<INT32>(decoded->pitchBytes);
-#if defined(PVDKIT_EXPERIMENT_ICC) && defined(_WIN64)
-                if (!decoded->iccProfile.empty()) {
-                    auto &extended = *reinterpret_cast<pvdInfoDecodeEx *>(output);
-                    detail::writeIccExtension(extended, decoded->iccProfile);
-                }
-#endif
                 return BOOL{1};
             },
             BOOL{0});

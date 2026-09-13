@@ -100,6 +100,14 @@ namespace pvdkit::avif
             meta = baseMeta();
             meta.hasXmp = true;
             CHECK(describe(meta).ends_with("XMP"));
+
+            meta = baseMeta();
+            meta.hasExif = true;
+            meta.exifOrientation = 6;
+            CHECK(describe(meta).ends_with("EXIF, EXIF orientation 6"));
+
+            meta.transforms.clap = CropRect{0, 0, 4, 3};
+            CHECK_FALSE(describe(meta).contains("EXIF orientation"));
         }
 
         TEST_CASE("describe reports each transform and mirror axis")
@@ -132,6 +140,7 @@ namespace pvdkit::avif
             meta.animated = true;
             meta.hasIcc = true;
             meta.hasExif = true;
+            meta.exifOrientation = 6;
             meta.hasXmp = true;
             meta.transforms = Transforms{CropRect{1, 1, 4, 3}, 3, MirrorAxis::LeftRight};
 

@@ -72,27 +72,12 @@ namespace pvdkit::e2e
             return fixture.presentation || fixture.pageBpp > shallowBits ? 64U : shallowBits;
         }
 
-        void checkDecodeFlags(const DecodedPage &decoded, const bool expectedAlpha, const bool profileAvailable)
+        void checkDecodeFlags(const DecodedPage &decoded, const bool expectedAlpha,
+                              const std::uint8_t hostOrientation = 0)
         {
             const auto alphaFlags = expectedAlpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0};
-            constexpr bool kExperimentEnabled = PVDKIT_E2E_EXPECT_ICC_EXPERIMENT != 0;
-            const auto expectedProfile = profileAvailable && kExperimentEnabled;
-            const auto iccFlags = expectedProfile ? UINT32{PVD_IDF_ICC_PROFILE} : UINT32{0};
-            CHECK(decoded.decode.Flags == (alphaFlags | iccFlags));
-            CHECK((decoded.pIccProfile != nullptr) == expectedProfile);
-            CHECK((decoded.cbIccProfile != 0) == expectedProfile);
-        }
-
-        template <std::size_t Size>
-        void checkProfile(const BYTE *profile, const UINT32 size, const UINT32 expectedSize,
-                          const std::size_t knownOffset, const std::array<BYTE, Size> &knownBytes)
-        {
-            REQUIRE(profile != nullptr);
-            REQUIRE(size == expectedSize);
-            const std::span<const BYTE> bytes{profile, size};
-            CHECK(std::ranges::equal(bytes.subspan<36, 4>(), std::array<BYTE, 4>{'a', 'c', 's', 'p'}));
-            REQUIRE(knownOffset + knownBytes.size() <= bytes.size());
-            CHECK(std::ranges::equal(bytes.subspan(knownOffset, knownBytes.size()), knownBytes));
+            const auto orientationFlags = static_cast<UINT32>(hostOrientation) << PVD_IDF_ORIENTATION_SHIFT;
+            CHECK(decoded.decode.Flags == (alphaFlags | orientationFlags));
         }
 
         // Opens `file` in `mode` and decodes every page; the caller closes the context.
@@ -238,7 +223,7 @@ namespace pvdkit::e2e
                 CHECK(d.decode.nBPP == outputBitsPerPixel(expected));
                 CHECK(d.decode.pPalette == nullptr);
                 CHECK(d.decode.nColorsUsed == 0);
-                checkDecodeFlags(d, expected.alpha, expected.icc);
+                checkDecodeFlags(d, expected.alpha, expected.hostOrientation);
                 CHECK(d.decode.lImagePitch == static_cast<INT32>(expected.width * d.bytesPerPixel()));
 
                 CHECK(m.page.lWidth == d.page.lWidth);
@@ -248,7 +233,7 @@ namespace pvdkit::e2e
                 CHECK(m.decode.nBPP == d.decode.nBPP);
                 CHECK(m.decode.lImagePitch == d.decode.lImagePitch);
                 CHECK(m.decode.Flags == d.decode.Flags);
-                checkDecodeFlags(m, expected.alpha, expected.icc);
+                checkDecodeFlags(m, expected.alpha, expected.hostOrientation);
                 CHECK(m.pixels() == d.pixels());
             }
 
@@ -260,38 +245,35 @@ namespace pvdkit::e2e
         exports.exit();
     }
 
-#if PVDKIT_E2E_EXPECT_ICC_EXPERIMENT
-    TEST_CASE("the enabled x64 DLL keeps the real AVIF ICC profile alive until file close")
+    TEST_CASE("EXIF orientation is delegated to PictureView unless an irot transform is present")
     {
-        constexpr UINT32 kProfileSize = 596;
-        constexpr std::size_t kKnownOffset = 128;
-        constexpr std::array<BYTE, 16> kKnownBytes{0x00, 0x00, 0x00, 0x0B, 'd',  'e',  's',  'c',
-                                                   0x00, 0x00, 0x01, 0x08, 0x00, 0x00, 0x00, 0x40};
         const auto plugin = loadInitializedPlugin();
         const auto &exports = plugin.exports();
-        const auto file = readFixture("paris_icc_exif_xmp.avif");
-        auto image = openImage(exports, file, OpenMode::Disk);
-        REQUIRE(image.has_value());
 
-        auto first = decodePage(exports, image->context, 0, nullptr, nullptr);
-        REQUIRE(first.has_value());
-        REQUIRE((first->decode.Flags & PVD_IDF_ICC_PROFILE) != 0);
-        checkProfile(first->pIccProfile, first->cbIccProfile, kProfileSize, kKnownOffset, kKnownBytes);
-        const auto *retainedProfile = first->pIccProfile;
-        const auto retainedSize = first->cbIccProfile;
-
-        exports.pageFree(image->context, &first->decode);
-        auto again = decodePage(exports, image->context, 0, nullptr, nullptr);
-        REQUIRE(again.has_value());
-        REQUIRE((again->decode.Flags & PVD_IDF_ICC_PROFILE) != 0);
-        checkProfile(again->pIccProfile, again->cbIccProfile, kProfileSize, kKnownOffset, kKnownBytes);
-        checkProfile(retainedProfile, retainedSize, kProfileSize, kKnownOffset, kKnownBytes);
-
-        exports.pageFree(image->context, &again->decode);
-        exports.fileClose(image->context);
+        struct Case
+        {
+            std::string_view name;
+            UINT32 hostCode;
+            std::uint32_t width;
+            std::uint32_t height;
+        };
+        constexpr std::array cases{
+            Case{"kodim03_exif_orientation_6.avif", 7, 768, 512},
+            Case{"kodim03_exif_orientation_3.avif", 3, 768, 512},
+            Case{"abc_color_irot_alpha_irot_plus_exif6.avif", 0, 256, 512},
+        };
+        for (const auto &item : cases) {
+            CAPTURE(item.name);
+            auto opened = openAndDecodeAll(exports, readFixture(item.name), OpenMode::Disk);
+            REQUIRE(opened.pages.size() == 1);
+            const auto &page = opened.pages.front();
+            CHECK(page.page.lWidth == item.width);
+            CHECK(page.page.lHeight == item.height);
+            CHECK((page.decode.Flags >> PVD_IDF_ORIENTATION_SHIFT) == item.hostCode);
+            freeAndClose(exports, opened);
+        }
         exports.exit();
     }
-#endif
 
     TEST_CASE("a fixture libavif refuses is refused consistently in both modes without crashing")
     {

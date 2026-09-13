@@ -14,7 +14,8 @@ How to use:
   at any depth, and all pictures deeper than 8 bits use BGRA64. Thus, with
   dithering or 10-bit output enabled in PictureView's settings, you see all
   the precision of deep files. Rotation, mirroring and cropping stored in
-  the file are applied.
+  the file are applied. EXIF orientation is honoured when the file has
+  no irot/imir transformation.
 
   HDR (PQ/HLG) and wide-gamut (Rec.2020/P3) pictures are converted to
   sRGB for display, with BT.2390 tone mapping for HDR.

@@ -1,6 +1,7 @@
 #include "core/FileSession.hpp"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 #include "core/Transform.hpp"
@@ -19,6 +20,18 @@ namespace pvdkit::core
         Error aborted()
         {
             return Error{ErrorCode::Aborted, "decoding was aborted by the host"};
+        }
+
+        std::uint8_t hostOrientation(const ImageMeta &meta) noexcept
+        {
+            if (Transform::hasTransforms(meta.transforms)) {
+                return 0;
+            }
+            constexpr std::array<std::uint8_t, 9> exifToHost{0, 0, 2, 3, 1, 6, 7, 5, 4};
+            if (meta.exifOrientation >= exifToHost.size()) {
+                return 0;
+            }
+            return exifToHost[meta.exifOrientation];
         }
 
     } // namespace
@@ -114,7 +127,7 @@ namespace pvdkit::core
         const auto view = retained->view();
         outstanding_.push_back(std::move(retained));
         return pvd::DecodedPage{view.pixels, view.bytesPerPixel * 8, view.pitchBytes, meta.hasAlpha,
-                                decoder_->iccProfile()};
+                                hostOrientation(meta)};
     }
 
     bool FileSession::freePage(const std::span<const std::byte> pixels)

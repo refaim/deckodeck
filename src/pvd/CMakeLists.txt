@@ -9,8 +9,6 @@ list(REMOVE_ITEM PVDKIT_PVD_SOURCES ${PVDKIT_PVD_EXPORT_SOURCES})
 add_library(pvdkit_pvd STATIC ${PVDKIT_PVD_SOURCES})
 target_include_directories(pvdkit_pvd PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(pvdkit_pvd PUBLIC pvdkit_options)
-target_compile_definitions(
-  pvdkit_pvd PRIVATE $<$<BOOL:${PVDKIT_EXPERIMENT_ICC}>:PVDKIT_EXPERIMENT_ICC=1>)
 
 # The three files every plugin DLL is made of, on top of its own composition root: Exports.cpp
 # (the eight forwards, compiled once per plugin against that plugin's generated

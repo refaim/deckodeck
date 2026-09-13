@@ -142,7 +142,6 @@ namespace pvdkit::core
         TEST_CASE("decodePage emits BGR24 pixels and all progress steps")
         {
             DecoderState state;
-            state.iccProfile = {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
             const auto imageMeta = test::meta();
             FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
             std::vector<std::pair<std::uint32_t, std::uint32_t>> reports;
@@ -157,7 +156,7 @@ namespace pvdkit::core
             CHECK(decoded->bitsPerPixel == 24);
             CHECK(decoded->pitchBytes == 9);
             CHECK_FALSE(decoded->hasAlpha);
-            CHECK(std::ranges::equal(decoded->iccProfile, state.iccProfile));
+            CHECK(decoded->hostOrientation == 0);
             CHECK(decoded->pixels.size() == 18);
             CHECK(pixelIds(*decoded, 3, 3) == std::vector<unsigned>{1, 2, 3, 4, 5, 6});
             CHECK(state.decodedFrames == std::vector<std::uint32_t>{0});
@@ -166,6 +165,59 @@ namespace pvdkit::core
             CHECK(state.decodedSizes == std::vector<std::size_t>{18});
             CHECK(reports == std::vector<std::pair<std::uint32_t, std::uint32_t>>{{0, 3}, {1, 3}, {2, 3}});
             CHECK(session.freePage(decoded->pixels));
+        }
+
+        TEST_CASE("decodePage maps every EXIF orientation to the PictureView host code")
+        {
+            constexpr std::array<std::uint8_t, 9> hostCodes{0, 0, 2, 3, 1, 6, 7, 5, 4};
+            for (std::size_t orientation = 0; orientation < hostCodes.size(); ++orientation) {
+                CAPTURE(orientation);
+                DecoderState state;
+                auto imageMeta = test::meta();
+                imageMeta.exifOrientation = static_cast<std::uint8_t>(orientation);
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+
+                const auto info = session.pageInfo(0);
+                REQUIRE(info.has_value());
+                CHECK(info->width == imageMeta.width);
+                CHECK(info->height == imageMeta.height);
+
+                const auto decoded = session.decodePage(0, pvd::Progress{});
+                REQUIRE(decoded.has_value());
+                CHECK(decoded->hostOrientation == hostCodes[orientation]);
+                CHECK(session.freePage(decoded->pixels));
+            }
+
+            DecoderState state;
+            auto invalidMeta = test::meta();
+            invalidMeta.exifOrientation = 9;
+            FileSession invalidSession(nullptr, decoder(invalidMeta, state), test::imageInfo(invalidMeta),
+                                       test::options());
+            const auto invalid = invalidSession.decodePage(0, pvd::Progress{});
+            REQUIRE(invalid.has_value());
+            CHECK(invalid->hostOrientation == 0);
+            CHECK(invalidSession.freePage(invalid->pixels));
+        }
+
+        TEST_CASE("decodePage suppresses the host orientation when core applies a transform")
+        {
+            constexpr std::array transforms{
+                Transforms{CropRect{0, 0, 2, 2}, 0, {}},
+                Transforms{{}, 1, {}},
+                Transforms{{}, 0, MirrorAxis::LeftRight},
+            };
+            for (const auto &transform : transforms) {
+                DecoderState state;
+                auto imageMeta = test::meta();
+                imageMeta.exifOrientation = 6;
+                imageMeta.transforms = transform;
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+
+                const auto decoded = session.decodePage(0, pvd::Progress{});
+                REQUIRE(decoded.has_value());
+                CHECK(decoded->hostOrientation == 0);
+                CHECK(session.freePage(decoded->pixels));
+            }
         }
 
         TEST_CASE("decodePage emits BGRA32 pixels when alpha is present")

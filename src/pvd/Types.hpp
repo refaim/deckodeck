@@ -44,10 +44,10 @@ namespace pvdkit::pvd
     struct DecodedPage
     {
         std::span<const std::byte> pixels;
-        std::uint32_t bitsPerPixel = 0; ///< 24, 32 or 64.
-        std::uint32_t pitchBytes = 0;   ///< Width times bytes per pixel, without padding.
-        bool hasAlpha = false;          ///< The alpha channel carries information rather than being fully opaque.
-        std::span<const std::byte> iccProfile; ///< Decoder-owned bytes, valid for the session lifetime.
+        std::uint32_t bitsPerPixel = 0;   ///< 24, 32 or 64.
+        std::uint32_t pitchBytes = 0;     ///< Width times bytes per pixel, without padding.
+        bool hasAlpha = false;            ///< The alpha channel carries information rather than being fully opaque.
+        std::uint8_t hostOrientation = 0; ///< PictureView orientation code, 0..7.
     };
 
     /// Carries the host-provided inputs needed to open an image.

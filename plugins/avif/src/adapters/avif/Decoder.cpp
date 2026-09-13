@@ -144,6 +144,30 @@ namespace pvdkit::avif
         return static_cast<float>(image.clli.maxCLL);
     }
 
+    std::uint8_t detail::normalizedExifOrientation(const std::uint8_t orientation) noexcept
+    {
+        return orientation >= 1 && orientation <= 8 ? orientation : 0;
+    }
+
+    std::uint8_t detail::exifOrientation(const avifImage &image) noexcept
+    {
+        // MIAF/libavif precedence: transformative irot/imir properties override EXIF orientation.
+        if ((image.transformFlags & (AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR)) != 0) {
+            return 0;
+        }
+        if (image.exif.size == 0) {
+            return 0;
+        }
+        std::size_t offset = image.exif.size;
+        if (avifGetExifOrientationOffset(image.exif.data, image.exif.size, &offset) != AVIF_RESULT_OK) {
+            return 0;
+        }
+        if (offset >= image.exif.size) {
+            return 0;
+        }
+        return detail::normalizedExifOrientation(image.exif.data[offset]);
+    }
+
     DecoderHandle detail::requireDecoder(DecoderHandle decoder)
     {
         if (!decoder) {
@@ -211,6 +235,7 @@ namespace pvdkit::avif
                         false,
                         false,
                         detail::masteringPeakNits(image),
+                        detail::exifOrientation(image),
                     };
                 });
             });

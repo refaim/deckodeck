@@ -212,8 +212,7 @@ function(pvdkit_add_plugin_e2e_tests id)
     ${id}_e2e_tests
     PRIVATE
       PVDKIT_PLUGIN_PATH="$<TARGET_FILE:${id}_plugin>"
-      PVDKIT_FIXTURE_DIR="${arg_FIXTURES}"
-      PVDKIT_E2E_EXPECT_ICC_EXPERIMENT=$<AND:$<BOOL:${PVDKIT_EXPERIMENT_ICC}>,$<EQUAL:${CMAKE_SIZEOF_VOID_P},8>>)
+      PVDKIT_FIXTURE_DIR="${arg_FIXTURES}")
   add_test(NAME ${id}_e2e_tests COMMAND ${id}_e2e_tests)
   if(PVDKIT_COVERAGE)
     # The instrumented DLL writes its own raw profile from the runtime inside it when the e2e

@@ -35,6 +35,10 @@ namespace pvdkit::avif
         [[nodiscard]] std::uint32_t durationMilliseconds(double durationSeconds);
         /// Maps the AVIF Content Light Level box to the source peak used for presentation.
         [[nodiscard]] std::optional<float> masteringPeakNits(const avifImage &image) noexcept;
+        /// Keeps the defined EXIF orientation values 1..8 and maps reserved values to absent.
+        [[nodiscard]] std::uint8_t normalizedExifOrientation(std::uint8_t orientation) noexcept;
+        /// Reads a valid EXIF orientation only when AVIF irot/imir are absent; those properties win.
+        [[nodiscard]] std::uint8_t exifOrientation(const avifImage &image) noexcept;
         [[nodiscard]] DecoderHandle requireDecoder(DecoderHandle decoder);
         /// Confirms that `dstSize` bytes with `pitchBytes` per row hold `meta.height` rows of
         /// `meta.width` pixels in `format`; the size arithmetic is 64-bit. Violations are `Internal`.

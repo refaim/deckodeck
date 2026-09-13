@@ -39,6 +39,23 @@ not the one-frame primary item. “Alpha: yes” means ffprobe exposed an auxili
 | `extended_pixi.avif` | [`tests/data/extended_pixi.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/extended_pixi.avif) | BSD-2-Clause | Extended `pixi` and vertical chroma position | 4×4, 1 frame, `yuv420p`, alpha: no |
 | `weld_sato_12B_8B_q0.avif` | [`tests/data/weld_sato_12B_8B_q0.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/weld_sato_12B_8B_q0.avif) | Signature Edits irrevocable unrestricted-use licence (full text in upstream notice) | 12-bit sample-transform extension | 1024×684, 1 frame, `yuv444p12le`, alpha: no |
 
+## Derived EXIF-orientation files
+
+These files inherit their source file's licence. They were made byte-for-byte with the installed
+ExifTool and the following commands, then checked with `exiftool -Orientation -n <file>`:
+
+```powershell
+exiftool -overwrite_original -Orientation=6 -n kodim03_exif_orientation_6.avif
+exiftool -overwrite_original -Orientation=3 -n kodim03_exif_orientation_3.avif
+exiftool -overwrite_original -Orientation=6 -n abc_color_irot_alpha_irot_plus_exif6.avif
+```
+
+| File | Derived from | Licence | Exercises | Verified expectation | SHA-256 |
+|---|---|---|---|---|---|
+| `kodim03_exif_orientation_6.avif` | `kodim03_yuv420_8bpc.avif` | Eastman Kodak: unrestricted use (upstream notice) | EXIF orientation 6 without AVIF transforms | 768×512 coded dimensions; EXIF orientation 6; PictureView code 7 | `473182907469BA4DA616F228F4F68EEB29CC150D12D3E98A90207ABBF712FC79` |
+| `kodim03_exif_orientation_3.avif` | `kodim03_yuv420_8bpc.avif` | Eastman Kodak: unrestricted use (upstream notice) | EXIF orientation 3 without AVIF transforms | 768×512 coded dimensions; EXIF orientation 3; PictureView code 3 | `B338DBC677E552B70C138F79EB799C3A1256BE39FAECE9B99A103F91C06668AD` |
+| `abc_color_irot_alpha_irot_plus_exif6.avif` | `abc_color_irot_alpha_irot.avif` | BSD-2-Clause | AVIF `irot` plus EXIF orientation 6 precedence | EXIF orientation 6 is ignored; shared `irot` remains authoritative; PictureView code 0 | `577D7121F5A05AE0414195F704F50A9D54E86B3EDBBCCC866803E1F3DE40CBED` |
+
 ## Synthetic files
 
 These files are generated without external source images by `scripts/make-synthetic-fixtures.ps1`
