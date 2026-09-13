@@ -22,7 +22,7 @@ namespace pvdkit::core
 
         pvd::PluginInfo pluginInfo()
         {
-            return pvd::PluginInfo{10, "Fake", "1.0.1", "static decoder"};
+            return pvd::PluginInfo{10, "Fake", "1.1.0", "static decoder"};
         }
 
         std::unique_ptr<IDecoder> decoder(const ImageMeta &imageMeta, test::DecoderState &state)

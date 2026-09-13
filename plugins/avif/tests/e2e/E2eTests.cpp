@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -51,6 +52,24 @@ namespace pvdkit::e2e
                 }
             }
             return true;
+        }
+
+        std::vector<std::uint16_t> pixel16(const DecodedPage &page, const std::uint32_t x, const std::uint32_t y)
+        {
+            const auto bytes = page.pixel(x, y);
+            REQUIRE(bytes.size() == 8);
+            std::vector<std::uint16_t> samples(4);
+            for (std::size_t channel = 0; channel < samples.size(); ++channel) {
+                samples[channel] = static_cast<std::uint16_t>(bytes[channel * 2]) |
+                                   static_cast<std::uint16_t>(bytes[channel * 2 + 1] << 8U);
+            }
+            return samples;
+        }
+
+        constexpr std::uint32_t outputBitsPerPixel(const avif::tests::FixtureExpectation &fixture)
+        {
+            const auto shallowBits = fixture.alpha ? 32U : 24U;
+            return fixture.pageBpp > shallowBits ? 64U : shallowBits;
         }
 
         // Opens `file` in `mode` and decodes every page; the caller closes the context.
@@ -111,8 +130,8 @@ namespace pvdkit::e2e
                 outcome.failure = "pvdPageInfo answered FALSE";
             } else if (exports.pageDecode(context, 0, &page.decode, nullptr, nullptr) == FALSE) {
                 outcome.failure = "pvdPageDecode answered FALSE";
-            } else if (page.decode.pImage == nullptr || page.decode.lImagePitch <= 0 ||
-                       (page.decode.nBPP != 24 && page.decode.nBPP != 32)) {
+            } else if (page.decode.pImage == nullptr ||
+                       !isSupportedDecodeLayout(page.page.lWidth, page.decode.nBPP, page.decode.lImagePitch)) {
                 outcome.failure = "pvdPageDecode handed out an unusable page";
             } else {
                 outcome.pixels = page.pixels();
@@ -148,7 +167,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.0.1");
+        CHECK(text(info.pVersion) == "1.1.0");
         const auto comments = text(info.pComments);
         CAPTURE(comments);
         CHECK(comments.find("libavif") != std::string::npos);
@@ -193,7 +212,7 @@ namespace pvdkit::e2e
                 CHECK(d.page.lHeight == expected.height);
                 CHECK(d.page.nBPP == expected.pageBpp);
                 CHECK((d.page.lFrameTime > 0) == (expected.pages > 1));
-                CHECK(d.decode.nBPP == (expected.alpha ? 32U : 24U));
+                CHECK(d.decode.nBPP == outputBitsPerPixel(expected));
                 CHECK(d.decode.pPalette == nullptr);
                 CHECK(d.decode.nColorsUsed == 0);
                 CHECK(d.decode.Flags == (expected.alpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0}));
@@ -310,19 +329,20 @@ namespace pvdkit::e2e
             freeAndClose(exports, opened);
         }
 
-        SUBCASE("10-bit 4:4:4 reports 30 informational bits and decodes the limited-range ramp")
+        SUBCASE("10-bit 4:4:4 reports 30 informational bits and decodes a full-range 16-bit ramp")
         {
             const auto file = readFixture("tenbit_444.avif");
             auto opened = openAndDecodeAll(exports, file, OpenMode::Disk);
             const auto &page = opened.pages.at(0);
             CHECK(page.page.nBPP == 30);
-            CHECK(page.decode.nBPP == 24);
+            CHECK(page.decode.nBPP == 64);
+            CHECK(page.decode.lImagePitch == 64 * 8);
             for (const std::uint32_t x : {0U, 4U, 5U, 20U, 32U, 45U, 58U, 59U, 63U}) {
                 CAPTURE(x);
-                const double normalized = (16.0 * x - 64.0) / 876.0;
-                const auto grey = static_cast<std::uint8_t>(std::clamp(std::lround(normalized * 255.0), 0L, 255L));
-                CHECK(within(page.pixel(x, 0), Bgr{grey, grey, grey}, 2));
-                CHECK(within(page.pixel(x, 63), Bgr{grey, grey, grey}, 2));
+                const float normalized = std::clamp((16.0F * static_cast<float>(x) - 64.0F) / 876.0F, 0.0F, 1.0F);
+                const auto grey = static_cast<std::uint16_t>(std::lround(normalized * 65535.0F));
+                CHECK(pixel16(page, x, 0) == std::vector<std::uint16_t>{grey, grey, grey, 0xFFFF});
+                CHECK(pixel16(page, x, 63) == std::vector<std::uint16_t>{grey, grey, grey, 0xFFFF});
             }
             freeAndClose(exports, opened);
         }
@@ -381,7 +401,40 @@ namespace pvdkit::e2e
         CHECK(c.pages.at(0).page.lWidth == 34);
         CHECK(c.pages.at(0).page.lHeight == 12);
         CHECK(c.pages.at(0).page.nBPP == 40);
+        CHECK(c.pages.at(0).decode.nBPP == 64);
+        CHECK(c.pages.at(0).decode.lImagePitch == 34 * 8);
+        CHECK(c.pages.at(0).decode.Flags == PVD_IDF_ALPHA);
         freeAndClose(exports, c);
+        exports.exit();
+    }
+
+    TEST_CASE("cosmos deep decode timing is reported without enforcing a performance gate")
+    {
+        const auto plugin = loadInitializedPlugin();
+        const auto &exports = plugin.exports();
+        const auto file = readFixture("cosmos1650_yuv444_10bpc_p3pq.avif");
+        auto image = openImage(exports, file, OpenMode::Disk);
+        REQUIRE(image.has_value());
+
+        auto warmUp = decodePage(exports, image->context, 0, nullptr, nullptr);
+        REQUIRE(warmUp.has_value());
+        exports.pageFree(image->context, &warmUp->decode);
+
+        constexpr int kIterations = 5;
+        std::uint32_t outputBpp = 0;
+        const auto start = std::chrono::steady_clock::now();
+        for (int iteration = 0; iteration < kIterations; ++iteration) {
+            auto page = decodePage(exports, image->context, 0, nullptr, nullptr);
+            REQUIRE(page.has_value());
+            outputBpp = page->decode.nBPP;
+            exports.pageFree(image->context, &page->decode);
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        MESSAGE("cosmos pvdPageDecode: nBPP=" << outputBpp << ", mean=" << microseconds / kIterations << " us ("
+                                              << kIterations << " iterations after one warm-up)");
+
+        exports.fileClose(image->context);
         exports.exit();
     }
 
@@ -528,7 +581,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.0.1");
+        CHECK(text(info.pVersion) == "1.1.0");
         CHECK(text(info.pComments).empty());
         exports.exit();
 

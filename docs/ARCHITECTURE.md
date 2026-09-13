@@ -65,6 +65,9 @@ Source of truth: `third_party/pvd/PictureViewPlugin.h`. Key semantics:
   `pPalette = nullptr`, `nColorsUsed = 0`, `Flags` (`PVD_IDF_ALPHA`, the host's undocumented bit 2,
   when alpha is meaningful; never `PVD_IDF_READONLY`, because the buffer is ours and writable).
   `callback` may be `NULL`; if it returns `FALSE` we stop and return `FALSE`.
+  PictureView testing on 2026-09-13 established that `nBPP == 64` is accepted and rendered like
+  the 8-bit path; its 10-bit output, spatial dithering, gamma-correct scaling and auto-levels can
+  use the preserved precision.
 - `pvdPageFree(ctx, pDecodeInfo)`: release that decoded page. Host may hold several decoded pages
   of one file at once; identify the page by `pImage`.
 - `pvdFileClose(ctx)`: destroy the context, including any pages not freed.
@@ -411,9 +414,9 @@ Decisions (Task 7, open point 1):
   returning an object that owns `win::FileSource`, the plugin's `IDecoderFactory`, its
   `IImageDescriber` and a `core::CodecPlugin` (declared in that order) and forwards `IPlugin`.
   It chooses the `DecoderOptions` and builds `PluginInfo` from `kPluginIdentity` plus run-time
-  library versions. AVIF's values: `plugins/avif/DESIGN.md`. RPGMVP defaults `deepOutput` off;
-  `PVDKIT_RPGMVP_DEEP_OUTPUT=ON` enables its experimental host-capability build and appends
-  ` [experiment: deep output]` to the plugin comments.
+  library versions. Every production composition sets `deepOutput = true`, so sources deeper than
+  8 bits are delivered as BGRA64 without a build switch; 8-bit-and-shallower sources keep their
+  BGR24/BGRA32 layouts. Plugin-specific values are recorded in each `plugins/<id>/DESIGN.md`.
 
 ### 3.8 Shared adapter
 

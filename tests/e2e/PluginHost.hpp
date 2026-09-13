@@ -111,7 +111,7 @@ namespace pvdkit::e2e
     };
 
     /// Whether a positive top-down pitch can hold one row of a supported host pixel layout.
-    /// The kit emits tight 24/32-bit rows; the experimental 64-bit host path may be padded.
+    /// The kit emits tight 24/32/64-bit rows; the host contract also permits padded 64-bit rows.
     [[nodiscard]] bool isSupportedDecodeLayout(std::uint32_t width, std::uint32_t bitsPerPixel,
                                                std::int32_t pitchBytes) noexcept;
 

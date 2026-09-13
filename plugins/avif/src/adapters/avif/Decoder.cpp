@@ -147,11 +147,8 @@ namespace pvdkit::avif
     core::Result<void> detail::checkDestination(const core::ImageMeta &meta, const pvd::PixelFormat format,
                                                 const std::size_t dstSize, const std::uint32_t pitchBytes)
     {
-        if (format == pvd::PixelFormat::Bgra64) {
-            return std::unexpected(
-                core::Error{core::ErrorCode::UnsupportedFeature, "libavif output is limited to 8 bits per channel"});
-        }
-        const std::uint32_t bytesPerPixel = format == pvd::PixelFormat::Bgra32 ? 4U : 3U;
+        const std::uint32_t bytesPerPixel =
+            format == pvd::PixelFormat::Bgra64 ? 8U : (format == pvd::PixelFormat::Bgra32 ? 4U : 3U);
         const std::uint64_t minimumPitch = static_cast<std::uint64_t>(meta.width) * bytesPerPixel;
         if (pitchBytes < minimumPitch) {
             return std::unexpected(
@@ -170,8 +167,8 @@ namespace pvdkit::avif
     {
         avifRGBImage rgb{};
         avifRGBImageSetDefaults(&rgb, &image);
-        rgb.depth = 8;
-        rgb.format = format == pvd::PixelFormat::Bgra32 ? AVIF_RGB_FORMAT_BGRA : AVIF_RGB_FORMAT_BGR;
+        rgb.depth = format == pvd::PixelFormat::Bgra64 ? 16U : 8U;
+        rgb.format = format == pvd::PixelFormat::Bgr24 ? AVIF_RGB_FORMAT_BGR : AVIF_RGB_FORMAT_BGRA;
         rgb.alphaPremultiplied = AVIF_FALSE;
         rgb.chromaUpsampling = AVIF_CHROMA_UPSAMPLING_AUTOMATIC;
         rgb.maxThreads = maxThreads;

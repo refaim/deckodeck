@@ -12,7 +12,8 @@ WHAT IS SUPPORTED
     display time.
   - 8, 10 and 12-bit sources, 4:4:4 / 4:2:2 / 4:2:0 / 4:0:0, grid images,
     progressive files.
-  - Alpha (straight, 32-bit BGRA output); opaque images are 24-bit BGR.
+  - Sources deeper than 8 bits use 16-bit BGRA output; 8-bit alpha uses
+    straight BGRA32 and opaque 8-bit images use BGR24.
   - clap, irot and imir transformative properties, applied in that order.
   - Files from archives and virtual panels (the host hands over the whole file
     in memory).
@@ -22,9 +23,9 @@ WHAT IS SUPPORTED
 LIMITATIONS
   - HDR (PQ/HLG) sources are converted by matrix only; there is no tone mapping.
   - ICC profiles are ignored (the PVD interface has no colour management).
-  - Gain maps, layered (a1lx) selection, progressive preview rendering and
-    16-bit output are not supported; EXIF orientation is not applied (AVIF's
-    irot/imir take precedence by specification).
+  - Gain maps, layered (a1lx) selection and progressive preview rendering are
+    not supported; EXIF orientation is not applied (AVIF's irot/imir take
+    precedence by specification).
   - clap/irot/imir properties not marked essential are refused by libavif.
   - Images are limited to 16384 x 16384 pixels in area (268 megapixels) and
     32768 pixels per side.

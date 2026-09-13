@@ -260,14 +260,14 @@ namespace pvdkit::sequence
         test::check(checkProgress(0, 0).has_value());
         test::check(checkProgress(1, 1).has_value());
 
-        pvdInfoPlugin plugin{10, "Plugin", "1.0.1", "comments"};
+        pvdInfoPlugin plugin{10, "Plugin", "1.1.0", "comments"};
         test::check(!checkPluginInfo(plugin).has_value());
         plugin.pName = nullptr;
         test::check(checkPluginInfo(plugin).has_value());
         plugin.pName = "Plugin";
         plugin.pVersion = nullptr;
         test::check(checkPluginInfo(plugin).has_value());
-        plugin.pVersion = "1.0.1";
+        plugin.pVersion = "1.1.0";
         plugin.pComments = nullptr;
         test::check(checkPluginInfo(plugin).has_value());
         plugin.pComments = unterminated.data();

@@ -144,8 +144,7 @@ Source: single white pixel encoded with libavif at default quality.
 License: [same as libavif](https://github.com/AOMediaCodec/libavif/blob/main/LICENSE)
 
 Source: three gradient PNG layers of 128x128, 256x256 and 512x512 pixels
-encoded with libheif 1.21.2 built from source with
-`ENABLE_EXPERIMENTAL_FEATURES=ON`:
+encoded with libheif 1.21.2 built from source with pyramid-group encoding enabled:
 `heif-enc --add-pyramid-group -A layer0.png layer1.png layer2.png`.
 
 The `grpl` box holds one `pymd` EntityToGroupBox. It carries the grouping

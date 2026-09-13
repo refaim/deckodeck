@@ -10,7 +10,3 @@ pvdkit_add_plugin_e2e_tests(
   SOURCES ${RPGMVP_E2E_TEST_SOURCES})
 
 target_sources(rpgmvp_sequence_tests PRIVATE "${RPGMVP_COMPOSITION_TESTS}")
-target_compile_definitions(
-  rpgmvp_e2e_tests PRIVATE PVDKIT_TEST_DEEP_OUTPUT=$<BOOL:${PVDKIT_RPGMVP_DEEP_OUTPUT}>)
-target_compile_definitions(
-  rpgmvp_sequence_tests PRIVATE PVDKIT_TEST_DEEP_OUTPUT=$<BOOL:${PVDKIT_RPGMVP_DEEP_OUTPUT}>)

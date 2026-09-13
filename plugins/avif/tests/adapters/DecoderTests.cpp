@@ -4,10 +4,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -35,6 +38,7 @@ namespace
 
     using Bgr = std::array<std::uint8_t, 3>;
     using Bgra = std::array<std::uint8_t, 4>;
+    using Bgra16 = std::array<std::uint16_t, 4>;
 
     std::vector<std::byte> readFixture(const std::string_view name)
     {
@@ -142,6 +146,20 @@ namespace
         return result;
     }
 
+    template <std::size_t Channels>
+    std::array<std::uint16_t, Channels> pixelAt16(const std::span<const std::byte> pixels, const std::uint32_t pitch,
+                                                  const std::uint32_t x, const std::uint32_t y)
+    {
+        const std::size_t offset = static_cast<std::size_t>(y) * pitch + static_cast<std::size_t>(x) * Channels * 2;
+        std::array<std::uint16_t, Channels> result{};
+        for (std::size_t channel = 0; channel < Channels; ++channel) {
+            const auto sample = pixels.subspan(offset + channel * 2, 2);
+            result[channel] = static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(sample[0])) |
+                              static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(sample[1]) << 8U);
+        }
+        return result;
+    }
+
     template <std::size_t Channels> std::string describe(const std::array<std::uint8_t, Channels> &pixel)
     {
         std::string text{"("};
@@ -218,6 +236,89 @@ namespace
         CAPTURE(createError(decoder));
         REQUIRE(decoder.has_value());
         return decodeBgr(**decoder, 0);
+    }
+
+    struct DecodedBgra64
+    {
+        std::uint32_t width;
+        std::uint32_t height;
+        std::uint32_t pitch;
+        std::vector<std::byte> pixels;
+
+        [[nodiscard]] Bgra16 at(const std::uint32_t x, const std::uint32_t y) const
+        {
+            return pixelAt16<4>(pixels, pitch, x, y);
+        }
+    };
+
+    DecodedBgra64 decodeFixtureBgra64(const std::string_view name, const std::uint32_t frame = 0)
+    {
+        CAPTURE(name);
+        const auto bytes = readFixture(name);
+        pvdkit::avif::DecoderFactory factory;
+        auto decoder = factory.create(bytes, kOptions);
+        CAPTURE(createError(decoder));
+        REQUIRE(decoder.has_value());
+        const auto &meta = (*decoder)->meta();
+        const std::uint32_t pitch = meta.width * 8;
+        std::vector<std::byte> pixels(static_cast<std::size_t>(pitch) * meta.height);
+        const auto decoded = (*decoder)->decodeFrame(frame, PixelFormat::Bgra64, pixels, pitch);
+        const std::string decodeError = decoded ? std::string{} : decoded.error().detail;
+        CAPTURE(decodeError);
+        REQUIRE(decoded.has_value());
+        return {meta.width, meta.height, pitch, std::move(pixels)};
+    }
+
+    struct AvifDecoderDestroy
+    {
+        void operator()(avifDecoder *decoder) const noexcept
+        {
+            avifDecoderDestroy(decoder);
+        }
+    };
+
+    struct SourceAlpha
+    {
+        std::uint32_t width;
+        std::uint32_t height;
+        std::uint32_t depth;
+        std::vector<std::uint16_t> samples;
+
+        [[nodiscard]] std::uint16_t at(const std::uint32_t x, const std::uint32_t y) const
+        {
+            return samples[static_cast<std::size_t>(y) * width + x];
+        }
+    };
+
+    SourceAlpha decodeSourceAlpha(const std::span<const std::byte> bytes, const std::uint32_t frame)
+    {
+        const auto decoder = std::unique_ptr<avifDecoder, AvifDecoderDestroy>{avifDecoderCreate()};
+        REQUIRE(decoder != nullptr);
+        REQUIRE(avifDecoderSetIOMemory(decoder.get(), reinterpret_cast<const std::uint8_t *>(bytes.data()),
+                                       bytes.size()) == AVIF_RESULT_OK);
+        REQUIRE(avifDecoderParse(decoder.get()) == AVIF_RESULT_OK);
+        REQUIRE(avifDecoderNthImage(decoder.get(), frame) == AVIF_RESULT_OK);
+        const avifImage &image = *decoder->image;
+        REQUIRE(image.alphaPlane != nullptr);
+        REQUIRE(image.alphaRowBytes >= image.width * 2);
+        std::vector<std::uint16_t> samples(static_cast<std::size_t>(image.width) * image.height);
+        for (std::uint32_t y = 0; y < image.height; ++y) {
+            for (std::uint32_t x = 0; x < image.width; ++x) {
+                std::uint16_t sample = 0;
+                std::memcpy(&sample,
+                            image.alphaPlane + static_cast<std::size_t>(y) * image.alphaRowBytes +
+                                static_cast<std::size_t>(x) * 2,
+                            sizeof(sample));
+                samples[static_cast<std::size_t>(y) * image.width + x] = sample;
+            }
+        }
+        return {image.width, image.height, image.depth, std::move(samples)};
+    }
+
+    std::uint16_t rescaleTo16(const std::uint16_t sample, const std::uint32_t sourceDepth)
+    {
+        const auto sourceMaximum = static_cast<float>((1U << sourceDepth) - 1U);
+        return static_cast<std::uint16_t>(std::lround(static_cast<float>(sample) / sourceMaximum * 65535.0F));
     }
 
 } // namespace
@@ -445,6 +546,51 @@ TEST_CASE("lossless 10-bit 4:4:4 fixture decodes to the generator's limited-rang
     }
 }
 
+TEST_CASE("10-bit output uses the full 16-bit range instead of left-shifting source samples")
+{
+    // The source is limited-range YUV, so libavif first normalizes the 10-bit legal luma range
+    // [64, 940], then rounds the full-range RGB result to [0, 65535].
+    const auto decoded = decodeFixtureBgra64("tenbit_444.avif");
+    CHECK(decoded.width == 64);
+    CHECK(decoded.height == 64);
+    for (const std::uint32_t x : {0U, 4U, 5U, 20U, 32U, 45U, 58U, 59U, 63U}) {
+        CAPTURE(x);
+        const float normalized = std::clamp((16.0F * static_cast<float>(x) - 64.0F) / 876.0F, 0.0F, 1.0F);
+        const auto grey = static_cast<std::uint16_t>(std::lround(normalized * 65535.0F));
+        CHECK(decoded.at(x, 0) == Bgra16{grey, grey, grey, 0xFFFF});
+        CHECK(decoded.at(x, 63) == Bgra16{grey, grey, grey, 0xFFFF});
+    }
+}
+
+TEST_CASE("12-bit straight alpha is rescaled over all 16 bits")
+{
+    const auto bytes = readFixture("colors-animated-12bpc-keyframes-0-2-3.avif");
+    const auto source = decodeSourceAlpha(bytes, 0);
+    REQUIRE(source.depth == 12);
+    const auto decoded = decodeFixtureBgra64("colors-animated-12bpc-keyframes-0-2-3.avif");
+
+    std::optional<std::pair<std::uint32_t, std::uint32_t>> coordinate;
+    for (std::uint32_t y = 0; y < source.height && !coordinate; ++y) {
+        for (std::uint32_t x = 0; x < source.width; ++x) {
+            const auto sample = source.at(x, y);
+            if (sample != 0 && sample != 4095 && rescaleTo16(sample, source.depth) != (sample << 4U)) {
+                coordinate = std::pair{x, y};
+                break;
+            }
+        }
+    }
+    REQUIRE(coordinate.has_value());
+    const auto [x, y] = *coordinate;
+    const auto sourceSample = source.at(x, y);
+    const auto expected = rescaleTo16(sourceSample, source.depth);
+    CAPTURE(x);
+    CAPTURE(y);
+    CAPTURE(sourceSample);
+    CAPTURE(expected);
+    CHECK(decoded.at(x, y)[3] == expected);
+    CHECK(expected != (sourceSample << 4U));
+}
+
 TEST_CASE("10-bit P3/PQ and grid sources decode end-to-end through the adapter")
 {
     const auto cosmos = decodeFixtureBgr("cosmos1650_yuv444_10bpc_p3pq.avif");
@@ -504,15 +650,10 @@ TEST_CASE("decode validates capacity and reports an out-of-range frame as PageOu
 TEST_CASE("destination validation uses non-overflowing size arithmetic")
 {
     using pvdkit::avif::detail::checkDestination;
-    const auto deepOutput = checkDestination({}, PixelFormat::Bgra64, 0, 0);
-    REQUIRE_FALSE(deepOutput.has_value());
-    CHECK(deepOutput.error().code == ErrorCode::UnsupportedFeature);
-    CHECK(deepOutput.error().detail == "libavif output is limited to 8 bits per channel");
-
-    // width * 4 and pitch * height both exceed 32 bits; neither may wrap around.
+    // width * 8 and pitch * height both exceed 32 bits; neither may wrap around.
     const pvdkit::core::ImageMeta hugeMeta{
         0x40000000U, 0x40000000U, 8, ChromaFormat::Yuv444, false, false, {}, 1, false, {}, false, false, false};
-    const auto pitchOverflow = checkDestination(hugeMeta, PixelFormat::Bgra32, 0, 0);
+    const auto pitchOverflow = checkDestination(hugeMeta, PixelFormat::Bgra64, 0, 0);
     REQUIRE_FALSE(pitchOverflow.has_value());
     CHECK(pitchOverflow.error().code == ErrorCode::Internal);
     CHECK(pitchOverflow.error().detail == "caller pitch is smaller than one pixel row");
@@ -527,20 +668,22 @@ TEST_CASE("destination validation uses non-overflowing size arithmetic")
                                         false, false, false};
     CHECK(checkDestination(small, PixelFormat::Bgra32, 24, 8).has_value());
     CHECK(checkDestination(small, PixelFormat::Bgra32, 30, 10).has_value());
+    CHECK(checkDestination(small, PixelFormat::Bgra64, 48, 16).has_value());
     CHECK(checkDestination(small, PixelFormat::Bgr24, 18, 6).has_value());
     CHECK_FALSE(checkDestination(small, PixelFormat::Bgra32, 23, 8).has_value());
     CHECK_FALSE(checkDestination(small, PixelFormat::Bgra32, 24, 7).has_value());
+    CHECK_FALSE(checkDestination(small, PixelFormat::Bgra64, 48, 15).has_value());
     CHECK_FALSE(checkDestination(small, PixelFormat::Bgr24, 18, 5).has_value());
 }
 
-TEST_CASE("the RGB target hands libavif the caller buffer, 8-bit BGR/BGRA and the thread budget")
+TEST_CASE("the RGB target hands libavif the caller buffer, requested BGR/BGRA depth and the thread budget")
 {
     using pvdkit::avif::detail::rgbTarget;
     avifImage image{};
     image.width = 5;
     image.height = 2;
     image.depth = 10;
-    std::array<std::byte, 5 * 4 * 2> buffer{};
+    std::array<std::byte, 5 * 8 * 2> buffer{};
 
     const avifRGBImage bgra = rgbTarget(image, PixelFormat::Bgra32, buffer, 20, 8);
     CHECK(bgra.width == 5);
@@ -558,6 +701,14 @@ TEST_CASE("the RGB target hands libavif the caller buffer, 8-bit BGR/BGRA and th
     CHECK(bgr.depth == 8);
     CHECK(bgr.maxThreads == 1);
     CHECK(bgr.rowBytes == 16);
+
+    const avifRGBImage bgra64 = rgbTarget(image, PixelFormat::Bgra64, buffer, 40, 4);
+    CHECK(bgra64.format == AVIF_RGB_FORMAT_BGRA);
+    CHECK(bgra64.depth == 16);
+    CHECK(bgra64.alphaPremultiplied == AVIF_FALSE);
+    CHECK(bgra64.maxThreads == 4);
+    CHECK(bgra64.pixels == reinterpret_cast<std::uint8_t *>(buffer.data()));
+    CHECK(bgra64.rowBytes == 40);
 }
 
 TEST_CASE("signature probing and hostile inputs fail without crashing")

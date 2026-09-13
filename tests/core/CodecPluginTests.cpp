@@ -16,7 +16,7 @@ namespace pvdkit::core
 
         pvd::PluginInfo pluginInfo()
         {
-            return pvd::PluginInfo{10, "Fake", "1.0.1", "static decoder"};
+            return pvd::PluginInfo{10, "Fake", "1.1.0", "static decoder"};
         }
 
         // The collaborators every test wires into a CodecPlugin, declared in dependency order so the
@@ -45,7 +45,7 @@ namespace pvdkit::core
 
             CHECK(harness.plugin.info().priority == 10);
             CHECK(harness.plugin.info().name == "Fake");
-            CHECK(harness.plugin.info().version == "1.0.1");
+            CHECK(harness.plugin.info().version == "1.1.0");
             CHECK(harness.plugin.info().comments == "static decoder");
         }
 

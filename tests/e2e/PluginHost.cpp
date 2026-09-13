@@ -181,7 +181,7 @@ namespace pvdkit::e2e
             return std::nullopt;
         }
         // The plugin promises top-down rows and a writable buffer of its own. The established
-        // 24/32-bit layouts are tight; the experimental 64-bit host path may carry row padding.
+        // The kit emits tight 24/32/64-bit layouts; accept host-valid padding on the 64-bit path.
         REQUIRE(decoded.decode.pImage != nullptr);
         REQUIRE(isSupportedDecodeLayout(decoded.page.lWidth, decoded.decode.nBPP, decoded.decode.lImagePitch));
         return decoded;

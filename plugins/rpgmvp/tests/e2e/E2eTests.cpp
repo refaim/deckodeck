@@ -21,9 +21,6 @@ namespace pvdkit::e2e
 
         using Pixel = std::vector<std::uint8_t>;
 
-        constexpr bool kDeepOutput = PVDKIT_TEST_DEEP_OUTPUT != 0;
-        constexpr std::string_view kExperimentSuffix = " [experiment: deep output]";
-
         std::string text(const char *value)
         {
             return value == nullptr ? std::string{"<null>"} : std::string{value};
@@ -65,7 +62,7 @@ namespace pvdkit::e2e
 
         constexpr std::uint32_t outputBitsPerPixel(const rpgmvp::tests::FixtureExpectation &fixture)
         {
-            if (kDeepOutput && fixture.sourceBpp > 32) {
+            if (fixture.sourceBpp > 32) {
                 return 64;
             }
             return fixture.alpha ? 32U : 24U;
@@ -82,11 +79,11 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "RPGMVP");
-        CHECK(text(info.pVersion) == "1.0.1");
+        CHECK(text(info.pVersion) == "1.1.0");
         CHECK(text(info.pComments).find("libspng 0.7.4") != std::string::npos);
         CHECK(text(info.pComments).find("zlib 1.3.2") != std::string::npos);
         CHECK(text(info.pComments).find("static build") != std::string::npos);
-        CHECK(text(info.pComments).ends_with(kExperimentSuffix) == kDeepOutput);
+        CHECK_FALSE(text(info.pComments).empty());
         exports.pluginInfo(nullptr);
         exports.exit();
     }
@@ -148,11 +145,19 @@ namespace pvdkit::e2e
         CHECK(palette.page.pixel(17, 0) == Pixel{78, 224, 255, 222});
         freeAndClose(exports, palette);
 
-        auto sixteen = openAndDecode(exports, readFixture("rgb16_88x4a.rpgmvp"), OpenMode::Memory);
-        const auto sixteenFirst =
-            kDeepOutput ? Pixel{0xF4, 0x3B, 0x60, 0x60, 0x96, 0x1B, 0xFF, 0xFF} : Pixel{59, 96, 27};
-        CHECK(sixteen.page.pixel(0, 0) == sixteenFirst);
-        freeAndClose(exports, sixteen);
+        auto rgba16 = openAndDecode(exports, readFixture("rgba16_60x20_par.rpgmvp"), OpenMode::Disk);
+        CHECK(rgba16.page.decode.nBPP == 64);
+        CHECK(rgba16.page.decode.lImagePitch == 480);
+        CHECK(rgba16.page.decode.Flags == PVD_IDF_ALPHA);
+        CHECK(rgba16.page.pixel(0, 0) == Pixel{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00});
+        freeAndClose(exports, rgba16);
+
+        auto rgb16 = openAndDecode(exports, readFixture("rgb16_88x4a.rpgmvp"), OpenMode::Memory);
+        CHECK(rgb16.page.decode.nBPP == 64);
+        CHECK(rgb16.page.decode.lImagePitch == 704);
+        CHECK(rgb16.page.decode.Flags == 0);
+        CHECK(rgb16.page.pixel(0, 0) == Pixel{0xF4, 0x3B, 0x60, 0x60, 0x96, 0x1B, 0xFF, 0xFF});
+        freeAndClose(exports, rgb16);
         exports.exit();
     }
 

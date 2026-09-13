@@ -10,7 +10,8 @@ What it does:
 
 - Still images and image sequences (`avis`): every frame is a page with its display time.
 - 8, 10 and 12-bit sources, 4:4:4 / 4:2:2 / 4:2:0 / 4:0:0, grid images, progressive files.
-- Alpha (straight, 32-bit BGRA output); opaque images are handed over as 24-bit BGR.
+- Sources deeper than 8 bits are handed over as 16-bit BGRA; 8-bit alpha is straight BGRA32 and
+  opaque 8-bit images are BGR24.
 - `clap`, `irot` and `imir` transformative properties, applied in that order.
 - Files from archives and virtual panels (the host hands over the whole file in memory).
 
@@ -69,8 +70,8 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 
 - HDR (PQ/HLG) sources are converted by matrix only; there is no tone mapping.
 - ICC profiles are ignored (the PVD interface has no colour management), as in the bundled decoders.
-- Gain maps, layered (`a1lx`) selection, progressive preview rendering and 16-bit output are not
-  supported; EXIF orientation is not applied (AVIF's `irot`/`imir` take precedence by spec).
+- Gain maps, layered (`a1lx`) selection and progressive preview rendering are not supported; EXIF
+  orientation is not applied (AVIF's `irot`/`imir` take precedence by spec).
 - Files are mapped with `FILE_SHARE_WRITE | FILE_SHARE_DELETE` so Far can keep working with them.
   If another process truncates a file while a page is being decoded, reading the mapped view
   raises a structured exception that the C++ firewall cannot catch - the same behaviour as the
@@ -81,5 +82,7 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 
 ## Changes
 
+- 1.1.0 — sources deeper than 8 bits are delivered to the host as 16-bit BGRA (`nBPP` 64) instead
+  of being reduced to 8 bits.
 - 1.0.1 — the alpha channel is now flagged to the host; in 1.0.0 transparent images were displayed opaque.
 - 1.0.0 — initial release.

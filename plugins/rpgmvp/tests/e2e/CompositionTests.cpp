@@ -31,7 +31,7 @@ namespace pvdkit::rpgmvp::tests
 
     } // namespace
 
-    TEST_CASE("deep RPGMVP composition exposes BGRA64 through the PVD shim")
+    TEST_CASE("the default RPGMVP composition exposes BGRA64 through the PVD shim")
     {
         struct Case
         {
@@ -43,8 +43,7 @@ namespace pvdkit::rpgmvp::tests
             {"rgba16_60x20_par.rpgmvp", 60, PVD_IDF_ALPHA},
             {"rgb16_88x4a.rpgmvp", 88, 0},
         };
-        constexpr core::DecoderOptions options{1, false, std::uint64_t{4} * 1024U * 1024U, 32'768, true};
-        const auto plugin = pvd::makePlugin(options);
+        const auto plugin = pvd::makePlugin();
         REQUIRE(plugin != nullptr);
         pvd::Shim shim{*plugin, pvd::kPluginIdentity};
 

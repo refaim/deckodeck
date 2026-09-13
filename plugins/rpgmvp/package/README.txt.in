@@ -9,14 +9,14 @@ INSTALL
 WHAT IS SUPPORTED
   - RPG Maker MV .rpgmvp and RPG Maker MZ .png_ encrypted PNG images.
   - PNG greyscale, RGB, palette, greyscale+alpha and RGBA sources at 1/2/4/8/16-bit source depth.
-  - tRNS transparency and Adam7 interlacing; alpha is straight BGRA and opaque output is BGR.
+  - Sources deeper than 8 bits use BGRA64; shallower alpha is straight BGRA32 and opaque output is BGR24.
+  - tRNS transparency and Adam7 interlacing.
   - Files from archives and virtual panels, supplied wholly in memory by the host.
   - Statically linked: imports KERNEL32.dll only; no runtime, WIC codec or GDI+ needed.
 
 LIMITATIONS
   - APNG animation is not exposed: the default image is decoded as one page.
   - Gamma correction and ICC colour management are not applied.
-  - Output is 8 bits per channel; 16-bit PNG samples are reduced by libspng.
   - Images are limited to 16384 x 16384 pixels in area (268 megapixels) and 32768 pixels per side.
 
 AUTHOR
