@@ -348,7 +348,22 @@ TEST_CASE("all positive fixtures expose complete container metadata")
         CHECK(meta.hasIcc == !(*created)->iccProfile().empty());
         CHECK(meta.hasExif == expected.exif);
         CHECK(meta.hasXmp == expected.xmp);
+        const auto expectedPeak = expected.name == "colors_hdr_rec2020.avif" ? std::optional{470.0F} : std::nullopt;
+        CHECK(meta.masteringPeakNits == expectedPeak);
     }
+}
+
+TEST_CASE("AVIF CLLI maxCLL supplies the HDR mastering peak")
+{
+    avifImage image{};
+    CHECK_FALSE(pvdkit::avif::detail::masteringPeakNits(image).has_value());
+
+    image.clli.maxPALL = 400;
+    CHECK_FALSE(pvdkit::avif::detail::masteringPeakNits(image).has_value());
+
+    image.clli.maxCLL = 1'000;
+    REQUIRE(pvdkit::avif::detail::masteringPeakNits(image).has_value());
+    CHECK(*pvdkit::avif::detail::masteringPeakNits(image) == 1'000.0F);
 }
 
 TEST_CASE("AVIF exposes decoder-owned ICC bytes")

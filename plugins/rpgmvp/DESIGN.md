@@ -22,7 +22,9 @@ than progressive row calls. Normal output selects RGB8 or RGBA8 from normalized 
 for sources over 8 bits selects RGBA16; libspng documents every format except `SPNG_FMT_RAW` as
 host-endian, so Windows receives little-endian 16-bit samples. The adapter asks libspng to apply
 tRNS and swaps the R/B byte units in place to produce BGR/BGRA. Alpha remains straight. No gamma
-decode flag is used. A Bgra64 request for an 8-bit-or-shallower source is rejected as Unsupported.
+decode flag is used: PNG `gAMA` and `cHRM` remain ignored. RPGMVP supplies only sRGB or unspecified
+CICP, so shared colour presentation is an identity and its output is unchanged. A Bgra64 request
+for an 8-bit-or-shallower source is rejected as Unsupported.
 
 libspng 0.7.4's upstream CMake policy level otherwise ignores `CMAKE_MSVC_RUNTIME_LIBRARY`; the
 repository overlay port enables CMP0091 so the existing clang-cl chainload produces `/MT` archives.
@@ -38,8 +40,8 @@ Deep output is enabled by default: sources deeper than 8 bits are preserved as B
 
 ## Exclusions
 
-Audio encryption variants, key recovery, PNG encoding, APNG animation pages, colour management and
-gamma correction are out of scope. Unknown ancillary chunks remain libspng's
+Audio encryption variants, key recovery, PNG encoding, APNG animation pages, PNG `gAMA`/`cHRM`
+application and ICC profile application are out of scope. Unknown ancillary chunks remain libspng's
 responsibility; corrupt critical data is rejected as an expected parse/decode failure.
 
 ## Verification fixtures

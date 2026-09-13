@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -32,6 +33,8 @@ namespace pvdkit::avif
         [[nodiscard]] core::Result<void> checkedResult(avifResult result, core::ErrorCode code,
                                                        const avifDiagnostics &diagnostics);
         [[nodiscard]] std::uint32_t durationMilliseconds(double durationSeconds);
+        /// Maps the AVIF Content Light Level box to the source peak used for presentation.
+        [[nodiscard]] std::optional<float> masteringPeakNits(const avifImage &image) noexcept;
         [[nodiscard]] DecoderHandle requireDecoder(DecoderHandle decoder);
         /// Confirms that `dstSize` bytes with `pitchBytes` per row hold `meta.height` rows of
         /// `meta.width` pixels in `format`; the size arithmetic is 64-bit. Violations are `Internal`.

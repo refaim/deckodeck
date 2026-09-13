@@ -67,6 +67,8 @@ namespace pvdkit::core
         bool hasIcc = false, hasExif = false, hasXmp = false;
         bool indexed = false;    ///< Source stores palette indices; `depth` is the index width.
         bool interlaced = false; ///< Source is stored progressively (for example, PNG Adam7).
+        /// HDR mastering/content peak in cd/m2 when the container exposes one.
+        std::optional<float> masteringPeakNits{};
     };
 
     /// Holds the display duration of one decoded frame.

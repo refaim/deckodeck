@@ -39,6 +39,17 @@ namespace pvdkit::core
             return result;
         }
 
+        std::vector<std::uint16_t> samples16(const pvd::DecodedPage &page)
+        {
+            std::vector<std::uint16_t> result;
+            for (std::size_t offset = 0; offset < page.pixels.size(); offset += 2) {
+                result.push_back(
+                    static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(page.pixels[offset])) |
+                    static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(page.pixels[offset + 1]) << 8U));
+            }
+            return result;
+        }
+
         TEST_CASE("FileSession exposes its image information and rejects out-of-range "
                   "pages")
         {
@@ -213,6 +224,31 @@ namespace pvdkit::core
             CHECK(decoded->pitchBytes == 9);
             CHECK_FALSE(decoded->hasAlpha);
             CHECK(state.decodedFormats == std::vector{pvd::PixelFormat::Bgr24});
+            CHECK(session.freePage(decoded->pixels));
+        }
+
+        TEST_CASE("display conversion requests BGRA64 for an eight-bit source and runs before transforms")
+        {
+            DecoderState state;
+            // Two straight-alpha BGRA64 pixels: linear black, then linear 50% grey.
+            state.decodedBytes = {
+                std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+                std::byte{0x34}, std::byte{0x12}, std::byte{0x00}, std::byte{0x80}, std::byte{0x00}, std::byte{0x80},
+                std::byte{0x00}, std::byte{0x80}, std::byte{0x78}, std::byte{0x56},
+            };
+            auto imageMeta = test::meta(2, 1, true, 8, 1, false, Transforms{std::nullopt, 0, MirrorAxis::LeftRight});
+            imageMeta.cicp = Cicp{1, 8, 0, true};
+            imageMeta.masteringPeakNits = 400.0F;
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+
+            const auto decoded = session.decodePage(0, pvd::Progress{});
+
+            REQUIRE(decoded.has_value());
+            CHECK(decoded->bitsPerPixel == 64);
+            CHECK(state.decodedFormats == std::vector{pvd::PixelFormat::Bgra64});
+            // The mirror runs after colour: 50% linear grey becomes sRGB 48192 and moves first;
+            // alpha is not colour-managed. The black pixel moves second unchanged.
+            CHECK(samples16(*decoded) == std::vector<std::uint16_t>{48'192, 48'192, 48'192, 0x5678, 0, 0, 0, 0x1234});
             CHECK(session.freePage(decoded->pixels));
         }
 

@@ -136,6 +136,14 @@ namespace pvdkit::avif
         return static_cast<std::uint32_t>(std::llround(milliseconds));
     }
 
+    std::optional<float> detail::masteringPeakNits(const avifImage &image) noexcept
+    {
+        if (image.clli.maxCLL == 0) {
+            return std::nullopt;
+        }
+        return static_cast<float>(image.clli.maxCLL);
+    }
+
     DecoderHandle detail::requireDecoder(DecoderHandle decoder)
     {
         if (!decoder) {
@@ -200,6 +208,9 @@ namespace pvdkit::avif
                         image.icc.size != 0,
                         image.exif.size != 0,
                         image.xmp.size != 0,
+                        false,
+                        false,
+                        detail::masteringPeakNits(image),
                     };
                 });
             });

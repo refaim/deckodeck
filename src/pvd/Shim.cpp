@@ -15,8 +15,10 @@ namespace pvdkit::pvd
 
     std::optional<UINT32> detail::iccExtensionSize(const std::size_t profileSize) noexcept
     {
-        if (profileSize > std::numeric_limits<UINT32>::max()) {
-            return std::nullopt;
+        if constexpr (std::numeric_limits<std::size_t>::max() > std::numeric_limits<UINT32>::max()) {
+            if (profileSize > std::numeric_limits<UINT32>::max()) {
+                return std::nullopt;
+            }
         }
         return static_cast<UINT32>(profileSize);
     }

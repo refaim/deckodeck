@@ -9,13 +9,19 @@ How to use:
   Nothing to learn. Open an .avif file the way you open any picture in
   PictureView. Animated files come as pages, switch them as usual.
 
-  Transparency is shown. Pictures deeper than 8 bits go to PictureView as
-  16-bit, so with dithering or 10-bit output enabled in its settings you
-  see all the precision of the file. Rotation, mirroring and cropping
-  stored in the file are applied.
+  Transparency is shown. Identity 8-bit SDR pictures use BGR24 when opaque
+  or BGRA32 with alpha. Pictures needing HDR or wide-gamut presentation,
+  at any depth, and all pictures deeper than 8 bits use BGRA64. Thus, with
+  dithering or 10-bit output enabled in PictureView's settings, you see all
+  the precision of deep files. Rotation, mirroring and cropping stored in
+  the file are applied.
 
-  Not done yet: HDR files (PQ, HLG) are shown without tone mapping, so
-  they look dark or washed out; embedded ICC profiles are not applied.
+  HDR (PQ/HLG) and wide-gamut (Rec.2020/P3) pictures are converted to
+  sRGB for display, with BT.2390 tone mapping for HDR.
+
+  Not done yet: embedded ICC profiles are not applied; PictureView ignores
+  them and pvdkit does not have a colour-management system yet. Gain maps
+  and user-adjustable exposure or tone settings are not supported.
 
 Install:
   Unpack the archive into PictureView's folder (the one with

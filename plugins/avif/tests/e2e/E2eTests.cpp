@@ -69,7 +69,7 @@ namespace pvdkit::e2e
         constexpr std::uint32_t outputBitsPerPixel(const avif::tests::FixtureExpectation &fixture)
         {
             const auto shallowBits = fixture.alpha ? 32U : 24U;
-            return fixture.pageBpp > shallowBits ? 64U : shallowBits;
+            return fixture.presentation || fixture.pageBpp > shallowBits ? 64U : shallowBits;
         }
 
         void checkDecodeFlags(const DecodedPage &decoded, const bool expectedAlpha, const bool profileAvailable)
@@ -190,7 +190,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.1.0");
+        CHECK(text(info.pVersion) == "1.2.0");
         const auto comments = text(info.pComments);
         CAPTURE(comments);
         CHECK(comments.find("libavif") != std::string::npos);
@@ -405,6 +405,44 @@ namespace pvdkit::e2e
             freeAndClose(exports, opened);
         }
 
+        exports.exit();
+    }
+
+    TEST_CASE("HDR AVIF is presented as 64-bit sRGB through the DLL")
+    {
+        const auto plugin = loadInitializedPlugin();
+        const auto &exports = plugin.exports();
+
+        const auto checkFixture = [&](const std::string_view name, const std::string_view note,
+                                      const std::array<std::pair<std::uint32_t, std::uint32_t>, 3> &positions,
+                                      const std::array<std::array<std::uint16_t, 4>, 3> &expected) {
+            const auto file = readFixture(name);
+            auto opened = openAndDecodeAll(exports, file, OpenMode::Disk);
+            CHECK(text(opened.image.info.pComments).find(note) != std::string::npos);
+            const auto &page = opened.pages.at(0);
+            CHECK(page.decode.nBPP == 64);
+            for (std::size_t index = 0; index < positions.size(); ++index) {
+                const auto [x, y] = positions[index];
+                CAPTURE(name);
+                CAPTURE(x);
+                CAPTURE(y);
+                const auto pixel = pixel16(page, x, y);
+                REQUIRE(pixel.size() == 4);
+                for (std::size_t channel = 0; channel < pixel.size(); ++channel) {
+                    CAPTURE(channel);
+                    CHECK(pixel[channel] == expected[index][channel]);
+                }
+            }
+            freeAndClose(exports, opened);
+        };
+
+        checkFixture("colors_hdr_rec2020.avif", "→ sRGB (BT.2390 tone map from PQ 470 nit)",
+                     {{{0, 0}, {100, 100}, {199, 199}}},
+                     {{{0, 1'014, 65'535, 65'535}, {7'854, 53'351, 63'663, 65'535}, {65'535, 65'535, 65'535, 65'535}}});
+        checkFixture(
+            "cosmos1650_yuv444_10bpc_p3pq.avif", "→ sRGB (BT.2390 tone map from PQ 1000 nit)",
+            {{{0, 0}, {512, 214}, {1023, 427}}},
+            {{{48'085, 35'561, 25'307, 65'535}, {2'682, 20'499, 42'409, 65'535}, {0, 50'080, 49'456, 65'535}}});
         exports.exit();
     }
 
@@ -639,7 +677,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.1.0");
+        CHECK(text(info.pVersion) == "1.2.0");
         CHECK(text(info.pComments).empty());
         exports.exit();
 

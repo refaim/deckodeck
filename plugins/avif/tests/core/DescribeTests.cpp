@@ -58,7 +58,7 @@ namespace pvdkit::avif
                             std::pair{Cicp{2, 2, 2, false}, std::string_view{"CICP 2/2/2 (unspecified)"}},
                             std::pair{Cicp{7, 8, 10, false}, std::string_view{"CICP 7/8/10"}}}) {
                 meta.cicp = cicp;
-                CHECK(describe(meta).ends_with(expected));
+                CHECK(describe(meta).find(expected) != std::string::npos);
             }
         }
 
@@ -137,7 +137,47 @@ namespace pvdkit::avif
 
             CHECK(describe(meta) == "10-bit YUV 4:4:4 (full range), CICP 9/16/9 (BT.2020 PQ), "
                                     "premultiplied alpha, "
-                                    "12 frames, ICC, EXIF, XMP, clap, irot 3, imir left-right");
+                                    "12 frames, ICC, EXIF, XMP, clap, irot 3, imir left-right, "
+                                    "→ sRGB (BT.2390 tone map from PQ 1000 nit)");
+        }
+
+        TEST_CASE("describe records HDR and wide-gamut presentation")
+        {
+            auto meta = baseMeta();
+            for (const auto &[primaries, name] :
+                 std::array{std::pair{std::uint16_t{4}, std::string_view{"BT.470M"}},
+                            std::pair{std::uint16_t{5}, std::string_view{"BT.601-625"}},
+                            std::pair{std::uint16_t{6}, std::string_view{"BT.601-625"}},
+                            std::pair{std::uint16_t{7}, std::string_view{"SMPTE 240M/BT.601-525"}},
+                            std::pair{std::uint16_t{9}, std::string_view{"Rec.2020"}},
+                            std::pair{std::uint16_t{11}, std::string_view{"P3-DCI"}},
+                            std::pair{std::uint16_t{12}, std::string_view{"P3-D65"}},
+                            std::pair{std::uint16_t{22}, std::string_view{"EBU 3213-E"}}}) {
+                meta.cicp = Cicp{primaries, 13, 6, false};
+                CHECK(describe(meta).ends_with("→ sRGB (" + std::string{name} + " primaries)"));
+            }
+
+            meta.cicp = Cicp{11, 18, 12, false};
+            meta.masteringPeakNits = 4'000.0F;
+            CHECK(describe(meta).ends_with("→ sRGB (BT.2390 tone map from HLG 1000 nit)"));
+
+            meta.cicp = Cicp{12, 16, 12, false};
+            CHECK(describe(meta).ends_with("→ sRGB (BT.2390 tone map from PQ 4000 nit)"));
+        }
+
+        TEST_CASE("describe records safe fallbacks for unknown colour codes")
+        {
+            auto meta = baseMeta();
+            meta.cicp.transfer = 99;
+            CHECK(describe(meta).ends_with("→ sRGB (unknown transfer 99 treated as sRGB)"));
+
+            meta = baseMeta();
+            meta.cicp.primaries = 99;
+            CHECK(describe(meta).ends_with("→ sRGB (unknown primaries 99 treated as BT.709)"));
+
+            meta.cicp = Cicp{99, 99, 6, false};
+            CHECK(describe(meta).ends_with("→ sRGB (unknown transfer 99 treated as sRGB; "
+                                           "unknown primaries 99 treated as BT.709)"));
         }
 
         TEST_CASE("Describer names the format AVIF, the codec AV1 and describes the "

@@ -23,7 +23,7 @@ endif()
 pvdkit_plugin_identity(
   avif
   NAME AVIF
-  VERSION 1.1.0
+  VERSION 1.2.0
   PRIORITY 10
   DESCRIPTION "AVIF decoder plugin for PictureView (Far Manager)"
   COMMENTS "AVIF decoder: libavif ${libavif_VERSION}, dav1d ${_avif_dav1d_version}, libyuv ${_avif_libyuv_version}; static build")

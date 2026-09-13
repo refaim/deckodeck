@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -79,6 +80,7 @@ namespace pvdkit::core::test
         bool throwOnDecode = false;
         std::uint32_t durationMs = 125;
         std::vector<std::byte> iccProfile;
+        std::vector<std::byte> decodedBytes;
         int destructions = 0;
     };
 
@@ -130,6 +132,10 @@ namespace pvdkit::core::test
             }
             if (state.decodeError) {
                 return std::unexpected(*state.decodeError);
+            }
+            if (!state.decodedBytes.empty()) {
+                std::ranges::copy(state.decodedBytes, destination.begin());
+                return {};
             }
 
             // Pixel id = 1 + frame * 100 + row-major index, so pages of different

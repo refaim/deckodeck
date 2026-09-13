@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "core/Transform.hpp"
+#include "core/colour/Pipeline.hpp"
 
 namespace pvdkit::core
 {
@@ -69,7 +70,8 @@ namespace pvdkit::core
             return std::unexpected(aborted());
         }
 
-        const auto format = options_.deepOutput && meta.depth > 8
+        const bool presentationNeeded = colour::Presentation::needed(meta.cicp);
+        const auto format = presentationNeeded || (options_.deepOutput && meta.depth > 8)
                                 ? pvd::PixelFormat::Bgra64
                                 : (meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24);
         const auto bytesPerPixel =
@@ -83,6 +85,14 @@ namespace pvdkit::core
         const auto decoded = decoder_->decodeFrame(page, format, buffer.bytes(), buffer.pitchBytes());
         if (!decoded) {
             return std::unexpected(decoded.error());
+        }
+        if (presentationNeeded) {
+            const colour::Presentation presentation{meta.cicp, meta.masteringPeakNits};
+            const auto bytesPerRow = static_cast<std::size_t>(buffer.pitchBytes());
+            auto bytes = buffer.bytes();
+            for (std::uint32_t row = 0; row < buffer.height(); ++row) {
+                presentation.apply(bytes.subspan(static_cast<std::size_t>(row) * bytesPerRow, bytesPerRow));
+            }
         }
         if (!progress.report(1, 3)) {
             return std::unexpected(aborted());

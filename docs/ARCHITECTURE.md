@@ -118,7 +118,8 @@ root owns them in declaration order). Classes holding references delete copy and
 
 ## 3. Canonical interfaces
 
-Namespace for everything shared: `pvdkit`, with sub-namespaces `pvd`, `core`, `win`. A plugin
+Namespace for everything shared: `pvdkit`, with sub-namespaces `pvd`, `core`, `core::colour`,
+`win`. A plugin
 uses a sub-namespace named after itself for all of its code (`pvdkit::avif`), including the
 describer it places under `src/core/`.
 
@@ -320,6 +321,7 @@ struct ImageMeta {                    // every scalar has a default: an empty Im
   bool hasIcc = false, hasExif = false, hasXmp = false;
   bool indexed = false;                 // source stores palette indices; depth is the index width (1/2/4/8)
   bool interlaced = false;              // source is stored progressively (PNG Adam7; informational only)
+  std::optional<float> masteringPeakNits; // HDR mastering/content peak in cd/m2, when supplied
 };
 struct FrameTiming { std::uint32_t durationMs; };
 struct DecoderOptions {
@@ -371,9 +373,9 @@ Decisions (Task 7, open point 1):
   the coded samples, and CICP itself has a spelling for every case: an RGB format reports
   `Yuv444` (no subsampling) with `cicp.matrix = 0` (identity) and `fullRange = true` — for sRGB
   PNG that is exactly `{1, 13, 0, true}`, for unknown colour `{2, 2, 0, true}` — and greyscale is
-  `Yuv400`. Nothing in the shared core reads them; only a plugin's describer does, and it is free
-  to print them or not. An `std::optional` would have added branches to every describer for a
-  case CICP already expresses.
+  `Yuv400`. The shared colour-presentation module reads primaries and transfer; matrix and range
+  remain informational because the codec adapter has already produced full-range RGB. A plugin's
+  describer is free to print the signalling and presentation decision.
 - The host-facing words (`formatName`, `compression`, `comments`) are produced by the plugin's
   `IImageDescriber`; `CodecPlugin` derives `pageCount` and `animated` from `ImageMeta` and
   assembles `ImageInfo`. An interface rather than a callback because everything else injected into
@@ -391,6 +393,20 @@ Decisions (Task 7, open point 1):
   (`GetFileSizeEx`) go through it, so on the 32-bit build a picture or file beyond 4 GiB is
   refused instead of wrapped; there is no `#ifdef` on the architecture anywhere in `src/`. Frame
   times use `std::llround` (`long` is 32 bits on Windows).
+- `colour` (`src/core/colour/`): a float, row-at-a-time presentation pipeline over BGRA64.
+  `Transfer` implements the H.273 sRGB, BT.1886, gamma 2.2/2.8, linear, PQ and HLG functions;
+  code 2 and unknown transfers fall back to sRGB. `Primaries` derives the H.273 RGB-to-BT.709
+  matrices at compile time from chromaticities, using Bradford adaptation where the white is not
+  D65; code 2 and unknown primaries are identity. `ToneMap` applies the BT.2390 Hermite-knee EETF
+  to maxRGB so one ratio scales all three channels and preserves hue. `Presentation` caches a
+  65,536-entry transfer LUT, applies HLG's 1000-nit/1.2-gamma OOTF where needed, converts the
+  primaries, tone-maps PQ/HLG to the 100-nit/0.005-nit SDR reference display, applies the exact
+  sRGB OETF, clamps, rounds, and preserves alpha. PQ uses `masteringPeakNits` clamped to 10,000
+  nits or 1,000 nits when absent/invalid; HLG always uses its 1,000-nit reference display.
+  Identity is primaries 1 or 2 plus transfer 1, 2, 6, 13, 14 or 15. It is short-circuited so the
+  existing SDR byte stream is unchanged; conversion is selected for any other primaries or
+  transfer 4, 5, 8, 16 or 18. Unknown codes never reject a viewer input and are named as fallbacks
+  in the plugin's image comments.
 - `Transform` (`src/core/Transform.hpp/.cpp`): pure functions over `PixelView`
   (`std::span<const std::byte>`, width, height, bytesPerPixel, pitch, the four integers defaulted
   to 0; always passed by `const&`):
@@ -420,9 +436,10 @@ Decisions (Task 7, open point 1):
     `bitsPerPixel = indexed ? depth : depth × (hasAlpha ? 4 : 3)` (informational, so indexed4
     reports 4 and 10-bit RGBA reports 40); `frameTimeMs` = `frameTiming(p)` when animated else 0.
   - `decodePage(p, progress)`: range check; `progress.report(0, 3)`; allocate `PixelBuffer` at coded
-    size (`Bgra64` with 8 bytes/pixel when `deepOutput && depth > 8`, otherwise `Bgra32` if
-    `hasAlpha`, else `Bgr24`); `decodeFrame`; propagate `meta.hasAlpha` independently of layout;
-    `progress.report(1, 3)`;
+    size (`Bgra64` with 8 bytes/pixel when colour presentation is needed, or when
+    `deepOutput && depth > 8`; otherwise `Bgra32` if `hasAlpha`, else `Bgr24`); `decodeFrame`;
+    apply `colour::Presentation` in place to each BGRA64 row before any geometric transform;
+    propagate `meta.hasAlpha` independently of layout; `progress.report(1, 3)`;
     if any transform present → `Transform::apply` into a new buffer; `progress.report(2, 3)`;
     move buffer into `outstanding_`; return the view together with the decoder-owned ICC profile
     span. Any `false` from `report` → `Aborted`.
@@ -433,7 +450,8 @@ Decisions (Task 7, open point 1):
   It chooses the `DecoderOptions` and builds `PluginInfo` from `kPluginIdentity` plus run-time
   library versions. Every production composition sets `deepOutput = true`, so sources deeper than
   8 bits are delivered as BGRA64 without a build switch; 8-bit-and-shallower sources keep their
-  BGR24/BGRA32 layouts. Plugin-specific values are recorded in each `plugins/<id>/DESIGN.md`.
+  BGR24/BGRA32 layouts unless colour presentation requires BGRA64 headroom. Plugin-specific values
+  are recorded in each `plugins/<id>/DESIGN.md`.
 
 ### 3.8 Shared adapter
 
@@ -770,7 +788,9 @@ Decisions (Task 7, open point 1):
 
 ## 8. Out of scope (document, do not implement)
 
-Colour management of any kind (the PVD interface has none), per-plugin configuration files,
-a plugin that serves several formats from one DLL (one format per plugin
-keeps the identity, the priority and the packaging one-dimensional). Format-specific exclusions:
-the plugin's `DESIGN.md`.
+CICP-described colour is converted for display by `src/core/colour`. ICC profiles are not applied:
+the host ignores them and pvdkit does not have a CMS yet. The PVD interface provides no
+user-adjustable exposure or tone controls, and gain maps are not supported. Also out of scope are
+per-plugin configuration files and a plugin that serves several formats from one DLL (one format
+per plugin keeps the identity, the priority and the packaging one-dimensional). Format-specific
+exclusions live in the plugin's `DESIGN.md`.

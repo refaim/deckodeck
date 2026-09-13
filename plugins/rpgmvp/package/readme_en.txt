@@ -12,7 +12,7 @@ How to use:
   as 16-bit.
 
   Animated PNGs (APNG) show their first frame only. RPG Maker never makes
-  them anyway.
+  them anyway. PNG gAMA/cHRM chunks and embedded ICC profiles are ignored.
 
 Install:
   Unpack the archive into PictureView's folder (the one with

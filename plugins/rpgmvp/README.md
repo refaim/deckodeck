@@ -10,7 +10,9 @@ It supports PNG greyscale, RGB, indexed, greyscale-alpha and RGBA images, tRNS t
 BGRA64; 8-bit-and-shallower opaque images use BGR24 and images with direct or tRNS alpha use
 straight BGRA32. The plugin is built for x64 and x86 with libspng and zlib linked statically.
 
-Limitations: gamma correction and ICC colour management are not applied. APNG is deliberately
+Limitations: PNG `gAMA`/`cHRM` chunks and ICC colour management are not applied. RPGMVP has no
+CICP source signalling beyond the PNG sRGB chunk, so the shared HDR/wide-gamut pipeline does not
+change its output. APNG is deliberately
 exposed as one still page containing its default image. The shared resource limits are 268,435,456
 pixels total and 32,768 pixels on either side.
 
