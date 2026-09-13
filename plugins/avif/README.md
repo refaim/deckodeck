@@ -35,13 +35,13 @@ plugins/avif/
   tests/core tests/adapters tests/e2e     avif_core_tests, avif_adapter_tests, avif_e2e_tests
   fixtures/               sample files + SOURCES.md (origin, licence, expected values)
   scripts/                fetch-fixtures.ps1, make-synthetic-fixtures.ps1, libavif-fixtures.sha256
-  package/README.txt.in   the README.txt of the zip (configured by CMake)
+  package/                static English/Russian readmes and ChangeLog for the zip
   DESIGN.md               the plugin's design; the shared design is docs/ARCHITECTURE.md
 ```
 
 The plugin is written to `build/<preset>$env:PVDKIT_BUILD_SUFFIX/plugins/avif/AVIF.pvd`;
 `scripts/package.ps1` produces `dist/AVIF-<version>-x64.zip` and `dist/AVIF-<version>-x86.zip`
-(`AVIF.pvd`, `README.txt`, `LICENSES.txt`).
+with the plugin, static distribution documents, dependency licences and package manifest.
 
 ## Tests and fixtures
 

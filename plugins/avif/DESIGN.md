@@ -81,7 +81,8 @@ Well-known CICP triples get a suffix: `1/13/6` → `(sRGB)`, `1/1/1` → `(BT.70
   llvm-lib). The chainload toolchain must **not** replace `CMAKE_AR` for the same reason.
 - `plugins/avif/CMakeLists.txt`: `avif_core` (Describe), `avif_adapter` (links `avif`, `yuv`),
   `avif_composition` (DefaultPlugin.cpp), then `pvdkit_add_plugin(avif ...)` with the licence
-  ports `libavif`, `dav1d`, `libyuv` for `LICENSES.txt`, and `package/README.txt.in` for the zip.
+  ports `libavif`, `dav1d`, `libyuv` for `LICENSES.txt`; `package/` holds the static English and
+  Russian readmes and ChangeLog for the zip.
 - Tests: `avif_core_tests` (Describe, Describer), `avif_adapter_tests` (Decoder on the fixtures,
   the static link of libavif+dav1d, the composed production plugin), `avif_e2e_tests`
   (`LoadLibraryW(AVIF.pvd)` on every fixture in disk and memory mode, exact pixel checks on the

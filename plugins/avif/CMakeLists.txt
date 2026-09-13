@@ -51,7 +51,6 @@ target_link_libraries(avif_composition PUBLIC avif_identity avif_adapter avif_co
 pvdkit_add_plugin(
   avif
   LINK avif_composition
-  README package/README.txt.in
   LICENSES libavif "libavif (BSD-2-Clause)" dav1d "dav1d (BSD-2-Clause)" libyuv "libyuv (BSD-3-Clause)")
 
 if(BUILD_TESTING)

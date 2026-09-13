@@ -23,7 +23,7 @@ pvdkit/
     src/adapters/     the codec adapter(s)                                     → <id>_adapter
     src/DefaultPlugin.cpp   the composition root: pvd::makePlugin()            → <id>_composition
     tests/core/ tests/adapters/ tests/e2e/   the plugin's tests
-    fixtures/  scripts/  package/README.txt.in  README.md  DESIGN.md
+    fixtures/  scripts/  package/{readme_en.txt,readme_ru.txt,ChangeLog}  README.md  DESIGN.md
   tests/pvd/ tests/core/ tests/adapters/ tests/guard/   shared tests
   tests/support/      the leak gate: LeakCheck (accounting), HostileCorpus (fuzz-lite corpus),
                       leak/LeakScenarios.cpp compiled into every plugin's <id>_leak_tests
@@ -280,8 +280,9 @@ that the views are literal-backed (null-terminated). Consumers:
 - `tests/e2e/VersionResourceTests.cpp` (reads the block back with `GetFileVersionInfoW` /
   `VerQueryValueW`, `version.lib` linked into the e2e test only, and compares it with the running
   plugin's `pvdPluginInfo`);
-- the package manifest `<build>/plugins/<id>/package/manifest.json` and README that
-  `pvdkit_add_plugin` writes for `scripts/package.ps1`.
+- the package manifest `<build>/plugins/<id>/package/manifest.json` that `pvdkit_add_plugin`
+  writes for `scripts/package.ps1`; the plugin's static distribution documents are copied
+  byte-for-byte after their identity, encoding and line endings are validated.
 
 The shared static library `pvdkit_pvd` carries no identity at all. `pvd_tests` compiles
 `Exports.cpp` against its own generated identity (`TestPlugin` 9.8.7, priority 42) through the
@@ -500,13 +501,14 @@ Decisions (Task 7, open point 1):
   - the plugin's own `add_library` calls: `<id>_core` (static, `src/core/**`), `<id>_adapter`
     (static, `src/adapters/**`, links the codec ports), `<id>_composition` (static,
     `src/DefaultPlugin.cpp`, links the two plus `pvdkit_win`, `pvdkit_pvd`, `<id>_identity`);
-  - `pvdkit_add_plugin(<id> LINK <id>_composition README package/README.txt.in LICENSES <port> <name> ...)`
+  - `pvdkit_add_plugin(<id> LINK <id>_composition LICENSES <port> <name> ...)`
     → `<id>_plugin` (SHARED; `OUTPUT_NAME <NAME>`, `SUFFIX .pvd`, `PREFIX ""`; sources =
     `Exports.cpp` + `Plugin.def` + `Plugin.rc` read from properties of `pvdkit_pvd`) and the
-    package staging `<bindir>/package/` (`README.txt` configured from the plugin's template with
-    name/version/priority/description/comments and architecture/author/copyright, `LICENSES.txt`
-    assembled from vcpkg's `share/<port>/copyright` files, `manifest.json` = name, version,
-    architecture, file name);
+    package staging `<bindir>/package/` (static `readme_en.txt`, `readme_ru.txt` and `ChangeLog`
+    copied byte-for-byte after configure-time identity/encoding/line-ending checks,
+    `LICENSES.txt` assembled from vcpkg's `share/<port>/copyright` files, `manifest.json` = name,
+    version, architecture, file name); `<id>_package_docs` repeats the document checks on the
+    staged files under CTest;
   - tests: `<id>_core_tests`, `<id>_adapter_tests` (the plugin's own `add_executable`), and
     `pvdkit_add_plugin_e2e_tests(<id> FIXTURES <dir> SOURCES ...)` → `<id>_e2e_tests` (in
     coverage builds with the ctest `ENVIRONMENT` property
@@ -560,7 +562,8 @@ Decisions (Task 7, open point 1):
   `package/manifest.json`, runs both gates on each DLL and copies them to `dist/x64/<NAME>.pvd`
   and `dist/x86/<NAME>.pvd`. `scripts/package.ps1`: the same from scratch (suffix `-pkg`), checks
   each DLL's `FileVersion` against the manifest, then `dist/<NAME>-<version>-{x64,x86}.zip`
-  (`<NAME>.pvd`, `README.txt`, `LICENSES.txt` from the staging directory) with their SHA-256.
+  (`<NAME>.pvd`, `readme_en.txt`, `readme_ru.txt`, `ChangeLog`, `LICENSES.txt`, `manifest.json`)
+  with their SHA-256.
   Before the zips it also runs the `asan` preset from scratch (`build/asan-pkg`): configure, build,
   `ctest --preset asan`; any AddressSanitizer report fails the packaging.
 - Preset `asan` (Task 10, level 2; x64 only): `CMAKE_BUILD_TYPE=RelWithDebInfo` with
@@ -734,8 +737,8 @@ Decisions (Task 7, open point 1):
 1. `plugins/<id>/CMakeLists.txt`: `find_package` the codec, compute the comments string,
    `pvdkit_plugin_identity(<id> NAME <NAME> VERSION x.y.z PRIORITY n DESCRIPTION ... COMMENTS ...)`,
    `add_library(<id>_core ...)`, `add_library(<id>_adapter ...)`, `add_library(<id>_composition
-   src/DefaultPlugin.cpp)`, `pvdkit_add_plugin(<id> LINK <id>_composition README package/README.txt.in
-   LICENSES <port> "<name (licence)>" ...)`, `add_subdirectory(tests)` under `BUILD_TESTING`.
+   src/DefaultPlugin.cpp)`, `pvdkit_add_plugin(<id> LINK <id>_composition LICENSES <port>
+   "<name (licence)>" ...)`, `add_subdirectory(tests)` under `BUILD_TESTING`.
 2. `vcpkg.json`: a feature `<id>` with the codec ports; add it to `default-features`.
 3. `src/adapters/<lib>/`: `IDecoderFactory` (`recognises` = signature check on the head,
    `create` = parse) and `IDecoder` over the library, one-to-one, no decisions.
@@ -743,8 +746,8 @@ Decisions (Task 7, open point 1):
    `src/DefaultPlugin.cpp`: `pvd::makePlugin()` owning `win::FileSource`, the factory, the
    describer and a `core::CodecPlugin`.
 4. `fixtures/` + `fixtures/SOURCES.md`, `tests/core`, `tests/adapters`, `tests/e2e/E2eTests.cpp` +
-   `pvdkit_add_plugin_e2e_tests(<id> FIXTURES ... SOURCES ...)`, `package/README.txt.in`,
-   `README.md`, `DESIGN.md`.
+   `pvdkit_add_plugin_e2e_tests(<id> FIXTURES ... SOURCES ...)`, static distribution documents
+   `package/{readme_en.txt,readme_ru.txt,ChangeLog}`, `README.md`, `DESIGN.md`.
 5. Copy `tests/.clang-tidy` to `plugins/<id>/tests/.clang-tidy` (clang-tidy reads the nearest
    configuration above a translation unit, so the test-only relaxations do not reach a plugin's
    tests otherwise) and run `scripts/lint.ps1` on both architectures.

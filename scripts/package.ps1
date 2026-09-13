@@ -6,9 +6,9 @@ param(
 
 # Builds every plugin for x64 and x86 from scratch (scripts/build-all.ps1 -Clean: the `release`
 # and `release-x86` presets, the import-table and export-table gates on each DLL) and packs each
-# into dist/<NAME>-<version>-<arch>.zip with the README.txt and LICENSES.txt that the plugin's
-# CMake configuration staged next to it (plugins/<id>/package/README.txt.in and the licence texts
-# of the ports it lists, as vcpkg installed them). Prints the zip paths and SHA-256.
+# into dist/<NAME>-<version>-<arch>.zip with the static English/Russian readmes and ChangeLog plus
+# the LICENSES.txt and manifest.json that the plugin's CMake configuration staged next to it.
+# Prints the zip paths and SHA-256.
 $ErrorActionPreference = "Stop"
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -81,6 +81,7 @@ New-Item -ItemType Directory -Force -Path $distDirectory | Out-Null
 $staging = Join-Path $distDirectory "staging"
 
 $results = @()
+$packageFiles = @("readme_en.txt", "readme_ru.txt", "ChangeLog", "LICENSES.txt", "manifest.json")
 foreach ($build in $built) {
   # The manifest version is the one the plugin's CMakeLists.txt declared (pvdkit_plugin_identity),
   # the same source that fills the VERSIONINFO resource; the DLL must agree.
@@ -88,7 +89,7 @@ foreach ($build in $built) {
   if ($versionInfo.FileVersion -ne $build.Version) {
     throw "$($build.Plugin) carries FileVersion '$($versionInfo.FileVersion)', expected '$($build.Version)'"
   }
-  foreach ($name in @("README.txt", "LICENSES.txt")) {
+  foreach ($name in $packageFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $build.PackageDirectory $name) -PathType Leaf)) {
       throw "$name was not staged in $($build.PackageDirectory)"
     }
@@ -99,8 +100,9 @@ foreach ($build in $built) {
   }
   New-Item -ItemType Directory -Force -Path $staging | Out-Null
   Copy-Item -LiteralPath $build.Plugin -Destination (Join-Path $staging "$($build.Name).pvd")
-  Copy-Item -LiteralPath (Join-Path $build.PackageDirectory "README.txt") -Destination (Join-Path $staging "README.txt")
-  Copy-Item -LiteralPath (Join-Path $build.PackageDirectory "LICENSES.txt") -Destination (Join-Path $staging "LICENSES.txt")
+  foreach ($name in $packageFiles) {
+    Copy-Item -LiteralPath (Join-Path $build.PackageDirectory $name) -Destination (Join-Path $staging $name)
+  }
 
   $zip = Join-Path $distDirectory "$($build.Name)-$($build.Version)-$($build.Architecture).zip"
   if (Test-Path -LiteralPath $zip) {

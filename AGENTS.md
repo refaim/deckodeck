@@ -100,7 +100,7 @@ src/core/       logic: CodecPlugin, FileSession, Transform, PixelBuffer, Narrow,
 src/adapters/   win/ (FileMapping, FileSource, Utf8)
 plugins/<id>/   one plugin: CMakeLists.txt (identity + targets), src/core/, src/adapters/<lib>/,
                 src/DefaultPlugin.cpp (composition root), tests/{core,adapters,e2e}/, fixtures/,
-                scripts/, package/README.txt.in, README.md, DESIGN.md
+                scripts/, package/{readme_en.txt,readme_ru.txt,ChangeLog}, README.md, DESIGN.md
 tests/pvd/      shim, firewall, context handle, Progress, Exports with fakes (doctest)
 tests/core/     core logic with fake decoder / file source / describer (doctest)
 tests/adapters/ the win adapter on real files

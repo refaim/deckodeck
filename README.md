@@ -11,6 +11,8 @@ Plugins:
 - `plugins/avif` — `AVIF.pvd`, AVIF decoder over libavif 1.4.2 + dav1d 1.5.3 + libyuv. See
   `plugins/avif/README.md` for what it supports and how to install it.
 
+The repository's own code is licensed under the MIT License; see `LICENSE`.
+
 ## Build
 
 Requirements (already installed on the reference machine, see `AGENTS.md`): clang-cl 19, lld-link,
@@ -53,7 +55,7 @@ to the 32-bit `0PictureView.dll`; the two architectures are not interchangeable.
 `scripts/build-all.ps1` builds both architectures, runs the import and export checks on every
 DLL and copies them to `dist/x64/<NAME>.pvd` and `dist/x86/<NAME>.pvd`; `scripts/package.ps1`
 does the same from scratch and produces `dist/<NAME>-<version>-x64.zip` and
-`dist/<NAME>-<version>-x86.zip` (`<NAME>.pvd`, `README.txt`, `LICENSES.txt`) with their SHA-256.
+`dist/<NAME>-<version>-x86.zip` with their SHA-256.
 
 Every DLL carries a VERSIONINFO resource (version, author, copyright, library versions). A
 plugin's name, version and priority are declared once, in `pvdkit_plugin_identity(...)` in its
@@ -127,7 +129,8 @@ src/core/       decisions: CodecPlugin, FileSession, Transform, PixelBuffer, Nar
                 IDecoder / IFileSource / IImageDescriber contracts
 src/adapters/   win/ (file mapping, UTF-8 paths)
 plugins/<id>/   one plugin: src/core, src/adapters/<lib>, src/DefaultPlugin.cpp (composition),
-                tests/{core,adapters,e2e}, fixtures/, scripts/, package/README.txt.in, README.md, DESIGN.md
+                tests/{core,adapters,e2e}, fixtures/, scripts/,
+                package/{readme_en.txt,readme_ru.txt,ChangeLog}, README.md, DESIGN.md
 tests/          pvd, core, adapters (win), guard (source rules) — shared tests; e2e holds the
                 host driver and VERSIONINFO test every plugin's e2e executable compiles in;
                 support holds the leak accounting, the hostile corpus generator and the leak
@@ -156,6 +159,8 @@ scripts/        coverage, import/export checks, lint, build-all, package (all pl
   plugin. Registered for the Release configuration only (`add_test(... CONFIGURATIONS Release)`):
   the `release` test presets pass `-C Release`, and on the multi-config
   `Visual Studio 17 2022 -T ClangCL` fallback `ctest -C Release` selects them.
+- `<id>_package_docs` - repeats the identity, encoding and CRLF checks on the static distribution
+  documents copied into the plugin's package staging directory.
 - `leakcheck_tests` and `<id>_leak_tests` - the leak gate (level 1 of `docs/tasks/task10-leaks.md`,
   every preset, both architectures). `tests/support/LeakCheck` snapshots the process - live blocks
   and bytes of the process heap (`HeapWalk`; one mechanism for Debug and Release because every

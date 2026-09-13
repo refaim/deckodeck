@@ -40,7 +40,6 @@ target_link_libraries(
 pvdkit_add_plugin(
   rpgmvp
   LINK rpgmvp_composition
-  README package/README.txt.in
   LICENSES libspng "libspng (BSD-2-Clause)" zlib "zlib (zlib licence)")
 
 if(BUILD_TESTING)

@@ -1,0 +1,2 @@
+plugins/*/package/readme_*.txt -text
+plugins/*/package/ChangeLog -text

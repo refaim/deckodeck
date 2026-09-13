@@ -6,12 +6,14 @@
 #        source of the plugin's identity for Exports.cpp, the composition root, Plugin.rc and the
 #        e2e version test) and the properties PVDKIT_PLUGIN_NAME / PVDKIT_PLUGIN_VERSION.
 #
-#   pvdkit_add_plugin(<id> LINK <composition libs...> README <README.txt.in>
+#   pvdkit_add_plugin(<id> LINK <composition libs...>
 #                     LICENSES <port> <display name> [<port> <display name> ...])
 #     -> SHARED target <id>_plugin (<Name>.pvd): the shared Exports.cpp, Plugin.def and Plugin.rc
 #        over the plugin's composition root, linked with pvdkit_pvd; plus the package staging
-#        directory <bindir>/package (README.txt, LICENSES.txt, manifest.json) that
-#        scripts/build-all.ps1 and scripts/package.ps1 consume.
+#        directory <bindir>/package (the plugin's static readme_en.txt, readme_ru.txt and
+#        ChangeLog copied byte-for-byte, plus generated LICENSES.txt and manifest.json) that
+#        scripts/build-all.ps1 and scripts/package.ps1 consume; configure and CTest both validate
+#        the static documents' identity, encodings and line endings.
 #
 #   pvdkit_add_plugin_e2e_tests(<id> FIXTURES <dir> SEQUENCE_EXPECTATIONS <source>
 #                                SOURCES <files...>)   (tests only)
@@ -31,6 +33,8 @@
 #     (called by the e2e helper)
 #     -> executable <id>_sequence_tests = the framework-free in-process host-sequence driver plus
 #        its shared doctest source, linked to this plugin's composition root with reduced limits.
+
+include("${CMAKE_CURRENT_LIST_DIR}/pvdkit-package-docs.cmake")
 
 # Escapes a string for use inside a C string literal in a generated header (backslashes, quotes).
 function(_pvdkit_escape_literal out value)
@@ -88,7 +92,7 @@ function(pvdkit_plugin_identity id)
 endfunction()
 
 function(pvdkit_add_plugin id)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "README" "LINK;LICENSES")
+  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "LINK;LICENSES")
   if(arg_UNPARSED_ARGUMENTS)
     message(FATAL_ERROR "pvdkit_add_plugin(${id}): unexpected arguments ${arg_UNPARSED_ARGUMENTS}")
   endif()
@@ -104,9 +108,6 @@ function(pvdkit_add_plugin id)
   if(NOT arg_LINK)
     message(FATAL_ERROR "pvdkit_add_plugin(${id}): LINK must name the composition root library")
   endif()
-  if(NOT arg_README OR NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${arg_README}")
-    message(FATAL_ERROR "pvdkit_add_plugin(${id}): README must name an existing README.txt.in")
-  endif()
   list(LENGTH arg_LICENSES license_count)
   math(EXPR license_remainder "${license_count} % 2")
   if(license_count EQUAL 0 OR NOT license_remainder EQUAL 0)
@@ -115,9 +116,6 @@ function(pvdkit_add_plugin id)
 
   get_target_property(name ${id}_identity PVDKIT_PLUGIN_NAME)
   get_target_property(version ${id}_identity PVDKIT_PLUGIN_VERSION)
-  get_target_property(priority ${id}_identity PVDKIT_PLUGIN_PRIORITY)
-  get_target_property(description ${id}_identity PVDKIT_PLUGIN_DESCRIPTION)
-  get_target_property(comments ${id}_identity PVDKIT_PLUGIN_COMMENTS)
   get_target_property(export_sources pvdkit_pvd PVDKIT_EXPORT_SOURCES)
   get_target_property(def_file pvdkit_pvd PVDKIT_DEF_FILE)
   get_target_property(rc_file pvdkit_pvd PVDKIT_RC_FILE)
@@ -131,37 +129,27 @@ function(pvdkit_add_plugin id)
   set_target_properties(${id}_plugin PROPERTIES OUTPUT_NAME "${name}" PREFIX "" SUFFIX ".pvd")
   target_link_libraries(${id}_plugin PRIVATE ${id}_identity pvdkit_pvd ${arg_LINK} pvdkit_options)
 
-  # Package staging for scripts/package.ps1: README.txt configured from the plugin's template,
-  # LICENSES.txt assembled from the licence texts vcpkg installed for the listed ports
-  # (share/<port>/copyright), and manifest.json naming the DLL, its version and architecture.
+  # Package staging for scripts/package.ps1: the plugin's hand-written documents copied without
+  # changing a byte, LICENSES.txt assembled from the licence texts vcpkg installed for the listed
+  # ports (share/<port>/copyright), and manifest.json naming the DLL, version and architecture.
   set(package_dir "${CMAKE_CURRENT_BINARY_DIR}/package")
+  set(package_source_dir "${CMAKE_CURRENT_SOURCE_DIR}/package")
+  pvdkit_check_package_docs(
+    PACKAGE_DIR "${package_source_dir}"
+    NAME "${name}"
+    VERSION "${version}"
+    CONTEXT "pvdkit_add_plugin(${id})")
+  file(REMOVE_RECURSE "${package_dir}")
+  file(MAKE_DIRECTORY "${package_dir}")
+  foreach(document readme_en.txt readme_ru.txt ChangeLog)
+    configure_file("${package_source_dir}/${document}" "${package_dir}/${document}" COPYONLY)
+  endforeach()
+
   if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(PVDKIT_PLUGIN_ARCHITECTURE "x64")
-    set(PVDKIT_PLUGIN_BITS "64-bit")
   else()
     set(PVDKIT_PLUGIN_ARCHITECTURE "x86")
-    set(PVDKIT_PLUGIN_BITS "32-bit")
   endif()
-  # README.txt.in may use @PVDKIT_PLUGIN_NAME@, _VERSION, _PRIORITY, _DESCRIPTION, _ARCHITECTURE,
-  # _BITS, _COMMENTS, _AUTHOR and _COPYRIGHT (the identity's DESCRIPTION is the resource's
-  # FileDescription; the template repeats it rather than restating it).
-  set(PVDKIT_PLUGIN_NAME "${name}")
-  set(PVDKIT_PLUGIN_VERSION "${version}")
-  set(PVDKIT_PLUGIN_PRIORITY "${priority}")
-  set(PVDKIT_PLUGIN_DESCRIPTION "${description}")
-  set(PVDKIT_PLUGIN_COMMENTS "${comments}")
-  set(PVDKIT_PLUGIN_AUTHOR "${PVDKIT_AUTHOR}")
-  set(PVDKIT_PLUGIN_COPYRIGHT "${PVDKIT_COPYRIGHT}")
-  # configure_file silently blanks an unknown @VAR@; refuse a template that names one.
-  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${arg_README}" readme_template)
-  string(REGEX MATCHALL "@[A-Za-z_]+@" readme_placeholders "${readme_template}")
-  foreach(placeholder IN LISTS readme_placeholders)
-    string(REGEX REPLACE "@" "" placeholder_name "${placeholder}")
-    if(NOT DEFINED ${placeholder_name} OR "${${placeholder_name}}" STREQUAL "")
-      message(FATAL_ERROR "pvdkit_add_plugin(${id}): ${arg_README} uses ${placeholder}, which is not set")
-    endif()
-  endforeach()
-  configure_file("${CMAKE_CURRENT_SOURCE_DIR}/${arg_README}" "${package_dir}/README.txt" @ONLY)
 
   set(licenses "")
   set(license_names "")
@@ -179,6 +167,13 @@ function(pvdkit_add_plugin id)
   list(JOIN license_names ", " license_names)
   file(WRITE "${package_dir}/manifest.json"
        "{\n  \"name\": \"${name}\",\n  \"version\": \"${version}\",\n  \"architecture\": \"${PVDKIT_PLUGIN_ARCHITECTURE}\",\n  \"file\": \"${name}.pvd\",\n  \"licenses\": [${license_names}]\n}\n")
+  if(BUILD_TESTING)
+    add_test(
+      NAME ${id}_package_docs
+      COMMAND
+        "${CMAKE_COMMAND}" "-DPVDKIT_PACKAGE_DIR=${package_dir}" "-DPVDKIT_PLUGIN_NAME=${name}"
+        "-DPVDKIT_PLUGIN_VERSION=${version}" -P "${PROJECT_SOURCE_DIR}/cmake/pvdkit-package-docs.cmake")
+  endif()
 endfunction()
 
 function(pvdkit_add_plugin_e2e_tests id)
