@@ -1,6 +1,6 @@
 # pvdkit — architecture
 
-Status: v2 design, 2026-09-12 (v1 was the single-plugin AVIF.pvd design of 2026-09-09; Task 7
+Status: v2 design, 2026-09-13 (v1 was the single-plugin AVIF.pvd design of 2026-09-09; Task 7
 turned it into this monorepo). Owner: orchestrator. Implementers: Codex/Claude agents. Reviewers:
 Opus agents. Rules that constrain this design live in `AGENTS.md`. Interface declarations below
 are canonical: implement them as written; if something is genuinely impossible, report instead
@@ -60,9 +60,10 @@ Source of truth: `third_party/pvd/PictureViewPlugin.h`. Key semantics:
   Several files may be open at once in one plugin instance: all state lives in the context.
 - `pvdPageInfo(ctx, iPage, pPageInfo)`: width, height, informational bpp, frame time in ms for
   animations. Page index is 0-based; out of range → `FALSE`.
-- `pvdPageDecode(ctx, iPage, pDecodeInfo, callback, cbCtx)`: fill `pImage` (BGR 24 or BGRA 32,
-  8 bits per channel), `nBPP`, `lImagePitch` (positive = top-down rows), `pPalette = nullptr`,
-  `nColorsUsed = 0`, `Flags` (we never set `PVD_IDF_READONLY`: the buffer is ours and writable).
+- `pvdPageDecode(ctx, iPage, pDecodeInfo, callback, cbCtx)`: fill `pImage` (BGR 24, BGRA 32, or
+  BGRA 64 with little-endian 16-bit samples), `nBPP`, `lImagePitch` (positive = top-down rows),
+  `pPalette = nullptr`, `nColorsUsed = 0`, `Flags` (`PVD_IDF_ALPHA`, the host's undocumented bit 2,
+  when alpha is meaningful; never `PVD_IDF_READONLY`, because the buffer is ours and writable).
   `callback` may be `NULL`; if it returns `FALSE` we stop and return `FALSE`.
 - `pvdPageFree(ctx, pDecodeInfo)`: release that decoded page. Host may hold several decoded pages
   of one file at once; identify the page by `pImage`.
@@ -145,11 +146,12 @@ std::string_view name(ErrorCode);   // for diagnostics/tests
 struct PluginInfo { std::uint32_t priority = 0; std::string name, version, comments; };
 struct ImageInfo  { std::uint32_t pageCount = 0; bool animated = false; std::string formatName, compression, comments; };
 struct PageInfo   { std::uint32_t width, height, bitsPerPixel, frameTimeMs; };
-enum class PixelFormat : std::uint8_t { Bgr24, Bgra32 };
+enum class PixelFormat : std::uint8_t { Bgr24, Bgra32, Bgra64 }; // Bgra64 = LE 16-bit samples, straight alpha
 struct DecodedPage {                     // a view; pixel memory is owned by the session
   std::span<const std::byte> pixels;     // top-down rows
-  std::uint32_t bitsPerPixel = 0;        // 24 or 32
+  std::uint32_t bitsPerPixel = 0;        // 24, 32 or 64
   std::uint32_t pitchBytes = 0;          // width * bytesPerPixel, no padding
+  bool hasAlpha = false;                 // alpha carries information, rather than being fully opaque
 };
 struct OpenRequest {
   std::string_view utf8FileName;
@@ -213,7 +215,9 @@ class IPlugin {
   `fileOpen` builds `OpenRequest`, calls `IPlugin::open`, on success fills `pvdInfoImage` from
   `ImageInfo` (strings via `c_str()` of strings owned by the session) and stores the context.
   `pageDecode` builds a `Progress` capturing the raw callback + context in a lambda, then fills
-  `pvdInfoDecode` from `DecodedPage`. `pageFree` calls `freePage(span over pImage)` — the span length
+  `pvdInfoDecode` from `DecodedPage`, including undocumented `PVD_IDF_ALPHA` bit 2 when `hasAlpha`
+  is true (`PvdApi.hpp` owns the declaration and records the 2021.4.19 BMP.pvd provenance).
+  `pageFree` calls `freePage(span over pImage)` — the span length
   is unknown to the host, so the session matches by `data()` only.
 - `Exports.cpp`: the shared composition root, compiled once into every plugin DLL (and into
   `pvd_tests`). `pvdInit` creates `std::unique_ptr<IPlugin>` via `pvd::makePlugin()` (declared in
@@ -305,14 +309,21 @@ struct ImageMeta {                    // every scalar has a default: an empty Im
   bool interlaced = false;              // source is stored progressively (PNG Adam7; informational only)
 };
 struct FrameTiming { std::uint32_t durationMs; };
-struct DecoderOptions { unsigned maxThreads; bool strict; std::uint64_t maxPixels; std::uint32_t maxDimension; };
+struct DecoderOptions {
+  unsigned maxThreads = 0;
+  bool strict = false;
+  std::uint64_t maxPixels = 0;
+  std::uint32_t maxDimension = 0;
+  bool deepOutput = false; // deep source (>8 bits/sample) -> Bgra64 instead of 8-bit reduction
+};
 class IDecoder {
  public:
   virtual ~IDecoder() = default;
   [[nodiscard]] virtual const ImageMeta& meta() const = 0;
   [[nodiscard]] virtual Result<FrameTiming> frameTiming(std::uint32_t frame) const = 0;
-  // Decodes frame `frame` and converts it to `format`, 8 bits/channel, into `dst` with `pitchBytes`
-  // per row (rows top-down, coded size). dst.size() must be ≥ pitchBytes * height, else Internal.
+  // Decodes frame `frame` and converts it to `format` (Bgra64 uses 16-bit little-endian samples)
+  // into `dst` with `pitchBytes` per row (rows top-down, coded size).
+  // dst.size() must be ≥ pitchBytes * height, else Internal.
   [[nodiscard]] virtual Result<void> decodeFrame(std::uint32_t frame, pvd::PixelFormat format,
                                                  std::span<std::byte> dst, std::uint32_t pitchBytes) = 0;
 };
@@ -390,7 +401,9 @@ Decisions (Task 7, open point 1):
     `bitsPerPixel = indexed ? depth : depth × (hasAlpha ? 4 : 3)` (informational, so indexed4
     reports 4 and 10-bit RGBA reports 40); `frameTimeMs` = `frameTiming(p)` when animated else 0.
   - `decodePage(p, progress)`: range check; `progress.report(0, 3)`; allocate `PixelBuffer` at coded
-    size (`Bgra32` if `hasAlpha` else `Bgr24`); `decodeFrame`; `progress.report(1, 3)`;
+    size (`Bgra64` with 8 bytes/pixel when `deepOutput && depth > 8`, otherwise `Bgra32` if
+    `hasAlpha`, else `Bgr24`); `decodeFrame`; propagate `meta.hasAlpha` independently of layout;
+    `progress.report(1, 3)`;
     if any transform present → `Transform::apply` into a new buffer; `progress.report(2, 3)`;
     move buffer into `outstanding_`; return the view. Any `false` from `report` → `Aborted`.
   - `freePage(span)`: erase the buffer whose `bytes().data() == span.data()`; return whether found.
@@ -398,7 +411,9 @@ Decisions (Task 7, open point 1):
   returning an object that owns `win::FileSource`, the plugin's `IDecoderFactory`, its
   `IImageDescriber` and a `core::CodecPlugin` (declared in that order) and forwards `IPlugin`.
   It chooses the `DecoderOptions` and builds `PluginInfo` from `kPluginIdentity` plus run-time
-  library versions. AVIF's values: `plugins/avif/DESIGN.md`.
+  library versions. AVIF's values: `plugins/avif/DESIGN.md`. RPGMVP defaults `deepOutput` off;
+  `PVDKIT_RPGMVP_DEEP_OUTPUT=ON` enables its experimental host-capability build and appends
+  ` [experiment: deep output]` to the plugin comments.
 
 ### 3.8 Shared adapter
 
@@ -733,7 +748,7 @@ Decisions (Task 7, open point 1):
 
 ## 8. Out of scope (document, do not implement)
 
-Colour management of any kind (the PVD interface has none), 16-bit output, per-plugin
-configuration files, a plugin that serves several formats from one DLL (one format per plugin
+Colour management of any kind (the PVD interface has none), per-plugin configuration files,
+a plugin that serves several formats from one DLL (one format per plugin
 keeps the identity, the priority and the packaging one-dimensional). Format-specific exclusions:
 the plugin's `DESIGN.md`.

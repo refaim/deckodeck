@@ -154,6 +154,22 @@ namespace pvdkit::e2e
         return all;
     }
 
+    bool isSupportedDecodeLayout(const std::uint32_t width, const std::uint32_t bitsPerPixel,
+                                 const std::int32_t pitchBytes) noexcept
+    {
+        if (pitchBytes <= 0) {
+            return false;
+        }
+        const auto pitch = static_cast<std::uint64_t>(pitchBytes);
+        if (bitsPerPixel == 64) {
+            return pitch >= static_cast<std::uint64_t>(width) * 8U;
+        }
+        if (bitsPerPixel == 24 || bitsPerPixel == 32) {
+            return pitch == static_cast<std::uint64_t>(width) * (bitsPerPixel / 8U);
+        }
+        return false;
+    }
+
     std::optional<DecodedPage> decodePage(const PluginExports &exports, void *context, const std::uint32_t page,
                                           const pvdDecodeCallback callback, void *callbackContext)
     {
@@ -164,12 +180,10 @@ namespace pvdkit::e2e
         if (exports.pageDecode(context, page, &decoded.decode, callback, callbackContext) == FALSE) {
             return std::nullopt;
         }
-        // The plugin promises top-down rows without padding and a writable buffer of its own.
+        // The plugin promises top-down rows and a writable buffer of its own. The established
+        // 24/32-bit layouts are tight; the experimental 64-bit host path may carry row padding.
         REQUIRE(decoded.decode.pImage != nullptr);
-        REQUIRE(decoded.decode.lImagePitch > 0);
-        REQUIRE((decoded.decode.nBPP == 24 || decoded.decode.nBPP == 32));
-        REQUIRE(static_cast<std::uint32_t>(decoded.decode.lImagePitch) ==
-                decoded.page.lWidth * decoded.bytesPerPixel());
+        REQUIRE(isSupportedDecodeLayout(decoded.page.lWidth, decoded.decode.nBPP, decoded.decode.lImagePitch));
         return decoded;
     }
 

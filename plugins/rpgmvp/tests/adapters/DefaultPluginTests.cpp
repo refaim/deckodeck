@@ -18,6 +18,8 @@ namespace
 {
 
     constexpr std::size_t kHostHeadSize = std::size_t{16} * 1024U;
+    constexpr bool kDeepOutput = PVDKIT_TEST_DEEP_OUTPUT != 0;
+    constexpr std::string_view kExperimentSuffix = " [experiment: deep output]";
 
     std::filesystem::path pluginFixturePath(const std::string_view name)
     {
@@ -54,8 +56,12 @@ TEST_CASE("the RPGMVP production composition reports its generated identity")
     CHECK(info.name == "RPGMVP");
     CHECK(info.version == pvdkit::pvd::kPluginIdentity.version);
     CHECK(info.version == "1.0.0");
-    CHECK(info.comments ==
-          "RPG Maker MV/MZ encrypted PNG decoder: " + pvdkit::rpgmvp::libraryVersions() + "; static build");
+    auto expectedComments =
+        "RPG Maker MV/MZ encrypted PNG decoder: " + pvdkit::rpgmvp::libraryVersions() + "; static build";
+    if (kDeepOutput) {
+        expectedComments += kExperimentSuffix;
+    }
+    CHECK(info.comments == expectedComments);
 }
 
 TEST_CASE("the RPGMVP production composition opens memory and disk inputs identically")
@@ -118,4 +124,16 @@ TEST_CASE("the RPGMVP production composition accepts caller-supplied decoder lim
     const auto opened = plugin->open(pvdkit::pvd::OpenRequest{"rgba8_48x48.rpgmvp", 0, bytes});
     REQUIRE_FALSE(opened.has_value());
     CHECK(opened.error().code == pvdkit::core::ErrorCode::TooLarge);
+}
+
+TEST_CASE("caller-supplied deep output marks the experimental composition")
+{
+    constexpr pvdkit::core::DecoderOptions shallow{1, false, std::uint64_t{4} * 1024U * 1024U, 32'768, false};
+    constexpr pvdkit::core::DecoderOptions deep{1, false, std::uint64_t{4} * 1024U * 1024U, 32'768, true};
+
+    const auto shallowPlugin = pvdkit::pvd::makePlugin(shallow);
+    const auto deepPlugin = pvdkit::pvd::makePlugin(deep);
+
+    CHECK_FALSE(shallowPlugin->info().comments.ends_with(" [experiment: deep output]"));
+    CHECK(deepPlugin->info().comments.ends_with(" [experiment: deep output]"));
 }

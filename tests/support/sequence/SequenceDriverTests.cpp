@@ -297,7 +297,7 @@ namespace pvdkit::sequence
         page.lHeight = 0;
         test::check(checkPageInfo(page).has_value());
 
-        std::array<BYTE, 24> pixels{};
+        std::array<BYTE, 48> pixels{};
         page.lHeight = 3;
         pvdInfoDecode decoded{pixels.data(), nullptr, 0, 24, 0, 8};
         test::check(!checkDecoded(page, decoded).has_value());
@@ -305,6 +305,11 @@ namespace pvdkit::sequence
         test::check(checkDecoded(page, decoded).has_value());
         decoded.pImage = pixels.data();
         decoded.nBPP = 8;
+        test::check(checkDecoded(page, decoded).has_value());
+        decoded.nBPP = 64;
+        decoded.lImagePitch = 16;
+        test::check(!checkDecoded(page, decoded).has_value());
+        decoded.lImagePitch = 15;
         test::check(checkDecoded(page, decoded).has_value());
         decoded.nBPP = 32;
         decoded.lImagePitch = 7;

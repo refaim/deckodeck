@@ -221,11 +221,20 @@ namespace pvdkit::rpgmvp
     core::Result<void> checkDestination(const core::ImageMeta &meta, const pvd::PixelFormat format,
                                         const std::size_t destinationSize, const std::uint32_t pitchBytes)
     {
-        const pvd::PixelFormat expected = meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24;
-        if (format != expected) {
-            return std::unexpected(core::Error{core::ErrorCode::Internal, "caller pixel format contradicts metadata"});
+        if (format == pvd::PixelFormat::Bgra64) {
+            if (meta.depth <= 8) {
+                return std::unexpected(core::Error{core::ErrorCode::UnsupportedFeature,
+                                                   "BGRA64 output requires a source deeper than 8 bits per sample"});
+            }
+        } else {
+            const pvd::PixelFormat expected = meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24;
+            if (format != expected) {
+                return std::unexpected(
+                    core::Error{core::ErrorCode::Internal, "caller pixel format contradicts metadata"});
+            }
         }
-        const std::uint32_t bytesPerPixel = meta.hasAlpha ? 4U : 3U;
+        const std::uint32_t bytesPerPixel =
+            format == pvd::PixelFormat::Bgra64 ? 8U : (format == pvd::PixelFormat::Bgra32 ? 4U : 3U);
         const std::uint64_t expectedPitch = static_cast<std::uint64_t>(meta.width) * bytesPerPixel;
         if (pitchBytes != expectedPitch) {
             return std::unexpected(
@@ -265,16 +274,25 @@ namespace pvdkit::rpgmvp
         }
         return checkDestination(meta_, format, destination.size(), pitchBytes).and_then([&] {
             return makeContext(file_, options_).and_then([&](const auto &bundle) {
-                const int spngFormat = meta_.hasAlpha ? SPNG_FMT_RGBA8 : SPNG_FMT_RGB8;
+                const int spngFormat = format == pvd::PixelFormat::Bgra64
+                                           ? SPNG_FMT_RGBA16
+                                           : (meta_.hasAlpha ? SPNG_FMT_RGBA8 : SPNG_FMT_RGB8);
                 std::size_t decodedSize = 0;
                 const int sizeResult = spng_decoded_image_size(bundle->context.get(), spngFormat, &decodedSize);
                 return detail::decodeResult(sizeResult).and_then([&] {
                     const int result = spng_decode_image(bundle->context.get(), destination.data(), decodedSize,
                                                          spngFormat, SPNG_DECODE_TRNS);
                     return detail::decodeResult(result).transform([&] {
-                        const std::size_t bytesPerPixel = meta_.hasAlpha ? 4U : 3U;
+                        // SPNG_FMT_RGBA16 returns host-endian samples (spng.h explicitly reserves
+                        // big-endian for SPNG_FMT_RAW). Windows hosts are little-endian, so swapping
+                        // the two-byte R and B units preserves each sample's byte order.
+                        const std::size_t channelBytes = format == pvd::PixelFormat::Bgra64 ? 2U : 1U;
+                        const std::size_t bytesPerPixel =
+                            format == pvd::PixelFormat::Bgra64 ? 8U : (meta_.hasAlpha ? 4U : 3U);
                         for (std::size_t offset = 0; offset < decodedSize; offset += bytesPerPixel) {
-                            std::swap(destination[offset], destination[offset + 2]);
+                            for (std::size_t byte = 0; byte < channelBytes; ++byte) {
+                                std::swap(destination[offset + byte], destination[offset + 2U * channelBytes + byte]);
+                            }
                         }
                     });
                 });

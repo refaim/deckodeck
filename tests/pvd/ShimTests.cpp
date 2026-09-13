@@ -176,6 +176,25 @@ namespace pvdkit::pvd
             shim.fileClose(context);
         }
 
+        TEST_CASE("decoded alpha is exposed through the host's undocumented alpha flag")
+        {
+            test::FakeState state;
+            state.decodedHasAlpha = true;
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            pvdInfoImage imageInfo{};
+            void *context = nullptr;
+            openSession(shim, imageInfo, context);
+
+            pvdInfoDecode decoded{};
+            REQUIRE(shim.pageDecode(context, 0, &decoded, nullptr, nullptr) == TRUE);
+            CHECK(PVD_IDF_ALPHA == UINT32{2});
+            CHECK(decoded.Flags == PVD_IDF_ALPHA);
+
+            shim.pageFree(context, &decoded);
+            shim.fileClose(context);
+        }
+
         TEST_CASE("fileOpen identifies memory mode and sets animated flag iff requested")
         {
             test::FakeState state;

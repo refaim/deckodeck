@@ -239,8 +239,9 @@ namespace pvdkit::leak
                     failure = "pvdPageInfo answered FALSE";
                 } else if (exports.pageDecode(context, page, &decoded.decode, nullptr, nullptr) == FALSE) {
                     failure = "pvdPageDecode answered FALSE";
-                } else if (decoded.decode.pImage == nullptr || decoded.decode.lImagePitch <= 0 ||
-                           (decoded.decode.nBPP != 24 && decoded.decode.nBPP != 32)) {
+                } else if (decoded.decode.pImage == nullptr ||
+                           !e2e::isSupportedDecodeLayout(decoded.page.lWidth, decoded.decode.nBPP,
+                                                         decoded.decode.lImagePitch)) {
                     failure = "pvdPageDecode handed out an unusable page";
                 } else {
                     static_cast<void>(checksum(decoded));

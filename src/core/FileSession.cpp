@@ -69,8 +69,11 @@ namespace pvdkit::core
             return std::unexpected(aborted());
         }
 
-        const auto format = meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24;
-        const auto bytesPerPixel = meta.hasAlpha ? 4U : 3U;
+        const auto format = options_.deepOutput && meta.depth > 8
+                                ? pvd::PixelFormat::Bgra64
+                                : (meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24);
+        const auto bytesPerPixel =
+            format == pvd::PixelFormat::Bgra64 ? 8U : (format == pvd::PixelFormat::Bgra32 ? 4U : 3U);
         auto created = PixelBuffer::create(meta.width, meta.height, bytesPerPixel, options_.maxPixels);
         if (!created) {
             return std::unexpected(created.error());
@@ -100,7 +103,7 @@ namespace pvdkit::core
         auto retained = std::make_unique<PixelBuffer>(std::move(buffer));
         const auto view = retained->view();
         outstanding_.push_back(std::move(retained));
-        return pvd::DecodedPage{view.pixels, view.bytesPerPixel * 8, view.pitchBytes};
+        return pvd::DecodedPage{view.pixels, view.bytesPerPixel * 8, view.pitchBytes, meta.hasAlpha};
     }
 
     bool FileSession::freePage(const std::span<const std::byte> pixels)

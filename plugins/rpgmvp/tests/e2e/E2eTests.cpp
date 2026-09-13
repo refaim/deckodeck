@@ -21,6 +21,9 @@ namespace pvdkit::e2e
 
         using Pixel = std::vector<std::uint8_t>;
 
+        constexpr bool kDeepOutput = PVDKIT_TEST_DEEP_OUTPUT != 0;
+        constexpr std::string_view kExperimentSuffix = " [experiment: deep output]";
+
         std::string text(const char *value)
         {
             return value == nullptr ? std::string{"<null>"} : std::string{value};
@@ -60,6 +63,14 @@ namespace pvdkit::e2e
             return log.steps.size() == log.abortAt ? FALSE : TRUE;
         }
 
+        constexpr std::uint32_t outputBitsPerPixel(const rpgmvp::tests::FixtureExpectation &fixture)
+        {
+            if (kDeepOutput && fixture.sourceBpp > 32) {
+                return 64;
+            }
+            return fixture.alpha ? 32U : 24U;
+        }
+
     } // namespace
 
     TEST_CASE("RPGMVP.pvd identifies itself through the eight-export host boundary")
@@ -75,6 +86,7 @@ namespace pvdkit::e2e
         CHECK(text(info.pComments).find("libspng 0.7.4") != std::string::npos);
         CHECK(text(info.pComments).find("zlib 1.3.2") != std::string::npos);
         CHECK(text(info.pComments).find("static build") != std::string::npos);
+        CHECK(text(info.pComments).ends_with(kExperimentSuffix) == kDeepOutput);
         exports.pluginInfo(nullptr);
         exports.exit();
     }
@@ -97,10 +109,12 @@ namespace pvdkit::e2e
             CHECK(disk.page.page.lHeight == expected.height);
             CHECK(disk.page.page.nBPP == expected.sourceBpp);
             CHECK(disk.page.page.lFrameTime == 0);
-            CHECK(disk.page.decode.nBPP == (expected.alpha ? 32U : 24U));
-            CHECK(disk.page.decode.lImagePitch == static_cast<INT32>(expected.width * (expected.alpha ? 4U : 3U)));
+            const auto expectedOutputBpp = outputBitsPerPixel(expected);
+            CHECK(disk.page.decode.nBPP == expectedOutputBpp);
+            CHECK(disk.page.decode.lImagePitch == static_cast<INT32>(expected.width * (expectedOutputBpp / 8U)));
             CHECK(disk.page.decode.pPalette == nullptr);
             CHECK(disk.page.decode.nColorsUsed == 0);
+            CHECK(disk.page.decode.Flags == (expected.alpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0}));
             CHECK(memory.page.pixels() == disk.page.pixels());
             CHECK(text(memory.image.info.pComments) == text(disk.image.info.pComments));
             freeAndClose(exports, disk);
@@ -135,7 +149,9 @@ namespace pvdkit::e2e
         freeAndClose(exports, palette);
 
         auto sixteen = openAndDecode(exports, readFixture("rgb16_88x4a.rpgmvp"), OpenMode::Memory);
-        CHECK(sixteen.page.pixel(0, 0) == Pixel{59, 96, 27});
+        const auto sixteenFirst =
+            kDeepOutput ? Pixel{0xF4, 0x3B, 0x60, 0x60, 0x96, 0x1B, 0xFF, 0xFF} : Pixel{59, 96, 27};
+        CHECK(sixteen.page.pixel(0, 0) == sixteenFirst);
         freeAndClose(exports, sixteen);
         exports.exit();
     }

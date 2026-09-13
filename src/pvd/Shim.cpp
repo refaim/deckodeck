@@ -154,7 +154,7 @@ namespace pvdkit::pvd
                 }
                 output->pImage = const_cast<BYTE *>(reinterpret_cast<const BYTE *>(decoded->pixels.data()));
                 output->pPalette = nullptr;
-                output->Flags = 0;
+                output->Flags = decoded->hasAlpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0};
                 output->nBPP = decoded->bitsPerPixel;
                 output->nColorsUsed = 0;
                 output->lImagePitch = static_cast<INT32>(decoded->pitchBytes);

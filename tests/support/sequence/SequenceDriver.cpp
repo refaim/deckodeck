@@ -163,8 +163,8 @@ namespace pvdkit::sequence
         if (decoded.pImage == nullptr) {
             return "pvdPageDecode returned a null image";
         }
-        if (decoded.nBPP != 24 && decoded.nBPP != 32) {
-            return "pvdPageDecode returned a pixel depth other than 24 or 32";
+        if (decoded.nBPP != 24 && decoded.nBPP != 32 && decoded.nBPP != 64) {
+            return "pvdPageDecode returned a pixel depth other than 24, 32 or 64";
         }
 
         const auto signedPitch = static_cast<std::int64_t>(decoded.lImagePitch);

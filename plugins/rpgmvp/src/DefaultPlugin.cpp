@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "adapters/spng/Decoder.hpp"
 #include "adapters/win/FileSource.hpp"
@@ -26,20 +27,25 @@ namespace pvdkit::pvd
 
         core::DecoderOptions defaultOptions()
         {
-            return {std::max(1U, std::thread::hardware_concurrency()), false, kMaxPixels, kMaxDimension};
+            return {std::max(1U, std::thread::hardware_concurrency()), false, kMaxPixels, kMaxDimension,
+                    PVDKIT_RPGMVP_DEEP_OUTPUT != 0};
         }
 
-        PluginInfo defaultInfo()
+        PluginInfo defaultInfo(const core::DecoderOptions &options)
         {
+            auto comments = "RPG Maker MV/MZ encrypted PNG decoder: " + rpgmvp::libraryVersions() + "; static build";
+            if (options.deepOutput) {
+                comments += " [experiment: deep output]";
+            }
             return {kPluginIdentity.priority, std::string{kPluginIdentity.name}, std::string{kPluginIdentity.version},
-                    "RPG Maker MV/MZ encrypted PNG decoder: " + rpgmvp::libraryVersions() + "; static build"};
+                    std::move(comments)};
         }
 
         class DefaultPlugin final : public IPlugin
         {
           public:
             explicit DefaultPlugin(const core::DecoderOptions &options)
-                : plugin_{fileSource_, decoderFactory_, describer_, options, defaultInfo()}
+                : plugin_{fileSource_, decoderFactory_, describer_, options, defaultInfo(options)}
             {
             }
 

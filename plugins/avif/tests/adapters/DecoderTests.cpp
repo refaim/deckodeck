@@ -504,6 +504,11 @@ TEST_CASE("decode validates capacity and reports an out-of-range frame as PageOu
 TEST_CASE("destination validation uses non-overflowing size arithmetic")
 {
     using pvdkit::avif::detail::checkDestination;
+    const auto deepOutput = checkDestination({}, PixelFormat::Bgra64, 0, 0);
+    REQUIRE_FALSE(deepOutput.has_value());
+    CHECK(deepOutput.error().code == ErrorCode::UnsupportedFeature);
+    CHECK(deepOutput.error().detail == "libavif output is limited to 8 bits per channel");
+
     // width * 4 and pitch * height both exceed 32 bits; neither may wrap around.
     const pvdkit::core::ImageMeta hugeMeta{
         0x40000000U, 0x40000000U, 8, ChromaFormat::Yuv444, false, false, {}, 1, false, {}, false, false, false};

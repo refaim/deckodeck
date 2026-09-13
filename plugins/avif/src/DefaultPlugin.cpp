@@ -28,7 +28,7 @@ namespace pvdkit::pvd
         core::DecoderOptions defaultOptions()
         {
             return core::DecoderOptions{std::max(1U, std::thread::hardware_concurrency()), false, kMaxPixels,
-                                        kMaxDimension};
+                                        kMaxDimension, false};
         }
 
         // Identity from the generated pvd/PluginConstants.hpp (the same values the VERSIONINFO resource

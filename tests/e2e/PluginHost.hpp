@@ -110,6 +110,11 @@ namespace pvdkit::e2e
         [[nodiscard]] std::vector<std::byte> pixels() const;
     };
 
+    /// Whether a positive top-down pitch can hold one row of a supported host pixel layout.
+    /// The kit emits tight 24/32-bit rows; the experimental 64-bit host path may be padded.
+    [[nodiscard]] bool isSupportedDecodeLayout(std::uint32_t width, std::uint32_t bitsPerPixel,
+                                               std::int32_t pitchBytes) noexcept;
+
     /// pvdPageInfo + pvdPageDecode for `page`; nullopt when either answers FALSE.
     [[nodiscard]] std::optional<DecodedPage> decodePage(const PluginExports &exports, void *context, std::uint32_t page,
                                                         pvdDecodeCallback callback, void *callbackContext);

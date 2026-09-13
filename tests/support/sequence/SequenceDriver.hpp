@@ -14,7 +14,7 @@ namespace pvdkit::sequence
 {
 
     // This driver validates the pvdkit pvd::Shim output contract, not every layout the PVD SDK
-    // permits. In particular, Shim always emits non-null strings and decoded BGR24/BGRA32 pages.
+    // permits. In particular, Shim always emits non-null strings and decoded BGR24/BGRA32/BGRA64 pages.
 
     // A finite scan keeps a malformed Shim result from turning contract validation into an
     // unbounded read; all pvdkit-owned strings are much shorter than this limit.

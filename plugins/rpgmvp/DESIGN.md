@@ -18,9 +18,11 @@ a decrypted PNG. Factory parsing obtains IHDR, tRNS and sRGB signalling and norm
 Each `decodeFrame()` creates a fresh libspng context over the borrowed mapped span. This makes
 repeated decodes and simultaneously outstanding pages independent. `PixelBuffer` guarantees tight
 rows, so the adapter uses libspng's simpler whole-image decode directly into the destination rather
-than progressive row calls. It selects RGB8 or RGBA8 from normalized alpha, asks libspng to apply
-tRNS, and swaps red and blue in place to produce BGR/BGRA. Alpha remains straight. No gamma decode
-flag is used.
+than progressive row calls. Normal output selects RGB8 or RGBA8 from normalized alpha. Deep output
+for sources over 8 bits selects RGBA16; libspng documents every format except `SPNG_FMT_RAW` as
+host-endian, so Windows receives little-endian 16-bit samples. The adapter asks libspng to apply
+tRNS and swaps the R/B byte units in place to produce BGR/BGRA. Alpha remains straight. No gamma
+decode flag is used. A Bgra64 request for an 8-bit-or-shallower source is rejected as Unsupported.
 
 libspng 0.7.4's upstream CMake policy level otherwise ignores `CMAKE_MSVC_RUNTIME_LIBRARY`; the
 repository overlay port enables CMP0091 so the existing clang-cl chainload produces `/MT` archives.
@@ -31,11 +33,13 @@ It does not patch codec source.
 `src/core/Describe` derives the public format, compression and comment strings solely from
 `ImageMeta`. `DefaultPlugin.cpp` owns the Win32 file source, libspng decoder factory, describer and
 shared `CodecPlugin` in dependency order. Its limits and identity match the generated VERSIONINFO.
+`PVDKIT_RPGMVP_DEEP_OUTPUT` defaults off; when enabled it preserves deep PNG sources as BGRA64 and
+marks the plugin comments with ` [experiment: deep output]`.
 
 ## Exclusions
 
-Audio encryption variants, key recovery, PNG encoding, APNG animation pages, colour management,
-gamma correction and 16-bit output are out of scope. Unknown ancillary chunks remain libspng's
+Audio encryption variants, key recovery, PNG encoding, APNG animation pages, colour management and
+gamma correction are out of scope. Unknown ancillary chunks remain libspng's
 responsibility; corrupt critical data is rejected as an expected parse/decode failure.
 
 ## Verification fixtures

@@ -31,19 +31,22 @@ namespace pvdkit::pvd
         std::uint32_t width, height, bitsPerPixel, frameTimeMs;
     };
 
-    /// Selects the byte layout returned to PictureView.
+    /// Selects the byte layout returned to PictureView. BGRA formats carry straight alpha;
+    /// Bgra64 stores each 16-bit channel sample in little-endian byte order.
     enum class PixelFormat : std::uint8_t
     {
         Bgr24,
-        Bgra32
+        Bgra32,
+        Bgra64
     };
 
     /// Views decoded pixel memory owned by the file session.
     struct DecodedPage
     {
         std::span<const std::byte> pixels;
-        std::uint32_t bitsPerPixel = 0;
-        std::uint32_t pitchBytes = 0;
+        std::uint32_t bitsPerPixel = 0; ///< 24, 32 or 64.
+        std::uint32_t pitchBytes = 0;   ///< Width times bytes per pixel, without padding.
+        bool hasAlpha = false;          ///< The alpha channel carries information rather than being fully opaque.
     };
 
     /// Carries the host-provided inputs needed to open an image.

@@ -128,7 +128,8 @@ namespace pvdkit::core::test
 
             // Pixel id = 1 + frame * 100 + row-major index, so pages of different
             // frames are distinguishable (frame 0: 1..6, frame 1: 101..106, ...).
-            const auto channels = format == pvd::PixelFormat::Bgra32 ? 4U : 3U;
+            const auto channels =
+                format == pvd::PixelFormat::Bgra64 ? 8U : (format == pvd::PixelFormat::Bgra32 ? 4U : 3U);
             for (std::uint32_t y = 0; y < meta_.height; ++y) {
                 for (std::uint32_t x = 0; x < meta_.width; ++x) {
                     const auto id = 1U + frame * 100U + y * meta_.width + x;

@@ -27,6 +27,13 @@ namespace
 
     constexpr pvdkit::core::DecoderOptions kOptions{1, false, 268'435'456, 32'768};
 
+    std::uint16_t sample16(const std::span<const std::byte> pixels, const std::size_t sample)
+    {
+        const auto offset = sample * 2U;
+        return static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(pixels[offset])) |
+               static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(pixels[offset + 1U]) << 8U);
+    }
+
     std::vector<std::byte> fixture(const std::string_view name)
     {
         const auto path = std::filesystem::path{PVDKIT_FIXTURE_DIR} / name;
@@ -211,6 +218,48 @@ TEST_CASE("destination validation requires the metadata-selected tightly packed 
     meta.hasAlpha = false;
     CHECK(pvdkit::rpgmvp::checkDestination(meta, PixelFormat::Bgr24, 18, 9));
     CHECK_FALSE(pvdkit::rpgmvp::checkDestination(meta, PixelFormat::Bgra32, 24, 12));
+
+    meta.depth = 16;
+    CHECK(pvdkit::rpgmvp::checkDestination(meta, PixelFormat::Bgra64, 48, 24));
+    CHECK_FALSE(pvdkit::rpgmvp::checkDestination(meta, PixelFormat::Bgra64, 48, 23));
+}
+
+TEST_CASE("Bgra64 is rejected cleanly for sources with at most eight bits per sample")
+{
+    DecoderFactory factory;
+    auto bytes = fixture("rgba8_48x48.rpgmvp");
+    auto decoder = factory.create(bytes, kOptions);
+    REQUIRE(decoder.has_value());
+    std::vector<std::byte> pixels(std::size_t{48} * 48U * 8U);
+
+    const auto result = (*decoder)->decodeFrame(0, PixelFormat::Bgra64, pixels, 48U * 8U);
+
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == ErrorCode::UnsupportedFeature);
+    CHECK(result.error().detail == "BGRA64 output requires a source deeper than 8 bits per sample");
+}
+
+TEST_CASE("16-bit RGB and RGBA sources decode to native-endian BGRA64 samples")
+{
+    DecoderFactory factory;
+
+    auto rgbaBytes = fixture("rgba16_60x20_par.rpgmvp");
+    auto rgba = factory.create(rgbaBytes, kOptions);
+    REQUIRE(rgba.has_value());
+    std::vector<std::byte> rgbaPixels(std::size_t{60} * 20U * 8U);
+    REQUIRE((*rgba)->decodeFrame(0, PixelFormat::Bgra64, rgbaPixels, 60U * 8U));
+    const std::array rgbaFirst{sample16(rgbaPixels, 0), sample16(rgbaPixels, 1), sample16(rgbaPixels, 2),
+                               sample16(rgbaPixels, 3)};
+    CHECK(rgbaFirst == std::array<std::uint16_t, 4>{0xFFFF, 0xFFFF, 0xFFFF, 0x0000});
+
+    auto rgbBytes = fixture("rgb16_88x4a.rpgmvp");
+    auto rgb = factory.create(rgbBytes, kOptions);
+    REQUIRE(rgb.has_value());
+    std::vector<std::byte> rgbPixels(std::size_t{88} * 4U * 8U);
+    REQUIRE((*rgb)->decodeFrame(0, PixelFormat::Bgra64, rgbPixels, 88U * 8U));
+    const std::array rgbFirst{sample16(rgbPixels, 0), sample16(rgbPixels, 1), sample16(rgbPixels, 2),
+                              sample16(rgbPixels, 3)};
+    CHECK(rgbFirst == std::array<std::uint16_t, 4>{0x3BF4, 0x6060, 0x1B96, 0xFFFF});
 }
 
 TEST_CASE("decode expands source formats to BGR or BGRA and reports corrupt IDAT")

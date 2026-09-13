@@ -35,8 +35,10 @@ encoder emitted `pal8` rather than a reliable 2-bit indexed PNG without pngquant
 2-bit palette fixture was added.
 
 Exact conversion observations: the cursor's BGRA pixels (0,0) and (17,0) are `(0,0,0,0)` and
-`(78,224,255,222)`. The RGB16 source begins with big-endian samples R=`0x1B96`, G=`0x6060`,
-B=`0x3BF4`; libspng 0.7.4's 16-to-8 reduction yields BGR `(59,96,27)`, asserted exactly.
+`(78,224,255,222)`. The RGBA16 source's first samples are R=`0xFFFF`, G=`0xFFFF`, B=`0xFFFF`,
+A=`0x0000`, yielding little-endian BGRA16 `(0xFFFF,0xFFFF,0xFFFF,0x0000)`. The RGB16 source begins
+with big-endian samples R=`0x1B96`, G=`0x6060`, B=`0x3BF4`; libspng 0.7.4's 16-to-8 reduction
+yields BGR `(59,96,27)`, while BGRA16 is `(0x3BF4,0x6060,0x1B96,0xFFFF)`, both asserted exactly.
 
 Negative fixtures derived from `rgba8_48x48.rpgmvp` are `stub_31.bin` (31 bytes), `stub_48.bin`
 (48 bytes), `bad_ihdr_crc.rpgmvp` (744 bytes, one IHDR CRC byte changed),

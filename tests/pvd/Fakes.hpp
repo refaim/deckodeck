@@ -69,6 +69,7 @@ namespace pvdkit::pvd::test
         const std::byte *freedData = nullptr;
         std::size_t freedSize = 99;
         std::uint32_t decodedPitch = 8;
+        bool decodedHasAlpha = false;
     };
 
     class FakeSession final : public IFileSession
@@ -119,7 +120,7 @@ namespace pvdkit::pvd::test
             if (state_.decodeError) {
                 return std::unexpected{core::Error{*state_.decodeError, "decodePage error"}};
             }
-            return DecodedPage{pixels_, 32, state_.decodedPitch};
+            return DecodedPage{pixels_, 32, state_.decodedPitch, state_.decodedHasAlpha};
         }
 
         bool freePage(const std::span<const std::byte> pixels) override

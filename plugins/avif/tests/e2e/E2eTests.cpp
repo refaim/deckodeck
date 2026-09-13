@@ -196,7 +196,7 @@ namespace pvdkit::e2e
                 CHECK(d.decode.nBPP == (expected.alpha ? 32U : 24U));
                 CHECK(d.decode.pPalette == nullptr);
                 CHECK(d.decode.nColorsUsed == 0);
-                CHECK(d.decode.Flags == 0);
+                CHECK(d.decode.Flags == (expected.alpha ? UINT32{PVD_IDF_ALPHA} : UINT32{0}));
                 CHECK(d.decode.lImagePitch == static_cast<INT32>(expected.width * d.bytesPerPixel()));
 
                 CHECK(m.page.lWidth == d.page.lWidth);

@@ -215,6 +215,16 @@ namespace pvdkit::core
             checkPixels(*result, {6, 3, 5, 2}, 2, 2, 4);
         }
 
+        TEST_CASE("apply copies all eight bytes of BGRA64 pixels")
+        {
+            const auto source = image(2, 2, 8, {1, 2, 3, 4}, 3);
+
+            auto result = Transform::apply(Transforms{std::nullopt, 1, MirrorAxis::LeftRight}, source.view(), 4);
+
+            REQUIRE(result.has_value());
+            checkPixels(*result, {4, 2, 3, 1}, 2, 2, 8);
+        }
+
         TEST_CASE("apply supports each property independently")
         {
             const auto source = image(3, 2, 3, {1, 2, 3, 4, 5, 6});

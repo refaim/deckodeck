@@ -15,3 +15,7 @@ extern "C"
 {
 #include "../../third_party/pvd/PictureViewPlugin.h"
 }
+
+// Undocumented by the public SDK: BMP.pvd from the PictureView 2021.4.19 distribution sets
+// decoded-image flag bit 2 when its 32-bit BMP alpha mask makes the alpha channel meaningful.
+#define PVD_IDF_ALPHA 2

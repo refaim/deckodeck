@@ -143,6 +143,7 @@ namespace pvdkit::core
             REQUIRE(decoded.has_value());
             CHECK(decoded->bitsPerPixel == 24);
             CHECK(decoded->pitchBytes == 9);
+            CHECK_FALSE(decoded->hasAlpha);
             CHECK(decoded->pixels.size() == 18);
             CHECK(pixelIds(*decoded, 3, 3) == std::vector<unsigned>{1, 2, 3, 4, 5, 6});
             CHECK(state.decodedFrames == std::vector<std::uint32_t>{0});
@@ -165,7 +166,50 @@ namespace pvdkit::core
             CHECK(decoded->bitsPerPixel == 32);
             CHECK(decoded->pitchBytes == 12);
             CHECK(decoded->pixels.size() == 24);
+            CHECK(decoded->hasAlpha);
             CHECK(state.decodedFormats == std::vector{pvd::PixelFormat::Bgra32});
+            CHECK(session.freePage(decoded->pixels));
+        }
+
+        TEST_CASE("decodePage emits BGRA64 for deep sources when deep output is enabled")
+        {
+            for (const bool alpha : {false, true}) {
+                DecoderState state;
+                const auto imageMeta = test::meta(3, 2, alpha, 16);
+                auto options = test::options();
+                options.deepOutput = true;
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options);
+
+                const auto decoded = session.decodePage(0, pvd::Progress{});
+
+                REQUIRE(decoded.has_value());
+                CHECK(decoded->bitsPerPixel == 64);
+                CHECK(decoded->pitchBytes == 24);
+                CHECK(decoded->pixels.size() == 48);
+                CHECK(decoded->hasAlpha == alpha);
+                CHECK(pixelIds(*decoded, 3, 8) == std::vector<unsigned>{1, 2, 3, 4, 5, 6});
+                CHECK(state.decodedFormats == std::vector{pvd::PixelFormat::Bgra64});
+                CHECK(state.decodedPitches == std::vector<std::uint32_t>{24});
+                CHECK(state.decodedSizes == std::vector<std::size_t>{48});
+                CHECK(session.freePage(decoded->pixels));
+            }
+        }
+
+        TEST_CASE("deep output keeps sources with at most eight bits per sample in their ordinary format")
+        {
+            DecoderState state;
+            const auto imageMeta = test::meta(3, 2, false, 8);
+            auto options = test::options();
+            options.deepOutput = true;
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options);
+
+            const auto decoded = session.decodePage(0, pvd::Progress{});
+
+            REQUIRE(decoded.has_value());
+            CHECK(decoded->bitsPerPixel == 24);
+            CHECK(decoded->pitchBytes == 9);
+            CHECK_FALSE(decoded->hasAlpha);
+            CHECK(state.decodedFormats == std::vector{pvd::PixelFormat::Bgr24});
             CHECK(session.freePage(decoded->pixels));
         }
 

@@ -9,5 +9,7 @@ target_link_libraries(
           doctest::doctest
           pvdkit_options)
 target_compile_definitions(
-  rpgmvp_adapter_tests PRIVATE PVDKIT_FIXTURE_DIR="${RPGMVP_FIXTURE_DIR}")
+  rpgmvp_adapter_tests
+  PRIVATE PVDKIT_FIXTURE_DIR="${RPGMVP_FIXTURE_DIR}"
+          PVDKIT_TEST_DEEP_OUTPUT=$<BOOL:${PVDKIT_RPGMVP_DEEP_OUTPUT}>)
 add_test(NAME rpgmvp_adapter_tests COMMAND rpgmvp_adapter_tests)

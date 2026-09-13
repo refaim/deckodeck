@@ -78,10 +78,13 @@ namespace pvdkit::core
     /// Configures decoder resource and validation limits.
     struct DecoderOptions
     {
-        unsigned maxThreads;
-        bool strict;
-        std::uint64_t maxPixels;
-        std::uint32_t maxDimension;
+        unsigned maxThreads = 0;
+        bool strict = false;
+        std::uint64_t maxPixels = 0;
+        std::uint32_t maxDimension = 0;
+        /// When the source has more than 8 bits per sample, preserve it in Bgra64 instead of
+        /// reducing it to 8-bit output. Kept last and defaulted for aggregate callers.
+        bool deepOutput = false;
     };
 
     /// Decodes frames from one parsed file.
