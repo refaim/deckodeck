@@ -89,3 +89,19 @@ ignored — document).
 `PVDKIT_BUILD_SUFFIX=-t16`; no commits; never touch `C:\Tools\FarManager`. Report
 `docs/tasks/report-task16.md` with every gate's output on both architectures and the four Release
 DLL hashes.
+
+## Reference implementations (read-only; do not copy code, look at them for constants, edge cases and structure)
+Roma's decision: our own module; "jxl_cms как один из рефов — не надо писать прям как там, надо туда
+поглядывать". The sources are unpacked under
+`C:\Users\Roma\AppData\Local\Temp\claude\c--Users-Roma-Dev-PictureView3\630ccd33-5bbb-4673-9fea-509fa47e861e\scratchpad\colour-refs\`:
+- `libjxl-0.11.2/lib/jxl/cms/` — `transfer_functions-inl.h` (PQ/HLG/sRGB/709 constants and the
+  HLG OOTF), `tone_mapping-inl.h` (Rec2408ToneMapper — the BT.2390 EETF as libjxl does it, plus
+  `GamutMap` desaturation), `jxl_cms.cc` (how primaries matrices and adaptation are built from
+  chromaticities; how intensity_target is used), `*_test.cc` (their reference values — good test
+  anchors).
+- `zimg-master/src/zimg/colorspace/gamma.cpp`, `colorspace_param.cpp`, `matrix3.*` — transfer
+  function constants and the RGB→XYZ / adaptation derivation used by ffmpeg's `zscale`.
+- `vs-tonemap-main/src/bt2390.cpp`, `bt2407.cpp`, `colour.h` — BT.2390 EETF as BT.2408 Annex 5
+  specifies it, float64, and BT.2407 gamut conversion.
+Cite in comments which reference a constant or edge case was checked against, when it is not in
+the standard itself.
