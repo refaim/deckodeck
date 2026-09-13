@@ -55,7 +55,7 @@ TEST_CASE("the RPGMVP production composition reports its generated identity")
     CHECK(info.name == pvdkit::pvd::kPluginIdentity.name);
     CHECK(info.name == "RPGMVP");
     CHECK(info.version == pvdkit::pvd::kPluginIdentity.version);
-    CHECK(info.version == "1.0.0");
+    CHECK(info.version == "1.0.1");
     auto expectedComments =
         "RPG Maker MV/MZ encrypted PNG decoder: " + pvdkit::rpgmvp::libraryVersions() + "; static build";
     if (kDeepOutput) {

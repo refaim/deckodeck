@@ -78,3 +78,8 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 - libavif rejects `clap`/`irot`/`imir` properties that are not marked essential
   (`clap_irot_imir_non_essential.avif`); such files are refused rather than shown untransformed.
 - Images are limited to 16384 × 16384 pixels in area (268 megapixels) and 32768 pixels per side.
+
+## Changes
+
+- 1.0.1 — the alpha channel is now flagged to the host; in 1.0.0 transparent images were displayed opaque.
+- 1.0.0 — initial release.

@@ -18,7 +18,7 @@ endif()
 pvdkit_plugin_identity(
   rpgmvp
   NAME RPGMVP
-  VERSION 1.0.0
+  VERSION 1.0.1
   PRIORITY 10
   DESCRIPTION "RPG Maker MV/MZ encrypted PNG decoder plugin for PictureView (Far Manager)"
   COMMENTS "${RPGMVP_PLUGIN_COMMENTS}")

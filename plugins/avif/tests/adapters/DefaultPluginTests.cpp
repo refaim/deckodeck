@@ -57,7 +57,7 @@ TEST_CASE("the production plugin reports the generated plugin identity and the l
     CHECK(info.name == pvdkit::pvd::kPluginIdentity.name);
     CHECK(info.name == "AVIF");
     CHECK(info.version == pvdkit::pvd::kPluginIdentity.version);
-    CHECK(info.version == "1.0.0");
+    CHECK(info.version == "1.0.1");
     CHECK(info.comments == "AVIF decoder: " + pvdkit::avif::libraryVersions() + "; static build");
     CHECK(info.comments.find("libavif 1.4.2") != std::string::npos);
 }

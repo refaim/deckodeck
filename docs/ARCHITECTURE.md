@@ -243,7 +243,7 @@ Decision (Task 7, open point 2). A plugin's name, version and priority are decla
 in its `CMakeLists.txt`:
 
 ```cmake
-pvdkit_plugin_identity(avif NAME AVIF VERSION 1.0.0 PRIORITY 10
+pvdkit_plugin_identity(avif NAME AVIF VERSION <version> PRIORITY 10
                        DESCRIPTION "AVIF decoder plugin for PictureView (Far Manager)"
                        COMMENTS "AVIF decoder: libavif <v>, dav1d <v>, libyuv <v>; static build")
 ```

@@ -148,7 +148,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.0.0");
+        CHECK(text(info.pVersion) == "1.0.1");
         const auto comments = text(info.pComments);
         CAPTURE(comments);
         CHECK(comments.find("libavif") != std::string::npos);
@@ -528,7 +528,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.0.0");
+        CHECK(text(info.pVersion) == "1.0.1");
         CHECK(text(info.pComments).empty());
         exports.exit();
 
