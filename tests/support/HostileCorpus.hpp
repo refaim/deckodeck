@@ -77,6 +77,10 @@ namespace pvdkit::test
       private:
         std::filesystem::path directory_;
         std::vector<MutatedFile> files_;
+        // Every file written into directory_, so the destructor can remove them one by one with
+        // the noexcept std::filesystem::remove(path, error_code&) instead of remove_all (which
+        // enumerates, allocates and may throw: bugprone-exception-escape on a destructor).
+        std::vector<std::filesystem::path> written_;
     };
 
 } // namespace pvdkit::test

@@ -22,7 +22,10 @@ namespace pvdkit::e2e
         {
             // GetProcAddress hands back a generic FARPROC; converting it to the SDK's declared signature is
             // the host's own idiom. std::bit_cast between the two (same-sized) function pointer types says
-            // so without clang's function-type-mismatch warning on a direct reinterpret_cast.
+            // so without clang's function-type-mismatch warning on a direct reinterpret_cast; the other
+            // spellings are objected to as well (a void* intermediate by bugprone-casting-through-void, an
+            // integer one by performance-no-int-to-ptr, memcpy by the same check as bit_cast), which is
+            // why tests/.clang-tidy disables bugprone-bitwise-pointer-cast for test code.
             const auto address = GetProcAddress(module, name);
             if (address == nullptr) {
                 return std::unexpected(win32Failure(std::string{"GetProcAddress("} + name + ")", GetLastError()));

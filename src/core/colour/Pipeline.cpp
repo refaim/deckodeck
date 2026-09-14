@@ -88,9 +88,12 @@ namespace pvdkit::core::colour
                 } while (exactQuantize(threshold) < code);
                 return threshold;
             }
-            for (auto previous = std::nextafter(threshold, 0.0F); exactQuantize(previous) >= code;
-                 previous = std::nextafter(previous, 0.0F)) {
+            // The descent walks the same float sequence as the former for loop; a while loop
+            // because a floating-point loop counter is what bugprone-float-loop-counter forbids.
+            auto previous = std::nextafter(threshold, 0.0F);
+            while (exactQuantize(previous) >= code) {
                 threshold = previous;
+                previous = std::nextafter(previous, 0.0F);
             }
             return threshold;
         }

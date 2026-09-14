@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -38,23 +39,31 @@ namespace
     }
 
     // Two adapter_tests processes (e.g. parallel presets) must never share, and therefore never
-    // delete, each other's trees: the process id is part of the leaf directory name.
+    // delete, each other's trees: the process id is part of the leaf directory name. Every path the
+    // tree hands out (file(), createLongDirectory()) is recorded in extended-length form so the
+    // destructor can remove them deepest first with std::filesystem::remove(path, error_code&) -
+    // noexcept by the standard - and never with remove_all, which enumerates, allocates and may
+    // throw (bugprone-exception-escape on a destructor).
     class TempTree
     {
       public:
         explicit TempTree(const std::wstring_view leaf)
             : path_(fs::temp_directory_path() /
-                    fs::path{std::wstring{leaf} + L"-" + std::to_wstring(GetCurrentProcessId())})
+                    fs::path{std::wstring{leaf} + L"-" + std::to_wstring(GetCurrentProcessId())}),
+              extendedRoot_(extended(path_))
         {
             std::error_code ignored;
-            fs::remove_all(extended(path_), ignored);
+            fs::remove_all(extendedRoot_, ignored);
             fs::create_directories(path_);
         }
 
         ~TempTree()
         {
             std::error_code ignored;
-            fs::remove_all(extended(path_), ignored);
+            for (auto index = created_.size(); index > 0; --index) {
+                fs::remove(created_[index - 1], ignored);
+            }
+            fs::remove(extendedRoot_, ignored);
         }
 
         TempTree(const TempTree &) = delete;
@@ -65,12 +74,23 @@ namespace
             return path_;
         }
 
-        // Creates `<root>/aaaa.../bbbb.../.../eeee...` (5 x 52 characters) and returns it.
-        [[nodiscard]] fs::path createLongDirectory() const
+        // The path of a file the test is about to create, `<root>/<relative>` (an absolute
+        // `relative`, e.g. one under createLongDirectory(), is taken as is), recorded for removal.
+        [[nodiscard]] fs::path file(const fs::path &relative)
+        {
+            auto path = path_ / relative;
+            created_.push_back(extended(path));
+            return path;
+        }
+
+        // Creates `<root>/aaaa.../bbbb.../.../eeee...` (5 x 52 characters) and returns it; every
+        // level is recorded so that the destructor removes them innermost first.
+        [[nodiscard]] fs::path createLongDirectory()
         {
             auto longDirectory = path_;
             for (int index = 0; index < 5; ++index) {
                 longDirectory /= std::wstring(52, static_cast<wchar_t>(L'a' + index));
+                created_.push_back(extended(longDirectory));
             }
             fs::create_directories(extended(longDirectory));
             return longDirectory;
@@ -78,6 +98,8 @@ namespace
 
       private:
         fs::path path_;
+        fs::path extendedRoot_;
+        std::vector<fs::path> created_;
     };
 
     void writeBytes(const fs::path &path, const std::span<const std::byte> bytes)
@@ -204,7 +226,7 @@ TEST_CASE("file mapping exposes exact file bytes and reports invalid file kinds"
 {
     TempTree tree{L"pvdkit-adapter-file-mapping"};
     constexpr std::array bytes{std::byte{0x00}, std::byte{0x7f}, std::byte{0x80}, std::byte{0xff}};
-    const auto normal = tree.path() / L"normal.bin";
+    const auto normal = tree.file(L"normal.bin");
     writeBytes(normal, bytes);
 
     auto mapped = pvdkit::win::FileMapping::open(normal.wstring());
@@ -217,7 +239,7 @@ TEST_CASE("file mapping exposes exact file bytes and reports invalid file kinds"
     REQUIRE(mappedView.has_value());
     CHECK(std::ranges::equal((*mappedView)->bytes(), bytes));
 
-    const auto emptyPath = tree.path() / L"empty.bin";
+    const auto emptyPath = tree.file(L"empty.bin");
     writeBytes(emptyPath, {});
     const auto empty = pvdkit::win::FileMapping::open(emptyPath.wstring());
     REQUIRE_FALSE(empty.has_value());
@@ -241,11 +263,11 @@ TEST_CASE("file source supports Unicode and extended-length paths")
     TempTree tree{L"pvdkit-adapter-file-source"};
     pvdkit::win::FileSource source;
 
-    const auto unicode = tree.path() / L"\u0444\u0430\u0439\u043b-\U0001F600.bin";
+    const auto unicode = tree.file(L"\u0444\u0430\u0439\u043b-\U0001F600.bin");
     writeBytes(unicode, kPayload);
     checkOpens(source, utf8Path(unicode));
 
-    const auto longFile = tree.createLongDirectory() / L"payload.bin";
+    const auto longFile = tree.file(tree.createLongDirectory() / L"payload.bin");
     writeBytes(longFile, kPayload);
     REQUIRE(longFile.wstring().size() > kMaxPath);
     checkOpens(source, utf8Path(longFile));
@@ -268,7 +290,7 @@ TEST_CASE("file source supports Unicode and extended-length paths")
 TEST_CASE("file source opens short absolute paths that rely on Win32 normalisation")
 {
     TempTree tree{L"pvdkit-adapter-short-paths"};
-    const auto file = tree.path() / L"normal.bin";
+    const auto file = tree.file(L"normal.bin");
     writeBytes(file, kPayload);
     pvdkit::win::FileSource source;
 
@@ -290,7 +312,7 @@ TEST_CASE("file source opens long paths written with forward slashes and dot-dot
 {
     TempTree tree{L"pvdkit-adapter-long-slash"};
     const auto longDirectory = tree.createLongDirectory();
-    const auto longFile = longDirectory / L"payload.bin";
+    const auto longFile = tree.file(longDirectory / L"payload.bin");
     writeBytes(longFile, kPayload);
 
     const std::wstring slashed =
@@ -309,8 +331,8 @@ TEST_CASE("a file beyond the 32-bit address space is refused, never truncated")
     // be checked before it is narrowed. The file is sparse (no disk space is consumed and no
     // 4 GiB write happens); the test insists on sparse support rather than falling back.
     constexpr std::uint64_t kSize = (std::uint64_t{1} << 32) + 1;
-    const TempTree tree{L"pvdkit-huge"};
-    const auto path = tree.path() / L"sparse.bin";
+    TempTree tree{L"pvdkit-huge"};
+    const auto path = tree.file(L"sparse.bin");
     {
         pvdkit::win::UniqueHandle file{CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                                                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)};

@@ -228,6 +228,7 @@ namespace pvdkit::test
             auto file = mutate(source.bytes, source.name, mutation, rng);
             const auto path = directory_ / fileName(index, source.name, mutation);
             writeFile(path, file.bytes);
+            written_.push_back(path);
             const auto utf8 = path.u8string();
             file.utf8Path.assign(utf8.begin(), utf8.end());
             files_.push_back(std::move(file));
@@ -236,8 +237,13 @@ namespace pvdkit::test
 
     HostileCorpus::~HostileCorpus()
     {
+        // Only the noexcept remove(path, error_code&) on paths recorded at construction; nothing
+        // here can throw.
         std::error_code ignored;
-        std::filesystem::remove_all(directory_, ignored);
+        for (const auto &path : written_) {
+            std::filesystem::remove(path, ignored);
+        }
+        std::filesystem::remove(directory_, ignored);
     }
 
     const std::vector<MutatedFile> &HostileCorpus::files() const noexcept

@@ -5,7 +5,13 @@
 # PluginConstants.hpp and the vcpkg headers stay out (diagnostics in the main file of a TU are
 # always reported). A test header is checked with the configuration of the test TU that includes
 # it, i.e. with the tests/.clang-tidy relaxations.
-# tests/.clang-tidy and plugins/<id>/tests/.clang-tidy relax two checks for test code only.
+# tests/.clang-tidy and plugins/<id>/tests/.clang-tidy relax four checks for test code only.
+# Two clang-tidy versions read this file: the reference machine's 19 and the CI runner's (22 on
+# the Windows Server 2025 image, Task 24). A check that only the newer one knows is either
+# satisfied by the code or disabled here with its reason; both runs must be clean. Disabled:
+# portability-avoid-pragma-once (clang-tidy 22): `#pragma once` is deliberate in every header - all
+# compilers this project targets honour it, and the check exists for filesystems on which a file
+# has no unique identity (network mounts, hard links), which no build of ours uses.
 ---
 Checks: >
   -*,
@@ -13,7 +19,8 @@ Checks: >
   bugprone-*,
   performance-*,
   portability-*,
-  -bugprone-easily-swappable-parameters
+  -bugprone-easily-swappable-parameters,
+  -portability-avoid-pragma-once
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*[\\/](src|tests|plugins[\\/][^\\/]+[\\/](src|tests))[\\/].*'
 SystemHeaders: false

@@ -585,8 +585,13 @@ Decisions (Task 7, open point 1):
   `src/`, `tests/` and the plugin `src/`/`tests/` roots reported) over every TU of the build's
   `compile_commands.json` (`CMAKE_EXPORT_COMPILE_COMMANDS` is on in the base preset), `-Jobs`
   processes at a time (half the cores by default), with `tests/.clang-tidy` and
-  `plugins/<id>/tests/.clang-tidy` relaxing `bugprone-unchecked-optional-access` and
-  `clang-analyzer-optin.core.EnumCastOutOfRange` for test code only; cppcheck
+  `plugins/<id>/tests/.clang-tidy` relaxing `bugprone-unchecked-optional-access`,
+  `clang-analyzer-optin.core.EnumCastOutOfRange`, `bugprone-random-generator-seed` and
+  `bugprone-bitwise-pointer-cast` for test code only, and the root file disabling `portability-avoid-pragma-once` (Task 24 fix round: the
+  CI `lint` job runs the runner's clang-tidy, 22 on the Windows Server 2025 image, whose new
+  checks the reference machine's 19 never sees - such a check is either satisfied by the code or
+  disabled with its reason in the `.clang-tidy` files, and both the local run and the CI run must
+  be clean; the local run alone cannot prove the CI one); cppcheck
   (`--enable=warning,performance,portability --std=c++23 --platform=win64|win32W --library=windows`,
   the same compile database restricted to `src/` and `plugins/*/src/`, `cppcheck-suppressions.txt`);
   PSScriptAnalyzer (`scripts/`, `plugins/*/scripts/`, the root `.psd1` files;
@@ -629,8 +634,10 @@ Decisions (Task 7, open point 1):
   glance - Task 24), `ctest`, `lint.ps1` and `coverage.ps1` on `windows-latest` and, on a
   `<id>/vX.Y.Z` tag, `pack.ps1` plus `gh release create` and the README "Downloads" row update.
   The toolchain files resolve the LLVM directory through `cmake/find-llvm.cmake`
-  (`PVDKIT_LLVM_DIR`, the known VS 2022 layouts, PATH; `scripts/llvm-dir.ps1` mirrors it for
-  the scripts), so the reference machine's Build Tools path is a default, not a requirement.
+  (`PVDKIT_LLVM_DIR`, the known VS 2022 layouts, then any Visual Studio major and edition under
+  either Program Files root - the glob the toolchain action uses and what the VS 2026 runner image
+  resolves to - then PATH; `scripts/llvm-dir.ps1` mirrors it for the scripts), so the reference
+  machine's Build Tools path is a default, not a requirement.
 - Preset `asan` (Task 10, level 2; x64 only): `CMAKE_BUILD_TYPE=RelWithDebInfo` with
   `PVDKIT_ASAN=ON`, which adds `-fsanitize=address /Od /Zi` to every target - the plugin DLLs
   included - and `/DEBUG` at link time, so a report names the line. RelWithDebInfo rather than
@@ -766,17 +773,21 @@ Decisions (Task 7, open point 1):
   accepted with its page count, or rejected); a plugin must ship at least one of each. Unit-level
   counterparts: `tests/adapters/LeakTests.cpp` (`FileMapping`/`FileSource` open and close, every
   failure path) and `plugins/<id>/tests/adapters/LeakTests.cpp` (decoder create/decode/destroy on
-  every fixture with the error paths, refusals, the composed plugin). Cost: the task's "< 30 s per
-  architecture" budget applies to the plain presets, and `avif_leak_tests` met it there until Task
-  24: ~15 s in Release, ~24-27 s in Debug, x64 and x86 alike. Since Task 24 every `pvdInit` builds
-  the plugin's `SrgbOutputTables` (§7: ≈ 5 / 12 ms per call on x64 Release / Debug, ≈ 15 / 25 ms
-  on x86), and the scenarios that cycle `pvdInit` about 650 times (the disk and memory round
-  trips, init/exit cycle, LoadLibrary/FreeLibrary) pay it: measured on a loaded machine,
-  `avif_leak_tests` went from 46 s to 64 s in Debug x86 and the init/exit cycle alone from 1 ms
-  to 2.5 s in Debug x64 - a test-time cost only, since the host calls `pvdInit` once per plugin
-  load. The instrumented builds run the same N and
-  are deliberately not trimmed (a smaller N there would test less of exactly the build the gate
-  is instrumented for): ~30-42 s under `coverage`, ~30 s under `asan`.
+  every fixture with the error paths, refusals, the composed plugin). Cost: Task 10's "< 30 s per
+  architecture" budget applied to the plain presets, and `avif_leak_tests` met it on an unloaded
+  machine until Task 24: ~15 s in Release, ~24-27 s in Debug, x64 and x86 alike. Since Task 24
+  every `pvdInit` builds the plugin's `SrgbOutputTables` (§7: ≈ 5 / 12 ms per call on x64
+  Release / Debug, ≈ 15 / 25 ms on x86), and the scenarios that cycle `pvdInit` about 650 times
+  (the disk and memory round trips, init/exit cycle, LoadLibrary/FreeLibrary) pay ≈ 650 × that:
+  the Debug budget is no longer met on either architecture (unloaded: Debug x64 ≈ 50 s, measured
+  by the Task 24 review; Debug x86 ≈ 45 s by extrapolation), and Release is close to it (unloaded
+  Release x64 ≈ 23 s, Release x86 ≈ 33 s, both measured by the review). The delta itself was
+  measured on a loaded machine, HEAD against Task 24 back to back: `avif_leak_tests` 46 s → 64 s
+  in Debug x86, the init/exit cycle alone 1 ms → 2.5 s in Debug x64. A test-time cost only, since
+  the host calls `pvdInit` once per plugin load; the lazy build behind a `std::mutex` that §7
+  mentions would remove it. The instrumented builds run the same N and are deliberately not
+  trimmed (a smaller N there would test less of exactly the build the gate is instrumented for):
+  ~30-42 s under `coverage`, ~30 s under `asan` before Task 24, ≈ 54 / 59 s after (x64, loaded).
 - `tests/guard`: walks `src/` and every `plugins/*/src/` and fails on forbidden tokens: `new `,
   `new(`, `delete `, `malloc`, `calloc`, `realloc`, `free(`, `shared_ptr`, `weak_ptr`,
   `reinterpret_cast` outside adapters/pvd, `#include <windows.h>` outside `src/adapters/**`,
@@ -784,13 +795,20 @@ Decisions (Task 7, open point 1):
   AGENTS.md rule 4 names), codec headers (`avif/avif.h`, `dav1d/dav1d.h`; extend the list with
   each plugin's library) outside those adapters and `Exports.cpp`, `catch (`
   outside `Firewall.hpp`, `LCOV_EXCL`, `__builtin_unreachable`, `[[assume`, and (Task 24, AGENTS.md
-  rule 13) the synchronisation family for which MSVC ≥ 14.50 imports
-  `api-ms-win-core-synch-l1-2-0.dll`: `jthread`, `stop_token`/`stop_source`/`stop_callback`,
-  `call_once`/`once_flag`, `<latch>`/`std::latch`, `<barrier>`/`std::barrier`,
+  rule 13) the synchronisation family behind the `api-ms-win-core-synch-l1-2-0.dll` import of
+  MSVC ≥ 14.50 (§7 says which members were observed and which are forbidden by extension):
+  `jthread`, `stop_token`/`stop_source`/`stop_callback`, `call_once`/`once_flag`,
+  `<latch>`/`std::latch`, `<barrier>`/`std::barrier`,
   `<semaphore>`/`std::counting_semaphore`/`std::binary_semaphore`, `condition_variable(_any)`,
-  `.wait(`/`.wait_for(`/`.wait_until(`/`.notify_one(`/`.notify_all(` (also `->`) and
-  `std::atomic_wait*`/`std::atomic_notify_*`, plus any function-local `static` that is not
-  `static constexpr` (thread-safe statics: `_Init_thread_*`). For that last rule every brace scope
+  `.wait(`/`.wait_for(`/`.wait_until(`/`.notify_one(`/`.notify_all(` (also `->`),
+  `std::atomic_wait*`/`std::atomic_notify_*` and their `std::atomic_flag_wait*`/
+  `std::atomic_flag_notify_*` twins, `timed_mutex`/`recursive_timed_mutex`/`shared_timed_mutex`,
+  `<future>`/`std::future`/`shared_future`/`promise`/`async`/`packaged_task`,
+  `<syncstream>`/`std::osyncstream`/`syncbuf` (`basic_` forms included), plus any function-local
+  `static` that is not `static constexpr` (thread-safe statics: `_Init_thread_*`). The type
+  spellings are matched after `::` so an identifier merely named `future`, `latch` or `promise`
+  is not the token; a `using namespace std;` would defeat that, and none exists. For that last
+  rule every brace scope
   is classified by its header - the code since the previous `;`, `{` or `}` minus access
   specifiers, attributes, `alignas` and `template <...>` heads - as declarative (`namespace`,
   `class`, `struct`, `union`, `enum`, `extern "C" {`; no parenthesis in the header) or executable
@@ -845,19 +863,26 @@ Decisions (Task 7, open point 1):
   `atexit` registration a plugin DLL makes). Codec libraries must be thread-safe across decoder
   instances (libavif/dav1d are).
 - No thread-safe statics, no `std::jthread`/`stop_token`/`stop_source`, no atomic
-  `wait`/`notify_*`, no `<latch>`/`<barrier>`/`<semaphore>`, no `call_once`/`once_flag`, no
-  `condition_variable` anywhere in `src/**` or `plugins/*/src/**` (AGENTS.md rule 13, guard
-  test). Reason (Task 24, observed on the first CI run): the vcruntime and STL of MSVC ≥ 14.50
-  (Visual Studio 2026) implement all of them over `WaitOnAddress`/`WakeByAddressAll`, imported
-  directly from `api-ms-win-core-synch-l1-2-0.dll` instead of the run-time lookup with a fallback
-  that MSVC 14.44 still performs - the guarded initialisation of a function-local `static`
-  (`_Init_thread_wait`/`_Init_thread_notify`) and `std::jthread`'s `stop_token` state
-  (`__std_atomic_wait_direct`/`__std_atomic_notify_all_direct`) were the two users in the tree,
-  and both `AVIF.pvd` and `RPGMVP.pvd` failed `check_imports` on x64 and x86 there while the same
-  sources import `KERNEL32.dll` only on 14.44. What to use instead: `std::thread` plus `join`
-  (`_beginthreadex`/`WaitForSingleObjectEx`), the SRWLOCK-backed `std::mutex` if a lock is ever
-  needed, plain atomics without `wait`/`notify`, and composition-root ownership instead of
-  statics.
+  `wait`/`notify_*` (member or free function, `atomic_flag_*` included), no
+  `<latch>`/`<barrier>`/`<semaphore>`, no `call_once`/`once_flag`, no `condition_variable`, no
+  `timed_mutex`/`recursive_timed_mutex`/`shared_timed_mutex`, no `<future>`, no `<syncstream>`
+  anywhere in `src/**` or `plugins/*/src/**` (AGENTS.md rule 13, guard test). What was observed
+  (Task 24, the first CI run): the vcruntime and STL of MSVC ≥ 14.50 (Visual Studio 2026) import
+  `WaitOnAddress`/`WakeByAddressAll` directly from `api-ms-win-core-synch-l1-2-0.dll` - instead
+  of the run-time lookup with a fallback that MSVC 14.44 still performs - for exactly two things:
+  the guarded initialisation of a function-local `static` (`_Init_thread_wait`/
+  `_Init_thread_notify`) and atomic wait/notify (`__std_atomic_wait_direct`/
+  `__std_atomic_notify_all_direct`, which `std::jthread`'s `stop_token` state uses). Those were
+  the two users in the tree, and both `AVIF.pvd` and `RPGMVP.pvd` failed `check_imports` on x64
+  and x86 there while the same sources import `KERNEL32.dll` only on 14.44. The rest of the
+  family is forbidden by extension, not by measurement: `<latch>`, `<barrier>`, `<semaphore>` and
+  `<syncstream>` are built on atomic wait/notify in the STL headers; the timed mutexes and
+  `<future>` on `condition_variable`/`_Cnd_t`; `condition_variable` and `call_once` are
+  `SleepConditionVariableSRW`- and `InitOnceExecuteOnce`-backed in every STL known here, but a
+  newer toolset's imports cannot be proven on this machine, and nothing in the tree needs any of
+  them. What to use instead: `std::thread` plus `join` (`_beginthreadex`/`WaitForSingleObjectEx`),
+  the SRWLOCK-backed `std::mutex` if a lock is ever needed, plain atomics without
+  `wait`/`notify`, and composition-root ownership instead of statics.
 - The sRGB output tables (`colour::SrgbOutputTables`, `src/core/colour/Pipeline.cpp`) are the
   case in point: pure math (the decision thresholds of the sRGB OETF and their bucket index) that
   depends on no host call, file, option or `Cicp`, so it is built once per plugin instance - by

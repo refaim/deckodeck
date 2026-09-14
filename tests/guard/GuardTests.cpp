@@ -297,9 +297,23 @@ namespace
                     // (or anything else): __std_atomic_wait_direct and its notify twins.
                     CompiledRule{std::regex{R"((?:\.|->)\s*(?:wait(?:_for|_until)?|notify_one|notify_all)\s*\()"},
                                  ".wait(/.notify_one(/.notify_all("},
-                    // The free-function spellings of the same operations.
-                    CompiledRule{std::regex{R"(\batomic_(?:wait|wait_explicit|notify_one|notify_all)\b)"},
-                                 "atomic_wait/atomic_notify_*"},
+                    // The free-function spellings of the same operations, for std::atomic and for
+                    // std::atomic_flag (atomic_flag_wait forwards to atomic_flag::wait).
+                    CompiledRule{std::regex{R"(\batomic_(?:flag_)?(?:wait|wait_explicit|notify_one|notify_all)\b)"},
+                                 "atomic_wait/atomic_flag_wait/atomic_notify_*"},
+                    // Header-level users of the same primitives in the MSVC STL, forbidden with them
+                    // (review-task24 nit 2): the timed mutexes wait on a condition_variable ...
+                    CompiledRule{std::regex{R"(\b(?:recursive_|shared_)?timed_mutex\b)"}, "timed_mutex"},
+                    // ... <future>'s shared state waits on _Cnd_t ...
+                    CompiledRule{
+                        std::regex{
+                            R"((?:#[ \t]*include[ \t]*<[ \t]*future[ \t]*>)|(?:::[ \t]*(?:future|shared_future|promise|async|packaged_task)\b))"},
+                        "future/promise/async/packaged_task"},
+                    // ... and <syncstream>'s locked pointer is an atomic wait.
+                    CompiledRule{
+                        std::regex{
+                            R"((?:#[ \t]*include[ \t]*<[ \t]*syncstream[ \t]*>)|(?:::[ \t]*(?:basic_)?(?:osyncstream|syncbuf)\b))"},
+                        "osyncstream/syncbuf"},
                 },
             .reinterpretCast = std::regex{R"(\breinterpret_cast\b)"},
             .windowsHeader = std::regex{R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*windows[.]h[ \t]*[>"])"},
@@ -728,6 +742,13 @@ namespace
             std::string_view{"std::atomic_wait(&flag, 0);"},
             std::string_view{"std::atomic_notify_one(&flag);"},
             std::string_view{"std::atomic_notify_all(&flag);"},
+            std::string_view{"std::atomic_flag_notify_all(&flag);"},
+            // Header-level users of the same primitives (review-task24 nit 2).
+            std::string_view{"std::timed_mutex guard;"},
+            std::string_view{"#include <future>"},
+            std::string_view{"std::promise<int> promise;"},
+            std::string_view{"#include <syncstream>"},
+            std::string_view{"std::osyncstream out{std::cout};"},
             // A function-local static with a non-constexpr initialiser (thread-safe statics).
             std::string_view{"void f() { static const Tables tables; }"},
         };
@@ -1063,6 +1084,29 @@ namespace
             std::string_view{"std::atomic_wait_explicit(&flag, 0, order);"},
             std::string_view{"std::atomic_notify_one(&flag);"},
             std::string_view{"std::atomic_notify_all(&flag);"},
+            std::string_view{"std::atomic_flag_wait(&flag, false);"},
+            std::string_view{"std::atomic_flag_wait_explicit(&flag, false, order);"},
+            std::string_view{"std::atomic_flag_notify_one(&flag);"},
+            std::string_view{"std::atomic_flag_notify_all(&flag);"},
+            // Header-implemented over condition_variable / _Cnd_t / __std_atomic_wait_direct in
+            // the MSVC STL (review-task24 nit 2): the timed mutexes, <future> and <syncstream>.
+            std::string_view{"std::timed_mutex guard;"},
+            std::string_view{"std::recursive_timed_mutex guard;"},
+            std::string_view{"std::shared_timed_mutex guard;"},
+            std::string_view{"timed_mutex guard;"},
+            std::string_view{"#include <future>"},
+            std::string_view{"# include < future >"},
+            std::string_view{"std::future<int> result;"},
+            std::string_view{"std::shared_future<int> result;"},
+            std::string_view{"std::promise<int> promise;"},
+            std::string_view{"std::packaged_task<int()> task;"},
+            std::string_view{"auto result = std::async(std::launch::async, fn);"},
+            std::string_view{"std :: future<int> result;"},
+            std::string_view{"#include <syncstream>"},
+            std::string_view{"std::osyncstream out{std::cout};"},
+            std::string_view{"std::syncbuf buffer{stream.rdbuf()};"},
+            std::string_view{"std::basic_osyncstream<char> out{std::cout};"},
+            std::string_view{"std::basic_syncbuf<char> buffer;"},
         };
         for (const auto sample : flagged) {
             CAPTURE(sample);
@@ -1096,6 +1140,19 @@ namespace
             std::string_view{"my_stop_token();"},
             std::string_view{"call_once_more();"},
             std::string_view{"jthreads_started = 0;"},
+            std::string_view{"std::atomic_flag ready;"},
+            std::string_view{"ready.test_and_set();"},
+            std::string_view{"ready.clear();"},
+            std::string_view{"std::shared_mutex guard;"},
+            std::string_view{"std::recursive_mutex guard;"},
+            std::string_view{"const std::unique_lock lock{guard};"},
+            std::string_view{"timed_mutexes = 0;"},
+            std::string_view{"int future = 0;"},
+            std::string_view{"promise_kept = true;"},
+            std::string_view{"asyncCount = 0;"},
+            std::string_view{"std::vector<int> futures;"},
+            std::string_view{"syncbuffer.flush();"},
+            std::string_view{"std::ostream &out = stream;"},
             std::string_view{"// std::jthread worker;\nreturn;"},
             std::string_view{"constexpr auto text = \"flag.notify_all();\";"},
         };

@@ -71,15 +71,21 @@ only. No WIC, no GDI+, no system codecs.
 13. **KERNEL32-only under every MSVC toolset.** No thread-safe statics (a function-local `static`
     that is not `static constexpr`), no namespace-scope object with a constructor or destructor
     (the composition root's `processState` in `Exports.cpp` is the one exception), no
-    `std::jthread`/`stop_token`/`stop_source`, no atomic `wait`/`notify_one`/`notify_all`, no
-    `<latch>`/`<barrier>`/`<semaphore>`, no `std::call_once`/`once_flag`, no `condition_variable`
-    anywhere in `src/**` and `plugins/*/src/**`: the newest MSVC runtime (≥ 14.50, Visual Studio
-    2026) implements all of them over `WaitOnAddress`/`WakeByAddressAll` imported from the
-    Windows 8+ synch API set (`api-ms-win-core-synch-l1-2-0.dll`), which failed `check_imports`
-    on CI while MSVC 14.44 still resolves them at run time. Use `std::thread` + `join`, the
-    SRWLOCK-backed `std::mutex` if a lock is ever needed, plain atomics without `wait`/`notify`,
-    and composition-root ownership instead of statics (`SrgbOutputTables` is the worked example,
-    ARCHITECTURE §7). The guard test enforces the tokens; the CI build prints the toolset it used.
+    `std::jthread`/`stop_token`/`stop_source`, no atomic `wait`/`notify_one`/`notify_all` (member
+    or free function, `atomic_flag_*` included), no `<latch>`/`<barrier>`/`<semaphore>`, no
+    `std::call_once`/`once_flag`, no `condition_variable`, no `timed_mutex` family, no `<future>`,
+    no `<syncstream>` anywhere in `src/**` and `plugins/*/src/**`. Observed (first CI run, Task
+    24): the MSVC ≥ 14.50 runtime (Visual Studio 2026) imports `WaitOnAddress`/`WakeByAddressAll`
+    from the Windows 8+ synch API set (`api-ms-win-core-synch-l1-2-0.dll`) for thread-safe statics
+    (`_Init_thread_*`) and for atomic wait/notify (`__std_atomic_wait_direct`, which
+    `std::jthread`'s `stop_token` uses), and both plugins failed `check_imports` for exactly those
+    two while MSVC 14.44 resolves them at run time. The rest of the family is forbidden by
+    extension: it is built on the same primitives in the STL headers, or its imports under a newer
+    toolset cannot be proven here, and nothing in the tree needs it. Use `std::thread` + `join`,
+    the SRWLOCK-backed `std::mutex` if a lock is ever needed, plain atomics without
+    `wait`/`notify`, and composition-root ownership instead of statics (`SrgbOutputTables` is the
+    worked example, ARCHITECTURE §7). The guard test enforces the tokens; the CI build prints the
+    toolset it used.
 
 ## Toolchain (already installed, do not install other compilers)
 
@@ -88,8 +94,10 @@ only. No WIC, no GDI+, no system codecs.
   MSVC STL 14.44.35207, Windows SDK 10.0.26100. clang-cl auto-detects both; no vcvars needed.
   That directory is the first default of `cmake/find-llvm.cmake` and `scripts/llvm-dir.ps1`
   (`PVDKIT_LLVM_DIR` overrides it and must then be right - a set-but-wrong value is an error,
-  not a fallback; the CI build, lint and coverage jobs set it to the runner's VS 2022 LLVM,
-  the release job relies on the VS 2022 layout fallback); never hard-code it anywhere else.
+  not a fallback; the CI build, lint and coverage jobs set it to the runner's Visual Studio
+  LLVM, the release job relies on the fallback order of the two - the VS 2022 layouts, then any
+  Visual Studio major and edition under either Program Files root, then PATH); never hard-code
+  it anywhere else.
 - CMake 4.4 on PATH. Ninja: use vcpkg's downloaded copy or `scoop install ninja` if absent.
   Fallback generator: `Visual Studio 17 2022` with `-T ClangCL`.
 - vcpkg at `C:\Users\Roma\scoop\apps\vcpkg\current` (`vcpkg` on PATH), manifest mode (`vcpkg.json`),
@@ -125,7 +133,7 @@ tests/pvd/      shim, firewall, context handle, Progress, Exports with fakes (do
 tests/core/     core logic with fake decoder / file source / describer (doctest)
 tests/adapters/ the win adapter on real files
 tests/e2e/      the host driver + VERSIONINFO test, compiled into every plugin's e2e executable
-tests/guard/    source-scanning test enforcing rules 2–4 over src/ and plugins/*/src/
+tests/guard/    source-scanning test enforcing rules 2–4 and 13 over src/ and plugins/*/src/
 tests/support/  the leak gate: heap/handle accounting, hostile corpus, the scenarios compiled into
                 every plugin's <id>_leak_tests (registered with its e2e tests; both architectures)
 ```
@@ -140,6 +148,10 @@ tests/support/  the leak gate: heap/handle accounting, hostile corpus, the scena
   findings against both architectures' build directories. A new suppression carries a one-line
   reason in the configuration file it lives in (`.clang-tidy`, `tests/.clang-tidy`,
   `cppcheck-suppressions.txt`, `PSScriptAnalyzerSettings.psd1`, `binskim.psd1`) or next to the
-  `NOLINT`.
+  `NOLINT`. The CI `lint` job runs the runner's clang-tidy, newer than the reference machine's
+  19 (22 on the Windows Server 2025 image) and carrying checks 19 does not have: a check only
+  the newer version knows is either satisfied by the code or disabled in the `.clang-tidy` files
+  with its reason - both the local run and the CI run must be clean, and the local run alone
+  cannot prove the CI one.
 - The Release presets produce every `<NAME>.pvd` whose import table lists only `KERNEL32.dll` and
   whose export table is exactly the eight bare `pvd*` names (`<id>_check_imports`, `<id>_check_exports`).

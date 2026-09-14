@@ -39,9 +39,11 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw "bootstrap-vcpkg.bat failed with exit code $LASTEXITCODE" }
         New-Item -ItemType Directory -Force -Path $binaryCache | Out-Null
         & (Join-Path $vcpkgRoot "vcpkg.exe") version
-        # The clang-cl that ships with the runner's Visual Studio 2022 (the same LLVM 19 the
-        # reference machine builds with); any VS major as a fallback, so a future image is at
-        # least tried.
+        # The clang-cl that ships with the runner's Visual Studio: a VS 2022 layout first (the LLVM 19
+        # the reference machine builds with, when the image still has it), else any VS major and
+        # edition - which is what the Windows Server 2025 image (Visual Studio 2026, MSVC 14.51,
+        # clang-cl 22) resolves to. scripts/llvm-dir.ps1 and cmake/find-llvm.cmake use the same
+        # order and glob, and build.yml prints the toolset the build actually uses.
         $clang = @(Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\Llvm\x64\bin\clang-cl.exe" -ErrorAction SilentlyContinue)
         if ($clang.Count -eq 0) {
           $clang = @(Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin\clang-cl.exe" -ErrorAction SilentlyContinue)
