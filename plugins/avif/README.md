@@ -2,7 +2,7 @@
 
 AVIF decoder plugin for PictureView 3 (the image viewer plugin for Far Manager 3 by Pavel
 Skakov), built for both the x64 and the x86 (32-bit) Far Manager. It is the `avif` plugin of the
-pvdkit monorepo (see the top-level `README.md` for the build) and decodes with libavif 1.4.2,
+deckodeck monorepo (see the top-level `README.md` for the build) and decodes with libavif 1.4.2,
 dav1d 1.5.3 and libyuv, all linked statically: the finished `AVIF.pvd` imports `KERNEL32.dll` and
 nothing else, so it needs no runtime, no WIC codec and no GDI+.
 
@@ -71,7 +71,7 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 
 ## Known limitations
 
-- ICC profiles are not applied: PictureView ignores them and pvdkit does not have a CMS yet.
+- ICC profiles are not applied: PictureView ignores them and deckodeck does not have a CMS yet.
 - EXIF orientation is honoured when the file has no `irot`/`imir`; those AVIF transforms take
   precedence by spec.
 - Gain maps, layered (`a1lx`) selection and progressive preview rendering are not supported.
@@ -85,5 +85,5 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 
 ## Changes
 
-- 1.1.0 — transparency is now displayed, sources deeper than 8 bits are delivered as 16-bit BGRA, HDR PQ/HLG uses BT.2390 tone mapping, Rec.2020/P3 is converted to sRGB, and EXIF orientation is handled by PictureView when irot/imir is absent.
+- 1.1.0 — transparency is now displayed, sources deeper than 8 bits are delivered as 16-bit BGRA, HDR PQ/HLG uses BT.2390 tone mapping, Rec.2020/P3 is converted to sRGB, EXIF orientation is handled by PictureView when irot/imir is absent, and HDR images decode several times faster.
 - 1.0.0 — initial release.

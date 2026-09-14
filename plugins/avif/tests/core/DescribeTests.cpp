@@ -110,6 +110,27 @@ namespace pvdkit::avif
             CHECK_FALSE(describe(meta).contains("EXIF orientation"));
         }
 
+        TEST_CASE("describe prints EXIF orientation only for the rotated values 2..8")
+        {
+            auto meta = baseMeta();
+            meta.hasExif = true;
+
+            meta.exifOrientation = 1;
+            CHECK_FALSE(describe(meta).contains("EXIF orientation"));
+
+            meta.exifOrientation = 2;
+            CHECK(describe(meta).ends_with("EXIF orientation 2"));
+
+            meta.exifOrientation = 8;
+            CHECK(describe(meta).ends_with("EXIF orientation 8"));
+
+            // Out of the 0/1..8 domain `ImageMeta::exifOrientation` documents, but the describer
+            // takes the value as given (no precondition), so the ">8" branch of the range check
+            // needs its own case for full branch coverage.
+            meta.exifOrientation = 9;
+            CHECK_FALSE(describe(meta).contains("EXIF orientation"));
+        }
+
         TEST_CASE("describe reports each transform and mirror axis")
         {
             auto meta = baseMeta();

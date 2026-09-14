@@ -28,3 +28,4 @@ zlib); тексты их лицензий — в LICENSES.txt. Заголово�
 PictureView — (c) Павел Скаков.
 
 Роман Харитонов
+  https://github.com/refaim/deckodeck

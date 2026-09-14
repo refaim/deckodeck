@@ -96,8 +96,6 @@ namespace pvdkit::core
       public:
         virtual ~IDecoder() = default;
         [[nodiscard]] virtual const ImageMeta &meta() const = 0;
-        /// Views ICC bytes owned by this decoder for its lifetime; empty means no profile.
-        [[nodiscard]] virtual std::span<const std::byte> iccProfile() const = 0;
         [[nodiscard]] virtual Result<FrameTiming> frameTiming(std::uint32_t frame) const = 0;
         [[nodiscard]] virtual Result<void> decodeFrame(std::uint32_t frame, pvd::PixelFormat format,
                                                        std::span<std::byte> dst, std::uint32_t pitchBytes) = 0;

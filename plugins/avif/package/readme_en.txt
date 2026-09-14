@@ -21,7 +21,7 @@ How to use:
   sRGB for display, with BT.2390 tone mapping for HDR.
 
   Not done yet: embedded ICC profiles are not applied; PictureView ignores
-  them and pvdkit does not have a colour-management system yet. Gain maps
+  them and deckodeck does not have a colour-management system yet. Gain maps
   and user-adjustable exposure or tone settings are not supported.
 
 Install:
@@ -37,3 +37,4 @@ Licence: MIT. The plugin bundles libavif (BSD-2-clause), dav1d
 LICENSES.txt. The PictureView plugin interface header is (c) Pavel Skakov.
 
 Roman Kharitonov
+  https://github.com/refaim/deckodeck

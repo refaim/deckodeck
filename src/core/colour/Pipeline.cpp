@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "core/colour/Transfer.hpp"
@@ -100,6 +101,10 @@ namespace pvdkit::core::colour
         // Built once per module on first use; the language guarantees one thread-safe
         // initialisation ([stmt.dcl]). Immutable afterwards, trivially destructible, no host or
         // file dependency: docs/ARCHITECTURE.md §7 records why this is not injected.
+        // A destructor here would register an atexit entry in every plugin DLL's CRT for a
+        // function-local static that in fact never needs to run one; pin triviality so a future
+        // member (e.g. a std::vector) fails to compile instead of adding one silently.
+        static_assert(std::is_trivially_destructible_v<SrgbOutputTables>);
         static const SrgbOutputTables tables;
         return tables;
     }

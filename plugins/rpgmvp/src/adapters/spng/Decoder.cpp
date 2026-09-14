@@ -5,7 +5,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 #include <zlib.h>
 
@@ -145,16 +144,10 @@ namespace pvdkit::rpgmvp
             return meta;
         }
 
-        core::Result<std::vector<std::byte>> readIccProfile(spng_ctx &context)
+        core::Result<bool> hasIccProfile(spng_ctx &context)
         {
             spng_iccp profile{};
-            return detail::chunkPresent(spng_get_iccp(&context, &profile)).transform([&](const bool present) {
-                if (!present) {
-                    return std::vector<std::byte>{};
-                }
-                const auto bytes = std::as_bytes(std::span{profile.profile, profile.profile_len});
-                return std::vector<std::byte>{bytes.begin(), bytes.end()};
-            });
+            return detail::chunkPresent(spng_get_iccp(&context, &profile));
         }
 
     } // namespace
@@ -261,19 +254,14 @@ namespace pvdkit::rpgmvp
     }
 
     Decoder::Decoder(Key, const std::span<const std::byte> file, const core::ImageMeta meta,
-                     const core::DecoderOptions options, std::vector<std::byte> iccProfile) noexcept
-        : file_(file), meta_(meta), options_(options), iccProfile_(std::move(iccProfile))
+                     const core::DecoderOptions options) noexcept
+        : file_(file), meta_(meta), options_(options)
     {
     }
 
     const core::ImageMeta &Decoder::meta() const
     {
         return meta_;
-    }
-
-    std::span<const std::byte> Decoder::iccProfile() const
-    {
-        return iccProfile_;
     }
 
     core::Result<core::FrameTiming> Decoder::frameTiming(const std::uint32_t frame) const
@@ -343,11 +331,11 @@ namespace pvdkit::rpgmvp
                 std::uint8_t renderingIntent = 0;
                 const auto hasSrgb = detail::chunkPresent(spng_get_srgb(bundle->context.get(), &renderingIntent));
                 return detail::combineChunkPresence(hasTransparency, hasSrgb).and_then([&](const auto presence) {
-                    return readIccProfile(*bundle->context).transform([&](std::vector<std::byte> profile) {
+                    return hasIccProfile(*bundle->context).transform([&](const bool icc) {
                         core::ImageMeta meta = imageMeta(ihdr, presence.first, presence.second);
-                        meta.hasIcc = !profile.empty();
+                        meta.hasIcc = icc;
                         return std::unique_ptr<core::IDecoder>{
-                            std::make_unique<Decoder>(Decoder::Key{}, file, meta, options, std::move(profile))};
+                            std::make_unique<Decoder>(Decoder::Key{}, file, meta, options)};
                     });
                 });
             });

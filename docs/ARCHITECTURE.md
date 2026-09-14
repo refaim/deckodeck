@@ -1,11 +1,13 @@
-# pvdkit — architecture
+# deckodeck — architecture
 
 Status: v2 design, 2026-09-13 (v1 was the single-plugin AVIF.pvd design of 2026-09-09; Task 7
 turned it into this monorepo). Owner: orchestrator. Implementers: Codex/Claude agents. Reviewers:
 Opus agents. Rules that constrain this design live in `AGENTS.md`. Interface declarations below
 are canonical: implement them as written; if something is genuinely impossible, report instead
 of improvising. Plugin-specific design (what AVIF.pvd does with libavif, its fixtures, its
-limitations) lives next to the plugin: `plugins/avif/DESIGN.md`.
+limitations) lives next to the plugin: `plugins/avif/DESIGN.md`. "deckodeck" names the product and
+the repository (`https://github.com/refaim/deckodeck`); `pvdkit`, used throughout this document,
+names the shared PVD kit layer underneath both plugins (README.md explains the split).
 
 ## 0. Shape of the repository
 
@@ -17,7 +19,7 @@ pvdkit/
   src/core/           shared: Error, Narrow, PixelBuffer, Transform, IDecoder, IFileSource,
                       IImageDescriber, CodecPlugin, FileSession                → pvdkit_core
   src/adapters/win/   shared: FileMapping, FileSource, Utf8                    → pvdkit_win
-  plugins/<id>/       one directory per plugin (today: avif → AVIF.pvd)
+  plugins/<id>/       one directory per plugin (today: avif → AVIF.pvd, rpgmvp → RPGMVP.pvd)
     CMakeLists.txt    identity (name, version, priority), libraries, composition, packaging
     src/core/         plugin decisions without the codec library (e.g. the describer)  → <id>_core
     src/adapters/     the codec adapter(s)                                     → <id>_adapter
@@ -333,7 +335,6 @@ class IDecoder {
  public:
   virtual ~IDecoder() = default;
   [[nodiscard]] virtual const ImageMeta& meta() const = 0;
-  [[nodiscard]] virtual std::span<const std::byte> iccProfile() const = 0; // owned for decoder lifetime
   [[nodiscard]] virtual Result<FrameTiming> frameTiming(std::uint32_t frame) const = 0;
   // Decodes frame `frame` and converts it to `format` (Bgra64 uses 16-bit little-endian samples)
   // into `dst` with `pitchBytes` per row (rows top-down, coded size).
@@ -356,11 +357,11 @@ class IImageDescriber {
 };
 ```
 
-`ImageMeta::hasIcc` is exactly `!IDecoder::iccProfile().empty()`. The adapter owns the bytes for
-the decoder lifetime: libavif's image owns its `image.icc` allocation; RPGMVP copies the span
-returned by `spng_get_iccp` while the parse context is alive because libspng frees that allocation
-with the context. The accessor is retained for a future colour-management pipeline; ICC bytes are
-not part of the PVD boundary.
+`ImageMeta::hasIcc` records only whether the container carries an ICC profile: the adapter sets it
+from the codec library's own presence check (libavif's parsed `image.icc`; RPGMVP's
+`spng_get_iccp` result) without retaining the profile bytes. The host ignores ICC profiles (proven,
+[`docs/host/pictureview-abi.md`](host/pictureview-abi.md)), so there is no colour-management
+consumer to retain them for; ICC bytes are not part of the PVD boundary.
 
 Decisions (Task 7, open point 1):
 
@@ -824,9 +825,10 @@ Decisions (Task 7, open point 1):
 
 ## 8. Out of scope (document, do not implement)
 
-CICP-described colour is converted for display by `src/core/colour`. ICC profiles are retained by
-decoder adapters for a future CMS but are neither applied nor forwarded through PVD; the host facts
-behind that decision are in [`docs/host/pictureview-abi.md`](host/pictureview-abi.md). The PVD
+CICP-described colour is converted for display by `src/core/colour`. ICC profile presence is
+detected (`ImageMeta::hasIcc`, for the info line) but the bytes are neither retained, applied nor
+forwarded through PVD; the host facts behind that decision are in
+[`docs/host/pictureview-abi.md`](host/pictureview-abi.md). The PVD
 interface provides no user-adjustable exposure or tone controls, and gain maps are not supported.
 Also out of scope are
 per-plugin configuration files and a plugin that serves several formats from one DLL (one format

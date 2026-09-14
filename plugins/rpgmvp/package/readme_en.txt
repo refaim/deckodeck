@@ -27,3 +27,4 @@ licence); their licence texts are in LICENSES.txt. The PictureView plugin
 interface header is (c) Pavel Skakov.
 
 Roman Kharitonov
+  https://github.com/refaim/deckodeck

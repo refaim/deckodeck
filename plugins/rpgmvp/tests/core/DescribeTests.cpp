@@ -49,6 +49,18 @@ namespace pvdkit::rpgmvp
             CHECK(describe(meta) == "RPG Maker MV/MZ encrypted PNG, 16-bit RGBA, interlaced");
         }
 
+        TEST_CASE("describe reports an embedded ICC profile and omits it otherwise")
+        {
+            auto meta = baseMeta();
+            CHECK_FALSE(describe(meta).contains("ICC"));
+
+            meta.hasIcc = true;
+            CHECK(describe(meta).ends_with(", ICC"));
+
+            meta.interlaced = true;
+            CHECK(describe(meta).ends_with("interlaced, ICC"));
+        }
+
         TEST_CASE("Describer names the RPGMVP format and Deflate compression")
         {
             auto meta = baseMeta();

@@ -1,15 +1,26 @@
-# pvdkit
+# deckodeck
 
-Decoder plugins for PictureView 3 (the image viewer plugin for Far Manager 3 by Pavel Skakov),
-built for both the x64 and the x86 (32-bit) Far Manager: shared libraries that implement
-PictureView's PVD decoder interface v1 (`third_party/pvd/PictureViewPlugin.h`) once, plus one
-directory per plugin. Every plugin is a single statically linked `<NAME>.pvd` that imports
-`KERNEL32.dll` and nothing else, so it needs no runtime, no WIC codec and no GDI+.
+**deckodeck** (repository: <https://github.com/refaim/deckodeck>) is a pair of decoder plugins for
+PictureView 3, the image viewer plugin for Far Manager 3 by Pavel Skakov: `AVIF.pvd` and
+`RPGMVP.pvd`, built for both the x64 and the x86 (32-bit) Far Manager. Both implement
+PictureView's PVD decoder interface v1 (`third_party/pvd/PictureViewPlugin.h`) over shared
+libraries, and every plugin is a single statically linked `<NAME>.pvd` that imports `KERNEL32.dll`
+and nothing else, so it needs no runtime, no WIC codec and no GDI+. New releases are published as
+GitHub Releases on the repository above and announced in the PictureView forum thread; that is
+this project's release channel. The shared libraries underneath both plugins (`src/`, the
+`pvdkit_core`/`pvdkit_pvd`/`pvdkit_win` targets, the `pvdkit::` C++ namespace, the
+`PVDKIT_BUILD_SUFFIX` environment variable, `cmake/pvdkit-*.cmake`, and the coverage script's
+`pvdkit-<id>-*.profraw` profile filenames) keep their original name, **pvdkit**, throughout this
+repository and its documentation; "deckodeck" names the product and the repository, "pvdkit" names
+that shared PVD kit layer underneath it.
 
 Plugins:
 
 - `plugins/avif` — `AVIF.pvd`, AVIF decoder over libavif 1.4.2 + dav1d 1.5.3 + libyuv. See
   `plugins/avif/README.md` for what it supports and how to install it.
+- `plugins/rpgmvp` — `RPGMVP.pvd`, decoder for RPG Maker MV/MZ encrypted PNG images
+  (`.rpgmvp`/`.png_`) over libspng + zlib. See `plugins/rpgmvp/README.md` for what it supports and
+  how to install it.
 
 The repository's own code is licensed under the MIT License; see `LICENSE`.
 

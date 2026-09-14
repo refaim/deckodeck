@@ -1,4 +1,4 @@
-# pvdkit — rules for every agent working in this repository
+# deckodeck — rules for every agent working in this repository
 
 Read `docs/ARCHITECTURE.md` before touching anything. That file is the design; this file is the law.
 If the two disagree, stop and report the conflict instead of picking one. A plugin's own design
@@ -6,13 +6,17 @@ lives next to it (`plugins/<id>/DESIGN.md`).
 
 ## What we are building
 
-`pvdkit`: decoder plugins for PictureView 3 (image viewer plugin for Far Manager 3, by Pavel
-Skakov), as a monorepo of shared libraries plus one directory per plugin. Every plugin speaks the
+**deckodeck** (`https://github.com/refaim/deckodeck`): decoder plugins for PictureView 3 (image
+viewer plugin for Far Manager 3, by Pavel Skakov), as a monorepo of shared libraries plus one
+directory per plugin. The shared libraries keep their original name, `pvdkit` (README.md explains
+the split); this file and `docs/ARCHITECTURE.md` use `pvdkit` throughout for exactly that shared
+layer, never for the product. Every plugin speaks the
 PVD decoder interface v1 defined in `third_party/pvd/PictureViewPlugin.h` (UTF-8 copy of the
 SDK original; never edit it). The author's reference decoders (`third_party/pvd/examples/pvdBMP.cpp`,
 `pvdIJL.cpp`, `pvdDjVu.cpp`) and the PictureView distribution readme/help
 (`third_party/pvd/dist-docs/`) document how the host calls the exports and which priorities the
-built-in decoders use; read them before touching the pvd layer. Plugins today: `plugins/avif` → `AVIF.pvd` (libavif + dav1d + libyuv).
+built-in decoders use; read them before touching the pvd layer. Plugins today: `plugins/avif` →
+`AVIF.pvd` (libavif + dav1d + libyuv), `plugins/rpgmvp` → `RPGMVP.pvd` (libspng + zlib).
 
 Every plugin ships x64 and x86, links its codec libraries statically, and imports `KERNEL32.dll`
 only. No WIC, no GDI+, no system codecs.

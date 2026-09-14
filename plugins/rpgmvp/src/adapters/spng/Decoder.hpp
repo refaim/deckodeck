@@ -6,7 +6,6 @@
 #include <span>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include <spng.h>
 
@@ -78,11 +77,9 @@ namespace pvdkit::rpgmvp
             friend class DecoderFactory;
         };
 
-        Decoder(Key, std::span<const std::byte> file, core::ImageMeta meta, core::DecoderOptions options,
-                std::vector<std::byte> iccProfile) noexcept;
+        Decoder(Key, std::span<const std::byte> file, core::ImageMeta meta, core::DecoderOptions options) noexcept;
 
         [[nodiscard]] const core::ImageMeta &meta() const override;
-        [[nodiscard]] std::span<const std::byte> iccProfile() const override;
         [[nodiscard]] core::Result<core::FrameTiming> frameTiming(std::uint32_t frame) const override;
         [[nodiscard]] core::Result<void> decodeFrame(std::uint32_t frame, pvd::PixelFormat format,
                                                      std::span<std::byte> destination,
@@ -92,7 +89,6 @@ namespace pvdkit::rpgmvp
         std::span<const std::byte> file_;
         core::ImageMeta meta_;
         core::DecoderOptions options_;
-        std::vector<std::byte> iccProfile_;
     };
 
     class DecoderFactory final : public core::IDecoderFactory

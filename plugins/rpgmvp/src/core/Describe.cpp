@@ -24,6 +24,9 @@ namespace pvdkit::rpgmvp
         if (meta.interlaced) {
             result += ", interlaced";
         }
+        if (meta.hasIcc) {
+            result += ", ICC";
+        }
         return result;
     }
 

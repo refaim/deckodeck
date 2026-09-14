@@ -73,7 +73,6 @@ namespace pvdkit::avif
         Decoder &operator=(Decoder &&) = delete;
 
         [[nodiscard]] const core::ImageMeta &meta() const override;
-        [[nodiscard]] std::span<const std::byte> iccProfile() const override;
         [[nodiscard]] core::Result<core::FrameTiming> frameTiming(std::uint32_t frame) const override;
         [[nodiscard]] core::Result<void> decodeFrame(std::uint32_t frame, pvd::PixelFormat format,
                                                      std::span<std::byte> dst, std::uint32_t pitchBytes) override;

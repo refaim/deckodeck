@@ -99,11 +99,6 @@ namespace pvdkit::core::test
             return meta_;
         }
 
-        [[nodiscard]] std::span<const std::byte> iccProfile() const override
-        {
-            return {};
-        }
-
         [[nodiscard]] Result<FrameTiming> frameTiming(const std::uint32_t frame) const override
         {
             auto &state = state_.get();

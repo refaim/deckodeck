@@ -41,8 +41,8 @@ Deep output is enabled by default: sources deeper than 8 bits are preserved as B
 ## Exclusions
 
 Audio encryption variants, key recovery, PNG encoding, APNG animation pages, PNG `gAMA`/`cHRM`
-application and ICC profile application are out of scope. `IDecoder::iccProfile()` retains the
-parsed bytes for a future CMS, but ICC data is not forwarded through the PVD ABI. RPGMVP/PNG has no
+application and ICC profile application are out of scope. ICC profile presence is detected
+(`ImageMeta::hasIcc`) but the bytes are not retained or forwarded through the PVD ABI. RPGMVP/PNG has no
 EXIF-orientation path. Unknown ancillary chunks remain libspng's responsibility; corrupt critical
 data is rejected as an expected parse/decode failure.
 

@@ -153,6 +153,11 @@ namespace pvdkit::core::colour
             // Every one of the 1,065,353,217 floats from 0.0F to 1.0F inclusive (their bit patterns
             // ascend with their values) against the exact OETF-plus-lround path, on four threads.
             // Not a gate because it runs for seconds; run it after any change to the quantizer.
+            // The exact path itself is machine-dependent (the UCRT dispatches `pow` per CPU, e.g.
+            // FMA3 on x64), so a different machine may derive thresholds that differ by a ULP from
+            // this one's; monotonicity of the exact path is the property that keeps the two equal
+            // regardless, which is why `totalDecreases` is counted here and asserted below, not
+            // just `totalMismatches`.
             constexpr std::uint32_t kLastBits = std::bit_cast<std::uint32_t>(1.0F);
             constexpr unsigned kThreads = 4;
             constexpr std::uint32_t kChunk = (kLastBits + 1) / kThreads;
@@ -186,6 +191,11 @@ namespace pvdkit::core::colour
 
         TEST_CASE("the sRGB output tables are one shared object across Presentations and threads")
         {
+            // Not a race test: a function-local static initialises at most once per process
+            // ([stmt.dcl]), so a concurrent *first* initialisation can never be observed
+            // in-process. What this pins is sharing after the main thread has already
+            // initialised the static: every Presentation and every worker thread below borrows
+            // the identical instance.
             const auto &shared = srgbOutputTables();
             CHECK(&srgbOutputTables() == &shared);
 
