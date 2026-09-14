@@ -3,8 +3,13 @@
 # clang-tidy, llvm-cov, llvm-profdata, llvm-readobj) in the same order as cmake/find-llvm.cmake:
 # an explicit directory, then $env:PVDKIT_LLVM_DIR (the CI build, lint and coverage jobs set it),
 # then the VS 2022 layouts this project is known to build with - the reference machine's Build
-# Tools first, so nothing changes there - then clang-cl on PATH. An explicit directory or an
-# environment variable that names a directory without clang-cl.exe is an error, never a fallback.
+# Tools first, so nothing changes there - then the LLVM of any Visual Studio major and edition
+# under either Program Files root (`Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin`, the first
+# in path order; the same glob .github/actions/toolchain uses, which is how the VS 2026 runner
+# image is found), then clang-cl on PATH. The Program Files roots come from the ProgramFiles and
+# ProgramFiles(x86) environment variables, so a probe can point them at a fake tree. An explicit
+# directory or an environment variable that names a directory without clang-cl.exe is an error,
+# never a fallback.
 function Get-LlvmDir {
   [CmdletBinding()]
   [OutputType([string])]
@@ -39,9 +44,18 @@ function Get-LlvmDir {
       return [IO.Path]::GetFullPath($candidate)
     }
   }
+  $anyVisualStudio = @(
+    @($programFiles, $programFiles86) |
+      Where-Object { $_ } |
+      ForEach-Object { Get-ChildItem -Path (Join-Path $_ "Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin\clang-cl.exe") -ErrorAction SilentlyContinue } |
+      Sort-Object -Property FullName
+  )
+  if ($anyVisualStudio.Count -gt 0) {
+    return $anyVisualStudio[0].DirectoryName
+  }
   $onPath = Get-Command "clang-cl.exe" -ErrorAction SilentlyContinue
   if ($onPath) {
     return Split-Path -Parent $onPath.Source
   }
-  throw "clang-cl.exe was not found: set PVDKIT_LLVM_DIR to the LLVM bin directory of a VS 2022 installation (VC\Tools\Llvm\x64\bin) or put clang-cl on PATH"
+  throw "clang-cl.exe was not found: set PVDKIT_LLVM_DIR to the LLVM bin directory of a Visual Studio installation (VC\Tools\Llvm\x64\bin) or put clang-cl on PATH"
 }

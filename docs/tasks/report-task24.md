@@ -58,8 +58,8 @@ scenarios that cycle it about 650 times pay it (details under "Behaviour and cos
 - `src/core/CodecPlugin.hpp:17-20, :24-27, :41` and `src/core/CodecPlugin.cpp:12-16, :51-52` - the
   plugin takes the tables after the describer, holds the reference and hands it to every
   `FileSession` it opens.
-- `plugins/avif/src/DefaultPlugin.cpp:10, :45-47, :52, :70-73` and
-  `plugins/rpgmvp/src/DefaultPlugin.cpp:9, :43, :61-64` - the composition root owns
+- `plugins/avif/src/DefaultPlugin.cpp:16, :45-47, :52, :70-73` and
+  `plugins/rpgmvp/src/DefaultPlugin.cpp:15, :43, :61-64` - the composition root owns
   `core::colour::SrgbOutputTables outputTables_` declared before `plugin_`, so it is constructed
   first and destroyed last (ARCHITECTURE section 2: injected by reference, outlives its users by
   construction). The object lives inside the `DefaultPlugin` that `std::make_unique` allocates, so
@@ -135,7 +135,7 @@ import on any toolset. ARCHITECTURE section 7 and AGENTS.md rule 13 now name it 
 Tests (`tests/guard/GuardTests.cpp`):
 
 - `:678-704` - the existing three-polarity loop ("every unconditional rule has positive and negative
-  scanner samples") gained 26 samples: each token is flagged as code, and not flagged inside a
+  scanner samples") gained 23 samples: each token is flagged as code, and not flagged inside a
   `//` comment or a string literal, plus `void f() { static const Tables tables; }`.
 - `:1024-1106` "the synchronisation family behind the Windows 8 synch API set is caught in every
   spelling" - 36 flagged spellings (each checked under `src/core`, a plugin adapter and
@@ -143,7 +143,7 @@ Tests (`tests/guard/GuardTests.cpp`):
   plain atomics `fetch_add`/`load`, `waiting`, `awaitable.await()`, `notify_owner()`,
   `host.notify_one_page()`, `latch_count`, `latches`, `barrier_free()`, `semaphore_like()`,
   `my_stop_token()`, `call_once_more()`, `jthreads_started`, a comment, a literal).
-- `:1108-1194` "a function-local static is forbidden unless it is constexpr" - 27 flagged shapes
+- `:1108-1194` "a function-local static is forbidden unless it is constexpr" - 28 flagged shapes
   (plain, `const`, `auto`, `= 0`, `{}`, direct-init `(1, 2)`, `thread_local`, split over lines,
   inside `if`/`for`/`do`/`switch` blocks, inside a lambda, after a brace initialiser, in a
   `template <class F>` function, in a `template <typename T, typename U = Pair<T, T>>` function, in
@@ -417,3 +417,205 @@ llvm-nm --undefined-only build\release{,-x86}-t24\src\core\CMakeFiles\pvdkit_cor
 llvm-readobj --coff-imports build\release{,-x86}-t24\plugins\{avif\AVIF,rpgmvp\RPGMVP}.pvd
 core_tests.exe --test-case="diagnostic: exhaustive*,Presentation release timing: *" --no-skip=true   (release-t24)
 ```
+
+## Fix round 1 (review-task24.md, REJECT; plus the CI lint findings on clang-tidy 22)
+
+Branch `task24-kernel32`, on top of commit `1a1fd55`; build suffix `-t24` (the round-1 build
+directories, reconfigured). No commit, staging, checkout, reset, push or worktree; nothing
+installed (actionlint ran through `go run ...@v1.7.12` from the module cache the review left).
+
+Meanwhile the PR's CI run 34901531321 on the VS 2026 / MSVC 14.51 image passed `build-x64`,
+`build-x86` - both `_check_imports` and `_check_exports` green, i.e. KERNEL32-only on the new
+toolset, which is what only CI could prove - and `coverage`; only `lint` failed, on checks that
+the runner's clang-tidy 22 has and the reference machine's 19 does not (45 findings, all handled
+below).
+
+### Substantive 1 - `atomic_flag_*` free functions
+
+- TDD: the four spellings (`std::atomic_flag_wait(&flag, false)`, `..._wait_explicit(...)`,
+  `..._notify_one(&flag)`, `..._notify_all(&flag)`) were added to the "caught in every spelling"
+  case and `std::atomic_flag_notify_all(&flag)` to the polarity loop first; run before the rule
+  change, all were `flagged=false`:
+
+  ```
+  [doctest] test cases:  21 |  19 passed |  2 failed | 0 skipped
+  [doctest] assertions: 659 | 590 passed | 69 failed |      (with the nit-2 samples below)
+  logged: sample := std::atomic_flag_wait(&flag, false)   ... _wait_explicit / _notify_one / _notify_all
+  ```
+
+- `tests/guard/GuardTests.cpp:300-303` - the rule is now
+  `\batomic_(?:flag_)?(?:wait|wait_explicit|notify_one|notify_all)\b`, label
+  `atomic_wait/atomic_flag_wait/atomic_notify_*`; after the change `test cases: 21 | 21 passed`,
+  `assertions: 659 | 659 passed`. The tree walk stays clean (nothing in `src/**` or
+  `plugins/*/src/**` uses any of the new tokens). `docs/ARCHITECTURE.md` §5 lists the
+  `atomic_flag_wait*`/`atomic_flag_notify_*` twins; AGENTS.md rule 13 says "member or free
+  function, `atomic_flag_*` included".
+
+### Nit 2 - the rest of the family: timed mutexes, `<future>`, `<syncstream>`
+
+Added rather than left to review, `tests/guard/GuardTests.cpp:304-316`, with the same
+test-first evidence (the `flagged=false` lines above cover them):
+
+| label | regex |
+|---|---|
+| `timed_mutex` | `\b(?:recursive_\|shared_)?timed_mutex\b` |
+| `future/promise/async/packaged_task` | `#include <future>` or `::(future\|shared_future\|promise\|async\|packaged_task)\b` |
+| `osyncstream/syncbuf` | `#include <syncstream>` or `::(basic_)?(osyncstream\|syncbuf)\b` |
+
+17 flagged spellings (`std::timed_mutex`, `recursive_timed_mutex`, `shared_timed_mutex`, bare
+`timed_mutex`, `#include <future>` with and without spaces, `std::future<int>`,
+`std::shared_future<int>`, `std::promise<int>`, `std::packaged_task<int()>`, `std::async(...)`,
+`std :: future<int>`, `#include <syncstream>`, `std::osyncstream`, `std::syncbuf`,
+`std::basic_osyncstream<char>`, `std::basic_syncbuf<char>`) and 13 allowed ones
+(`std::atomic_flag ready`, `test_and_set()`, `clear()`, `std::shared_mutex`,
+`std::recursive_mutex`, `std::unique_lock`, `timed_mutexes = 0`, `int future = 0`, `promise_kept`,
+`asyncCount`, `std::vector<int> futures`, `syncbuffer.flush()`, `std::ostream &out`). The type
+spellings are matched after `::`, so an identifier merely named `future` or `promise` is not the
+token (a `using namespace std;` would defeat that; none exists - said in §5). Totals now: the
+polarity loop 41 samples (12 original + 23 from round 1 + 6 here), "every spelling" 57 flagged /
+37 allowed, the function-local-static case 28 flagged / 22 allowed.
+
+### Nit 1 - what was observed versus what is forbidden by extension
+
+`AGENTS.md:71-88` (rule 13) and `docs/ARCHITECTURE.md` §7 now say: observed on the first CI run
+were exactly two users of `WaitOnAddress`/`WakeByAddressAll` - thread-safe statics
+(`_Init_thread_*`) and atomic wait/notify (`__std_atomic_wait_direct`, which `jthread`'s
+`stop_token` uses); the rest of the family is forbidden by extension - `<latch>`/`<barrier>`/
+`<semaphore>`/`<syncstream>` are built on atomic wait/notify in the STL headers, the timed mutexes
+and `<future>` on `condition_variable`/`_Cnd_t`, `condition_variable` and `call_once` are
+`SleepConditionVariableSRW`- and `InitOnceExecuteOnce`-backed in every STL known here but a newer
+toolset's imports cannot be proven on this machine, and nothing in the tree needs any of them.
+Nothing is stated as measured that was not.
+
+### Nit 3 - LLVM discovery and the README contradiction
+
+- `scripts/llvm-dir.ps1:1-13, :47-56` and `cmake/find-llvm.cmake:1-19, :33-75` - after the five
+  VS 2022 layouts (the reference machine's Build Tools still first) both now glob
+  `Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin\clang-cl.exe` under both Program Files roots
+  and take the first match in path order (the same glob `.github/actions/toolchain` uses, which
+  is how the VS 2026 image is found), then PATH. The roots are read from the `ProgramFiles` and
+  `ProgramFiles(x86)` environment variables (vcpkg passes both through to its port builds; the
+  CMake spelling is `$ENV{ProgramFiles\(x86\)}`). Error messages say "a Visual Studio
+  installation" instead of "a VS 2022 installation".
+- Probes, `scripts/llvm-dir.ps1` (dot-sourced in a PowerShell process, so both roots can be
+  redirected):
+
+  ```
+  probe 1: nothing set                    -> C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin
+  probe 2: PVDKIT_LLVM_DIR set but wrong  -> throw: PVDKIT_LLVM_DIR=C:\definitely\not\here does not contain clang-cl.exe
+  probe 3: fake Program Files tree with VS 18\Community and 18\Enterprise, no VS 2022
+                                          -> <scratchpad>\fake-pf\Microsoft Visual Studio\18\Community\VC\Tools\Llvm\x64\bin
+  probe 4: fake roots with no Visual Studio at all (clang-cl not on PATH here)
+                                          -> throw: clang-cl.exe was not found: set PVDKIT_LLVM_DIR to the LLVM bin directory of a Visual Studio installation (VC\Tools\Llvm\x64\bin) or put clang-cl on PATH
+  ```
+
+  `cmake/find-llvm.cmake` (`cmake -P` on a two-line script that includes it and prints
+  `PVDKIT_LLVM_DIR`): the same four cases with the same four answers (`exit=0` and the Build
+  Tools path; `exit=1` "does not contain clang-cl.exe"; `exit=0` and the fake
+  `18\Community\...\bin`; `exit=1` "was not found"). One Windows fact surfaced by the probe and
+  recorded in the file's comment: a child process always gets `ProgramFiles` re-derived by the
+  system, so only `ProgramFiles(x86)` can be pointed at the fake tree for the CMake probe (the
+  real `C:\Program Files` holds no Visual Studio on this machine, so the glob's only matches were
+  the fake ones) - the dot-sourced PowerShell function sees both overrides in-process.
+- `README.md:45-53` names the new fallback; `README.md:183-199` no longer says the release job
+  uses "the VS 2022 layout fallback" but the fallback order of `llvm-dir.ps1` (VS 2022 layouts,
+  the any-Visual-Studio glob the action uses - what the VS 2026 image resolves to - then PATH);
+  `docs/ARCHITECTURE.md` §4 and `AGENTS.md:95-100` say the same; the stale "same LLVM 19"
+  comment in `.github/actions/toolchain/action.yml:42-46` now describes both branches of its
+  own lookup.
+
+### Nit 4 - `AGENTS.md:136`: `tests/guard/ ... enforcing rules 2-4 and 13`.
+
+### Nit 5 - report corrections
+
+The round-1 text above now reads `DefaultPlugin.cpp:16` (avif) / `:15` (rpgmvp) for the
+`core/colour/Pipeline.hpp` include, "gained 23 samples" and "28 flagged shapes". The
+`tests/guard/GuardTests.cpp` line references in the round-1 section describe commit `1a1fd55`;
+after this round the rules are at `:270-316`, the scope classifier at `:358-449`, the call at
+`:607`, the polarity loop at `:678-711`, "every spelling" at `:1045-1163`, the function-local
+static case at `:1165-1240`.
+
+### Nit 6 - `docs/ARCHITECTURE.md` §5 leak-test cost
+
+The sentence now says which figures are unloaded (the historical ~15 s Release / ~24-27 s Debug;
+the review's unloaded Debug x64 ≈ 50 s, Release x64 ≈ 23 s, Release x86 ≈ 33 s after Task 24)
+and which are the loaded back-to-back delta (46 s → 64 s Debug x86, 1 ms → 2.5 s init/exit
+cycle), states plainly that the Debug budget is no longer met on either architecture and that
+Release is close to it, and names the lazy build behind a `std::mutex` as the way to remove it.
+
+### CI lint on clang-tidy 22 (45 findings)
+
+- 39 × `portability-avoid-pragma-once`: `.clang-tidy:23` disables it; the reason sits in the
+  file's header comment (`#pragma once` is deliberate in every header, every compiler this
+  project targets honours it, and the check exists for filesystems on which a file has no unique
+  identity, which no build of ours uses).
+- `src/core/colour/Pipeline.cpp:91-97` `bugprone-float-loop-counter`: the descent loop is now a
+  `while` with no loop counter at all - `previous = nextafter(threshold, 0)`, then `while
+  (exactQuantize(previous) >= code) { threshold = previous; previous = nextafter(previous, 0); }`
+  - the identical sequence of `nextafter`/`exactQuantize` calls as the former `for`, so the
+  thresholds cannot differ (an integer counter would have had to be derived from the float's bit
+  pattern, a larger change for the same sequence). Exactness re-proven on the Release build:
+  the 65,536-point grid ("linear input quantization matches the exact sRGB OETF over all 16-bit
+  samples", 262,144 assertions) and the NaN/saturation case pass, the exhaustive diagnostic
+  reports `exhaustive [0, 1]: 1065353217 floats, 0 mismatches, 0 exact-path monotonicity
+  violations`, and "HDR AVIF is presented as 64-bit sRGB through the DLL" logs
+  `actualHash := 14703790622216699421` and `actualHash := 5389512495027945087`, the two pinned
+  FNV hashes (x64), `58 | 58 passed`. Coverage: `Pipeline.cpp 107 0 100.00% ... 177 0 100.00%
+  66 0 100.00%`.
+- `tests/adapters/WinAdapterTests.cpp:42-104` `~TempTree` and `tests/support/HostileCorpus.cpp:238-247`
+  `~HostileCorpus` `bugprone-exception-escape`: both already used the `error_code` overload of
+  `remove_all`, but `remove_all(const path&, error_code&)` is not `noexcept` - not in the
+  standard and not in the MSVC STL, whose header body enumerates with a `directory_iterator`
+  (allocating) - while `remove(const path&, error_code&)` is `noexcept` by the standard
+  ([fs.op.remove]). The destructors therefore call only `remove(path, ec)` on paths recorded
+  when the objects created them: `TempTree::file(relative)` returns `<root>/<relative>` and
+  records its extended-length form, `createLongDirectory()` records its five levels, the
+  destructor removes them in reverse order and then the root (`:61-68`); every creation site in
+  the tests goes through `file()` (`:230, :243, :266, :271, :294, :316, :336`; `remove_all` remains
+  only in the constructor, which may throw). `HostileCorpus` records each written path in
+  `written_` (`HostileCorpus.hpp:80-83`, `HostileCorpus.cpp:231`) and removes them one by one,
+  then the directory. No `catch`. Verified: after `adapter_tests` (13/13, 2387 assertions) and
+  the leak tests, no `pvdkit-adapter-*` / `pvdkit-hostile-*` / current-pid `pvdkit-huge-*`
+  directory is left under `%TEMP%` (one `pvdkit-huge-104364` from 2026-09-12 predates this work).
+- `tests/e2e/PluginHost.cpp:21-34` `bugprone-bitwise-pointer-cast`: every alternative to
+  `std::bit_cast` is refused by something - a direct `reinterpret_cast` by clang's
+  `-Wcast-function-type-mismatch` under `/WX`, a `void *` intermediate by clang-tidy 19's
+  `bugprone-casting-through-void` (tried: lint x64 reported exactly that one finding), an
+  integer intermediate by `performance-no-int-to-ptr`, `memcpy` by the same clang-tidy 22 check
+  - so, as instructed for that case, `tests/.clang-tidy:25` (and the two identical plugin copies)
+  disables `bugprone-bitwise-pointer-cast` for test code with that reason, and the code keeps
+  `std::bit_cast` with an updated comment.
+- `tests/support/HostileCorpusTests.cpp:62, :97` `bugprone-random-generator-seed`:
+  `tests/.clang-tidy:24` (and the plugin copies) disables it for test code - a constant seed is
+  the point of a reproducible corpus (seeds 42 and 7 in the self-tests, 20260912 for the corpus).
+- Documented: `.clang-tidy:9-14` and `docs/ARCHITECTURE.md` §4 (lint) and `AGENTS.md:147-155`
+  say that the CI `lint` job runs the runner's clang-tidy (22 on the Windows Server 2025 image),
+  newer than the reference machine's 19, so a check only the newer one knows is either satisfied
+  by the code or disabled with its reason in the `.clang-tidy` files, both runs must be clean,
+  and the local run alone cannot prove the CI one.
+
+### Gates re-run (all on the final sources of this round)
+
+```
+guard_tests.exe (debug-t24)                    test cases: 21 | 21 passed; assertions: 659 | 659 passed
+cmake --preset debug && cmake --build --preset debug --parallel 6 && ctest --preset debug
+  0 warnings; 100% tests passed out of 17 (avif_leak_tests 43.6 s, rpgmvp_leak_tests 24.6 s)
+cmake --preset release && cmake --build --preset release --parallel 6 && ctest --preset release
+  0 warnings; 100% tests passed out of 21 (avif_check_imports, avif_check_exports, rpgmvp_check_imports, rpgmvp_check_exports passed)
+powershell ... scripts\coverage.ps1 -Preset coverage    (CMAKE_BUILD_PARALLEL_LEVEL=6)
+  100% tests passed out of 17
+  src\core\colour\Pipeline.cpp   107 0 100.00%  20 0 100.00%  177 0 100.00%  66 0 100.00%
+  TOTAL                         1092 0 100.00% 261 0 100.00% 2148 0 100.00% 696 0 100.00%
+  Coverage gate passed: lines 100%, branches 100%.
+powershell ... scripts\lint.ps1 -Jobs 6                  (after the bit_cast decision; the void* attempt before it: clang-tidy 1 finding, bugprone-casting-through-void)
+  clang-format 0, clang-tidy 0 (308.9 s), cppcheck 0, PSScriptAnalyzer 0 (scripts/llvm-dir.ps1 included), BinSkim 0 -> lint: clean
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/build.yml ci.yml release.yml   exit 0, no findings
+llvm-dir.ps1 / find-llvm.cmake probes                    as quoted under nit 3
+```
+
+`git diff --check` clean; the edited Markdown files are valid UTF-8. Not re-run this round (the
+coordinator's list): `debug-x86`, `release-x86`, `asan`, `coverage-x86`, lint x86 - the changed
+code has no architecture- or sanitizer-specific path (a `while` loop, two test destructors, one
+test cast restored, guard regexes, scripts and configuration). What only CI can prove now: that
+clang-tidy 22 is clean with these five checks handled (the local 19 cannot run them), on top of
+the import table already proven green by run 34901531321.

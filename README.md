@@ -48,11 +48,13 @@ automatically), vcpkg in manifest mode. The LLVM directory is resolved by `cmake
 (for CMake and every vcpkg port) and `scripts/llvm-dir.ps1` (for the scripts) in the same order:
 `PVDKIT_LLVM_DIR` (environment, or `-DPVDKIT_LLVM_DIR` for CMake), then the VS 2022 layouts
 (`Program Files (x86)\...\BuildTools`, `Program Files\...\{Enterprise,Professional,Community}`,
-`VC\Tools\Llvm\x64\bin` in each), then `clang-cl` on PATH; vcpkg is `VCPKG_ROOT` or the reference
-machine's install. `triplets/x64-windows-static-clang.cmake` and
-`triplets/x86-windows-static-clang.cmake` build every dependency with the same toolchain and the
-static CRT; `ports/` holds overlay ports (today `libavif`, patched for clang-cl's static-library
-merge). Each plugin's libraries are a vcpkg manifest feature named after the plugin (`vcpkg.json`).
+`VC\Tools\Llvm\x64\bin` in each), then the LLVM of any Visual Studio major and edition under
+either Program Files root (`Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin`, the first in path
+order), then `clang-cl` on PATH; vcpkg is `VCPKG_ROOT` or the reference machine's install.
+`triplets/x64-windows-static-clang.cmake` and `triplets/x86-windows-static-clang.cmake` build
+every dependency with the same toolchain and the static CRT; `ports/` holds overlay ports (today
+`libavif`, patched for clang-cl's static-library merge). Each plugin's libraries are a vcpkg
+manifest feature named after the plugin (`vcpkg.json`).
 
 ```powershell
 cmake --preset release
@@ -191,9 +193,11 @@ restores vcpkg's binary cache from `actions/cache` (keyed by the hash of `vcpkg.
 `PVDKIT_LLVM_DIR` to the runner's Visual Studio LLVM (the VS 2022 layout first, any VS major as
 the fallback) so the CMake toolchains and the scripts use one and the same clang-cl. The release
 workflow's `verify` and `release` jobs build nothing and skip the action; the table gates
-`pack.ps1` runs there find the runner's LLVM through the VS 2022 layout fallback of
-`scripts/llvm-dir.ps1`. Every workflow declares `permissions: contents: read`; only the
-`release` job holds `contents: write` (for `gh release create` and the README push).
+`pack.ps1` runs there find the runner's LLVM through the fallback order of `scripts/llvm-dir.ps1`
+(the VS 2022 layouts, then the same any-Visual-Studio glob the action uses - which is what the
+VS 2026 image resolves to - then PATH; `cmake/find-llvm.cmake` has the same order). Every
+workflow declares `permissions: contents: read`; only the `release` job holds `contents: write`
+(for `gh release create` and the README push).
 
 - `.github/workflows/ci.yml` runs on every push to `master` and every pull request:
   `build-x64` and `build-x86` (`.github/workflows/build.yml`, reusable: configure the `release` /
