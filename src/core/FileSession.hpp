@@ -14,6 +14,11 @@
 namespace pvdkit::core
 {
 
+    namespace colour
+    {
+        class Presentation;
+    }
+
     class FileSession final : public pvd::IFileSession
     {
       public:
@@ -37,6 +42,7 @@ namespace pvdkit::core
         pvd::ImageInfo imageInfo_;
         std::vector<std::unique_ptr<PixelBuffer>> outstanding_;
         DecoderOptions options_;
+        std::unique_ptr<colour::Presentation> presentation_;
     };
 
 } // namespace pvdkit::core

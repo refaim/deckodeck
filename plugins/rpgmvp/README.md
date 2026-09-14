@@ -21,7 +21,5 @@ for fixture provenance and verified expectations.
 
 ## Changes
 
-- 1.1.0 — sources deeper than 8 bits are delivered to the host as 16-bit BGRA (`nBPP` 64) instead
-  of being reduced to 8 bits.
-- 1.0.1 — the alpha channel is now flagged to the host; in 1.0.0 transparent images were displayed opaque.
+- 1.1.0 — transparency is now displayed and 16-bit PNGs are delivered to PictureView as 16-bit instead of being reduced to 8-bit.
 - 1.0.0 — initial release.

@@ -41,6 +41,10 @@ namespace pvdkit::core
         : fileData_(std::move(fileData)), decoder_(std::move(decoder)), imageInfo_(std::move(imageInfo)),
           options_(options)
     {
+        const auto &meta = decoder_->meta();
+        if (colour::Presentation::needed(meta.cicp)) {
+            presentation_ = std::make_unique<colour::Presentation>(meta.cicp, meta.masteringPeakNits);
+        }
     }
 
     FileSession::~FileSession() = default;
@@ -83,7 +87,7 @@ namespace pvdkit::core
             return std::unexpected(aborted());
         }
 
-        const bool presentationNeeded = colour::Presentation::needed(meta.cicp);
+        const bool presentationNeeded = presentation_ != nullptr;
         const auto format = presentationNeeded || (options_.deepOutput && meta.depth > 8)
                                 ? pvd::PixelFormat::Bgra64
                                 : (meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24);
@@ -100,12 +104,7 @@ namespace pvdkit::core
             return std::unexpected(decoded.error());
         }
         if (presentationNeeded) {
-            const colour::Presentation presentation{meta.cicp, meta.masteringPeakNits};
-            const auto bytesPerRow = static_cast<std::size_t>(buffer.pitchBytes());
-            auto bytes = buffer.bytes();
-            for (std::uint32_t row = 0; row < buffer.height(); ++row) {
-                presentation.apply(bytes.subspan(static_cast<std::size_t>(row) * bytesPerRow, bytesPerRow));
-            }
+            presentation_->applyImage(buffer.bytes(), buffer.pitchBytes(), buffer.height(), options_.maxThreads);
         }
         if (!progress.report(1, 3)) {
             return std::unexpected(aborted());

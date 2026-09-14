@@ -304,6 +304,30 @@ namespace pvdkit::core
             CHECK(session.freePage(decoded->pixels));
         }
 
+        TEST_CASE("large display conversion is identical with one two or capped decoder thread counts")
+        {
+            constexpr std::uint32_t kWidth = 512;
+            constexpr std::uint32_t kHeight = 513;
+            auto imageMeta = test::meta(kWidth, kHeight, false, 10);
+            imageMeta.cicp = Cicp{12, 16, 12, true};
+            imageMeta.masteringPeakNits = 1'000.0F;
+
+            const auto decodeWithThreads = [&](const unsigned maxThreads) {
+                DecoderState state;
+                auto options = test::options(static_cast<std::uint64_t>(kWidth) * kHeight);
+                options.maxThreads = maxThreads;
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options);
+                const auto decoded = session.decodePage(0, pvd::Progress{});
+                REQUIRE(decoded.has_value());
+                return std::vector<std::byte>{decoded->pixels.begin(), decoded->pixels.end()};
+            };
+
+            const auto serial = decodeWithThreads(1);
+            CHECK(decodeWithThreads(0) == serial);
+            CHECK(decodeWithThreads(2) == serial);
+            CHECK(decodeWithThreads(8) == serial);
+        }
+
         TEST_CASE("decodePage passes through every scripted decoder error")
         {
             constexpr std::array errors{

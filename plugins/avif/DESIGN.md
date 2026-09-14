@@ -11,6 +11,8 @@ the v1 exclusions. Namespace: `pvdkit::avif`. Include root: `plugins/avif/src`.
 `avif::DecoderFactory`, `avif::Describer` and `core::CodecPlugin`, and forwards `IPlugin`.
 Options: `maxThreads = max(1, hardware_concurrency())`, `strict = false`,
 `maxPixels = 16384 × 16384`, `maxDimension = 32768`.
+The shared presentation pass reuses that thread budget but caps itself at four disjoint row bands;
+images smaller than 256 Ki pixels remain single-threaded.
 `deepOutput = true`: sources deeper than 8 bits are delivered as BGRA64 by default. An 8-bit source
 also uses BGRA64 when HDR or wide-gamut signalling requires shared colour presentation; identity
 8-bit SDR remains BGR24 when opaque or BGRA32 with alpha.

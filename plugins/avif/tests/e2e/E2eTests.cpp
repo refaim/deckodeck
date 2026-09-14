@@ -66,6 +66,18 @@ namespace pvdkit::e2e
             return samples;
         }
 
+        std::uint64_t imageHash(const std::span<const std::byte> pixels) noexcept
+        {
+            constexpr std::uint64_t kOffsetBasis = 14'695'981'039'346'656'037ULL;
+            constexpr std::uint64_t kPrime = 1'099'511'628'211ULL;
+            auto hash = kOffsetBasis;
+            for (const auto value : pixels) {
+                hash ^= std::to_integer<std::uint8_t>(value);
+                hash *= kPrime;
+            }
+            return hash;
+        }
+
         constexpr std::uint32_t outputBitsPerPixel(const avif::tests::FixtureExpectation &fixture)
         {
             const auto shallowBits = fixture.alpha ? 32U : 24U;
@@ -175,7 +187,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.2.0");
+        CHECK(text(info.pVersion) == "1.1.0");
         const auto comments = text(info.pComments);
         CAPTURE(comments);
         CHECK(comments.find("libavif") != std::string::npos);
@@ -397,12 +409,16 @@ namespace pvdkit::e2e
 
         const auto checkFixture = [&](const std::string_view name, const std::string_view note,
                                       const std::array<std::pair<std::uint32_t, std::uint32_t>, 3> &positions,
-                                      const std::array<std::array<std::uint16_t, 4>, 3> &expected) {
+                                      const std::array<std::array<std::uint16_t, 4>, 3> &expected,
+                                      const std::uint64_t expectedHash) {
             const auto file = readFixture(name);
             auto opened = openAndDecodeAll(exports, file, OpenMode::Disk);
             CHECK(text(opened.image.info.pComments).find(note) != std::string::npos);
             const auto &page = opened.pages.at(0);
             CHECK(page.decode.nBPP == 64);
+            const auto actualHash = imageHash(page.pixels());
+            CAPTURE(actualHash);
+            CHECK(actualHash == expectedHash);
             for (std::size_t index = 0; index < positions.size(); ++index) {
                 const auto [x, y] = positions[index];
                 CAPTURE(name);
@@ -420,11 +436,16 @@ namespace pvdkit::e2e
 
         checkFixture("colors_hdr_rec2020.avif", "→ sRGB (BT.2390 tone map from PQ 470 nit)",
                      {{{0, 0}, {100, 100}, {199, 199}}},
-                     {{{0, 1'014, 65'535, 65'535}, {7'854, 53'351, 63'663, 65'535}, {65'535, 65'535, 65'535, 65'535}}});
-        checkFixture(
-            "cosmos1650_yuv444_10bpc_p3pq.avif", "→ sRGB (BT.2390 tone map from PQ 1000 nit)",
-            {{{0, 0}, {512, 214}, {1023, 427}}},
-            {{{48'085, 35'561, 25'307, 65'535}, {2'682, 20'499, 42'409, 65'535}, {0, 50'080, 49'456, 65'535}}});
+                     {{{0, 1'014, 65'535, 65'535}, {7'854, 53'351, 63'663, 65'535}, {65'535, 65'535, 65'535, 65'535}}},
+                     14'703'790'622'216'699'421ULL);
+        // The x86 hash differs because libavif's x86 YUV->RGB conversion hands the presentation a
+        // slightly different 16-bit input, not because the presentation differs: the x86 value was
+        // taken from the pre-Task-20 pipeline, and the quantizer is proven exact on both
+        // architectures (tests/core/colour/PipelineTests.cpp, the exhaustive diagnostic).
+        checkFixture("cosmos1650_yuv444_10bpc_p3pq.avif", "→ sRGB (BT.2390 tone map from PQ 1000 nit)",
+                     {{{0, 0}, {512, 214}, {1023, 427}}},
+                     {{{48'085, 35'561, 25'307, 65'535}, {2'682, 20'499, 42'409, 65'535}, {0, 50'080, 49'456, 65'535}}},
+                     sizeof(std::size_t) == 8 ? 5'389'512'495'027'945'087ULL : 15'569'853'467'021'997'067ULL);
         exports.exit();
     }
 
@@ -513,6 +534,39 @@ namespace pvdkit::e2e
                                               << kIterations << " iterations after one warm-up)");
 
         exports.fileClose(image->context);
+        exports.exit();
+    }
+
+    TEST_CASE("cosmos per-file open and decode timing is reported without enforcing a performance gate")
+    {
+        // One complete host-level view of the file: pvdFileOpen, pvdPageDecode, pvdPageFree,
+        // pvdFileClose. The first iteration in a freshly loaded DLL is reported separately because
+        // it carries every one-time initialisation the plugin performs lazily.
+        const auto plugin = loadInitializedPlugin();
+        const auto &exports = plugin.exports();
+        const auto file = readFixture("cosmos1650_yuv444_10bpc_p3pq.avif");
+
+        const auto viewOnce = [&]() {
+            const auto start = std::chrono::steady_clock::now();
+            auto image = openImage(exports, file, OpenMode::Disk);
+            REQUIRE(image.has_value());
+            auto page = decodePage(exports, image->context, 0, nullptr, nullptr);
+            REQUIRE(page.has_value());
+            CHECK(page->decode.nBPP == 64);
+            exports.pageFree(image->context, &page->decode);
+            exports.fileClose(image->context);
+            return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start)
+                .count();
+        };
+
+        const auto first = viewOnce();
+        constexpr int kIterations = 5;
+        long long total = 0;
+        for (int iteration = 0; iteration < kIterations; ++iteration) {
+            total += viewOnce();
+        }
+        MESSAGE("cosmos per file (open + decode + free + close): first "
+                << first << " us, then mean " << total / kIterations << " us over " << kIterations << " further views");
         exports.exit();
     }
 
@@ -659,7 +713,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.2.0");
+        CHECK(text(info.pVersion) == "1.1.0");
         CHECK(text(info.pComments).empty());
         exports.exit();
 

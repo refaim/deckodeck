@@ -85,9 +85,5 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 
 ## Changes
 
-- 1.2.0 — HDR PQ/HLG sources now use BT.2390 tone mapping and Rec.2020/P3 colours are converted
-  to sRGB for display.
-- 1.1.0 — sources deeper than 8 bits are delivered to the host as 16-bit BGRA (`nBPP` 64) instead
-  of being reduced to 8 bits.
-- 1.0.1 — the alpha channel is now flagged to the host; in 1.0.0 transparent images were displayed opaque.
+- 1.1.0 — transparency is now displayed, sources deeper than 8 bits are delivered as 16-bit BGRA, HDR PQ/HLG uses BT.2390 tone mapping, Rec.2020/P3 is converted to sRGB, and EXIF orientation is handled by PictureView when irot/imir is absent.
 - 1.0.0 — initial release.
