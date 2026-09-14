@@ -7,7 +7,7 @@ param(
 # Builds every plugin for x64 and x86 from scratch (scripts/build-all.ps1 -Clean: the `release`
 # and `release-x86` presets, the import-table and export-table gates on each DLL) and packs each
 # into dist/<NAME>-<version>-<arch>.zip with the static English/Russian readmes and ChangeLog plus
-# the LICENSES.txt and manifest.json that the plugin's CMake configuration staged next to it.
+# the LICENSES.txt that the plugin's CMake configuration staged next to it.
 # Prints the zip paths and SHA-256.
 $ErrorActionPreference = "Stop"
 
@@ -81,7 +81,8 @@ New-Item -ItemType Directory -Force -Path $distDirectory | Out-Null
 $staging = Join-Path $distDirectory "staging"
 
 $results = @()
-$packageFiles = @("readme_en.txt", "readme_ru.txt", "ChangeLog", "LICENSES.txt", "manifest.json")
+# What the user gets (manifest.json is build metadata for build-all.ps1 and stays out of the zip).
+$packageFiles = @("readme_en.txt", "readme_ru.txt", "ChangeLog", "LICENSES.txt")
 foreach ($build in $built) {
   # The manifest version is the one the plugin's CMakeLists.txt declared (pvdkit_plugin_identity),
   # the same source that fills the VERSIONINFO resource; the DLL must agree.

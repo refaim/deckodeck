@@ -584,7 +584,7 @@ Decisions (Task 7, open point 1):
   `package/manifest.json`, runs both gates on each DLL and copies them to `dist/x64/<NAME>.pvd`
   and `dist/x86/<NAME>.pvd`. `scripts/package.ps1`: the same from scratch (suffix `-pkg`), checks
   each DLL's `FileVersion` against the manifest, then `dist/<NAME>-<version>-{x64,x86}.zip`
-  (`<NAME>.pvd`, `readme_en.txt`, `readme_ru.txt`, `ChangeLog`, `LICENSES.txt`, `manifest.json`)
+  (`<NAME>.pvd`, `readme_en.txt`, `readme_ru.txt`, `ChangeLog`, `LICENSES.txt`; `manifest.json` is build metadata and stays out)
   with their SHA-256.
   Before the zips it also runs the `asan` preset from scratch (`build/asan-pkg`): configure, build,
   `ctest --preset asan`; any AddressSanitizer report fails the packaging.
