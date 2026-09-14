@@ -4,11 +4,13 @@ param(
   [string]$Suffix = "-pkg"
 )
 
-# Builds every plugin for x64 and x86 from scratch (scripts/build-all.ps1 -Clean: the `release`
-# and `release-x86` presets, the import-table and export-table gates on each DLL) and packs each
-# into dist/<NAME>-<version>-<arch>.zip with the static English/Russian readmes and ChangeLog plus
-# the LICENSES.txt that the plugin's CMake configuration staged next to it.
-# Prints the zip paths and SHA-256.
+# The release pipeline on one machine: builds every plugin for x64 and x86 from scratch
+# (scripts/build-all.ps1 -Clean: the `release` and `release-x86` presets, the import-table and
+# export-table gates on each DLL), runs scripts/lint.ps1 on both release directories and the
+# `asan` preset from scratch, then packs the zips with scripts/pack.ps1
+# (dist/<NAME>-<version>-<arch>.zip with the static English/Russian readmes, ChangeLog and the
+# LICENSES.txt that the plugin's CMake configuration staged). pack.ps1 prints the zip paths and
+# SHA-256 and its objects are forwarded to the pipeline.
 $ErrorActionPreference = "Stop"
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -76,49 +78,6 @@ try {
 }
 # --- end asan ---
 
-$distDirectory = Join-Path $repository "dist"
-New-Item -ItemType Directory -Force -Path $distDirectory | Out-Null
-$staging = Join-Path $distDirectory "staging"
-
-$results = @()
-# What the user gets (manifest.json is build metadata for build-all.ps1 and stays out of the zip).
-$packageFiles = @("readme_en.txt", "readme_ru.txt", "ChangeLog", "LICENSES.txt")
-foreach ($build in $built) {
-  # The manifest version is the one the plugin's CMakeLists.txt declared (pvdkit_plugin_identity),
-  # the same source that fills the VERSIONINFO resource; the DLL must agree.
-  $versionInfo = (Get-Item -LiteralPath $build.Plugin).VersionInfo
-  if ($versionInfo.FileVersion -ne $build.Version) {
-    throw "$($build.Plugin) carries FileVersion '$($versionInfo.FileVersion)', expected '$($build.Version)'"
-  }
-  foreach ($name in $packageFiles) {
-    if (-not (Test-Path -LiteralPath (Join-Path $build.PackageDirectory $name) -PathType Leaf)) {
-      throw "$name was not staged in $($build.PackageDirectory)"
-    }
-  }
-
-  if (Test-Path -LiteralPath $staging) {
-    Remove-Item -LiteralPath $staging -Recurse -Force
-  }
-  New-Item -ItemType Directory -Force -Path $staging | Out-Null
-  Copy-Item -LiteralPath $build.Plugin -Destination (Join-Path $staging "$($build.Name).pvd")
-  foreach ($name in $packageFiles) {
-    Copy-Item -LiteralPath (Join-Path $build.PackageDirectory $name) -Destination (Join-Path $staging $name)
-  }
-
-  $zip = Join-Path $distDirectory "$($build.Name)-$($build.Version)-$($build.Architecture).zip"
-  if (Test-Path -LiteralPath $zip) {
-    Remove-Item -LiteralPath $zip -Force
-  }
-  Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zip -CompressionLevel Optimal
-  Remove-Item -LiteralPath $staging -Recurse -Force
-
-  $results += [pscustomobject]@{
-    Zip = $zip
-    Sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-  }
-}
-
-foreach ($result in $results) {
-  Write-Output "$($result.Zip)"
-  Write-Output "  SHA-256: $($result.Sha256)"
-}
+# pack.ps1 re-runs the two table gates, checks each DLL's FileVersion against its manifest and
+# writes the zips (overwriting same-named ones only; the cleanup above already removed the rest).
+& (Join-Path $PSScriptRoot "pack.ps1") -Suffix $Suffix -DistDir (Join-Path $repository "dist")

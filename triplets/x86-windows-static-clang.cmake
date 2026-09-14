@@ -3,6 +3,9 @@ set(VCPKG_CRT_LINKAGE static)
 set(VCPKG_LIBRARY_LINKAGE static)
 set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE
     "${CMAKE_CURRENT_LIST_DIR}/../cmake/clang-cl-x86.toolchain.cmake")
+# Same as the x64 triplet: the chainload toolchain's first choice for the LLVM directory reaches
+# the cleaned port-build environment through this untracked passthrough.
+set(VCPKG_ENV_PASSTHROUGH_UNTRACKED PVDKIT_LLVM_DIR)
 
 # vcpkg does not load the Visual Studio environment for a chainloaded toolchain. Without it,
 # meson (dav1d's build system) activates vcvars64.bat on its own (mesonbuild/utils/vsenv.py: no

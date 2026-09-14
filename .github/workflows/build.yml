@@ -1,0 +1,55 @@
+# Reusable: one architecture's release build, its tests (the import/export-table checks
+# included) and the artifact that lint and the release workflow consume. Called by ci.yml
+# (build-x64, build-x86) and release.yml.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: x64 or x86
+        required: true
+        type: string
+
+# Checkout, cache and artifacts only; a caller cannot grant more than it holds itself.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ inputs.arch }}
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      PRESET: ${{ inputs.arch == 'x86' && 'release-x86' || 'release' }}
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Toolchain (vcpkg at the baseline, binary cache, LLVM)
+        uses: ./repo/.github/actions/toolchain
+        with:
+          arch: ${{ inputs.arch }}
+
+      - name: Configure
+        run: cmake --preset $env:PRESET
+
+      - name: Build
+        run: cmake --build --preset $env:PRESET --parallel
+
+      - name: Test
+        run: ctest --preset $env:PRESET
+
+      - name: Upload the plugins and their package staging
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugins-${{ inputs.arch }}
+          if-no-files-found: error
+          path: |
+            repo/build/${{ env.PRESET }}/plugins/*/*.pvd
+            repo/build/${{ env.PRESET }}/plugins/*/package/**

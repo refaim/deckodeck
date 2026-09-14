@@ -1,0 +1,124 @@
+# The gates on every push to master and every pull request: the x64 and x86 release builds with
+# their tests (build.yml), the static-analysis gate (scripts/lint.ps1 over the x64 debug
+# configure and the x64 release DLLs) and the coverage gate (scripts/coverage.ps1, 100 % lines and
+# branches). No ASan job: that preset stays a local, pre-release gate (scripts/package.ps1).
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-x64:
+    uses: ./.github/workflows/build.yml
+    with:
+      arch: x64
+
+  build-x86:
+    uses: ./.github/workflows/build.yml
+    with:
+      arch: x86
+
+  lint:
+    needs: build-x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CPPCHECK_VERSION: 2.21.0
+      CPPCHECK_SHA256: a86eef1180dc18fde46b08f4e4b12f2a1ead8cfc0dd6c294aac8757748cbbb24
+      BINSKIM_VERSION: 4.4.9.11
+      BINSKIM_SHA256: 69678989cbc273b5b50fcf98fb0fd978e1e35a3f844acb24254b31f0ce90c447
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Toolchain (vcpkg at the baseline, binary cache, LLVM)
+        uses: ./repo/.github/actions/toolchain
+        with:
+          arch: x64
+
+      - name: Configure the x64 debug build (compile_commands.json for clang-tidy and cppcheck)
+        run: cmake --preset debug
+
+      - name: Download the x64 release plugins (BinSkim)
+        uses: actions/download-artifact@v8
+        with:
+          name: plugins-x64
+          path: repo/build/release/plugins
+
+      - name: Install cppcheck (the pinned release MSI, extracted without installing)
+        run: |
+          $msi = Join-Path $env:RUNNER_TEMP "cppcheck-$env:CPPCHECK_VERSION-x64-Setup.msi"
+          Invoke-WebRequest -Uri "https://github.com/cppcheck-opensource/cppcheck/releases/download/$env:CPPCHECK_VERSION/cppcheck-$env:CPPCHECK_VERSION-x64-Setup.msi" -OutFile $msi
+          $hash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:CPPCHECK_SHA256) { throw "cppcheck MSI SHA-256 $hash, expected $env:CPPCHECK_SHA256" }
+          $target = Join-Path $env:RUNNER_TEMP "cppcheck"
+          $process = Start-Process msiexec.exe -ArgumentList "/a", "`"$msi`"", "/qn", "TARGETDIR=`"$target`"" -Wait -PassThru -NoNewWindow
+          if ($process.ExitCode -ne 0) { throw "msiexec /a failed with exit code $($process.ExitCode)" }
+          $cppcheck = Join-Path $target "PFiles\Cppcheck"
+          & (Join-Path $cppcheck "cppcheck.exe") --version
+          "CPPCHECK_DIR=$cppcheck" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install BinSkim (the pinned NuGet package, self-contained win-x64 payload)
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "binskim.zip"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.codeanalysis.binskim/$env:BINSKIM_VERSION/microsoft.codeanalysis.binskim.$env:BINSKIM_VERSION.nupkg" -OutFile $zip
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:BINSKIM_SHA256) { throw "BinSkim package SHA-256 $hash, expected $env:BINSKIM_SHA256" }
+          $target = Join-Path $env:RUNNER_TEMP "binskim"
+          Expand-Archive -LiteralPath $zip -DestinationPath $target -Force
+          $binskim = Join-Path $target "tools\net9.0\win-x64"
+          & (Join-Path $binskim "BinSkim.exe") --version
+          "BINSKIM_DIR=$binskim" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install PSScriptAnalyzer (for the Windows PowerShell that runs lint.ps1)
+        shell: powershell
+        run: |
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          Import-Module PSScriptAnalyzer
+          "PSScriptAnalyzer $((Get-Module PSScriptAnalyzer).Version)"
+
+      - name: Lint
+        shell: powershell
+        run: |
+          .\scripts\lint.ps1 -BuildDir build\debug -ReleaseDir build\release -CppcheckDir $env:CPPCHECK_DIR -BinSkimDir $env:BINSKIM_DIR -Jobs 4
+
+  coverage:
+    # Serialised behind build-x64 so the coverage build finds the x64 ports in the binary cache
+    # instead of building them a second time in parallel (a cold cache costs the build job
+    # 20-40 minutes); the price is that coverage starts later on every run.
+    needs: build-x64
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Toolchain (vcpkg at the baseline, binary cache, LLVM)
+        uses: ./repo/.github/actions/toolchain
+        with:
+          arch: x64
+
+      - name: Coverage (x64, 100 % lines and branches)
+        shell: powershell
+        run: .\scripts\coverage.ps1 -Preset coverage

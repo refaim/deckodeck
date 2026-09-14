@@ -13,9 +13,6 @@
       "binaryDir": "${sourceDir}/build/${presetName}$env{PVDKIT_BUILD_SUFFIX}",
       "toolchainFile": "${sourceDir}/cmake/vcpkg-root.cmake",
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64/bin/clang-cl.exe",
-        "CMAKE_CXX_COMPILER": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64/bin/clang-cl.exe",
-        "CMAKE_LINKER": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64/bin/lld-link.exe",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-clang",

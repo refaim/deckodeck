@@ -13,7 +13,8 @@ $expected = @("pvdExit", "pvdFileClose", "pvdFileOpen", "pvdInit", "pvdPageDecod
               "pvdPageInfo", "pvdPluginInfo")
 
 $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
-$llvmReadObj = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\llvm-readobj.exe"
+. (Join-Path $PSScriptRoot "llvm-dir.ps1")
+$llvmReadObj = Join-Path (Get-LlvmDir) "llvm-readobj.exe"
 if (-not (Test-Path -LiteralPath $llvmReadObj)) {
   throw "llvm-readobj was not found at $llvmReadObj"
 }

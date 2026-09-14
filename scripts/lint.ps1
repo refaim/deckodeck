@@ -15,8 +15,15 @@ param(
   # Parallel clang-tidy processes: half the logical cores by default (at least 1), so an
   # interactive machine keeps half of them; every tool process also runs at BelowNormal priority.
   [int]$Jobs = [Math]::Max(1, [Math]::Floor([Environment]::ProcessorCount / 2)),
-  # LLVM tools directory (clang-format, clang-tidy).
-  [string]$LlvmDir = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin"
+  # LLVM tools directory (clang-format, clang-tidy, llvm-readobj); resolved by scripts/llvm-dir.ps1
+  # when empty (PVDKIT_LLVM_DIR, the known VS 2022 layouts, PATH).
+  [string]$LlvmDir,
+  # Directory holding cppcheck.exe; PATH when empty (the CI passes the directory it extracted from
+  # the pinned cppcheck MSI).
+  [string]$CppcheckDir,
+  # Directory holding binskim.exe; PATH when empty (the CI passes the directory it extracted from
+  # the pinned BinSkim NuGet package).
+  [string]$BinSkimDir
 )
 
 # The static-analysis gate: clang-format (--dry-run --Werror over src/**, plugins/*/src/**,
@@ -44,7 +51,14 @@ if (-not $ReleaseDir) {
 }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $ReleaseDir = [IO.Path]::GetFullPath($ReleaseDir)
-$LlvmDir = [IO.Path]::GetFullPath($LlvmDir)
+. (Join-Path $PSScriptRoot "llvm-dir.ps1")
+$LlvmDir = Get-LlvmDir -Requested $LlvmDir
+if ($CppcheckDir) {
+  $CppcheckDir = [IO.Path]::GetFullPath($CppcheckDir)
+}
+if ($BinSkimDir) {
+  $BinSkimDir = [IO.Path]::GetFullPath($BinSkimDir)
+}
 $Jobs = [Math]::Max(1, $Jobs)
 $knownTools = @("clang-format", "clang-tidy", "cppcheck", "psscriptanalyzer", "binskim")
 $Tools = @($Tools | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
@@ -229,7 +243,7 @@ function Invoke-ClangTidy {
 }
 
 function Invoke-Cppcheck {
-  $cppcheck = Get-Tool "cppcheck"
+  $cppcheck = Get-Tool "cppcheck" $CppcheckDir
   $database = Join-Path $BuildDir "compile_commands.json"
   if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
     throw "$database does not exist: configure the build first"
@@ -314,7 +328,7 @@ function Get-SarifMessageText {
 }
 
 function Invoke-BinSkim {
-  $binskim = Get-Tool "binskim"
+  $binskim = Get-Tool "binskim" $BinSkimDir
   $policy = Import-PowerShellDataFile -LiteralPath (Join-Path $Root "binskim.psd1")
   $pluginsDir = Join-Path $ReleaseDir "plugins"
   $plugins = @()

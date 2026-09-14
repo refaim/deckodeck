@@ -24,11 +24,32 @@ Plugins:
 
 The repository's own code is licensed under the MIT License; see `LICENSE`.
 
+## Downloads
+
+GitHub lists every plugin's releases in one flat list; this table points at the latest release of
+each plugin (the release workflow updates the row after publishing, see "Continuous integration
+and releases" below). Each release carries a zip per architecture,
+`<NAME>-<version>-x64.zip` and `<NAME>-<version>-x86.zip`, with the SHA-256 in the notes.
+
+<!-- The rows are seeded for the 1.1.0 releases; each link resolves once its tag (avif/v1.1.0,
+     rpgmvp/v1.1.0) has been pushed and the release workflow has published it. -->
+<!-- downloads:begin -->
+| Plugin | Latest version | Release |
+| --- | --- | --- |
+| AVIF.pvd | 1.1.0 | [avif/v1.1.0](https://github.com/refaim/deckodeck/releases/tag/avif/v1.1.0) |
+| RPGMVP.pvd | 1.1.0 | [rpgmvp/v1.1.0](https://github.com/refaim/deckodeck/releases/tag/rpgmvp/v1.1.0) |
+<!-- downloads:end -->
+
 ## Build
 
 Requirements (already installed on the reference machine, see `AGENTS.md`): clang-cl 19, lld-link,
 llvm-cov / llvm-profdata from the VS 2022 Build Tools, CMake >= 3.28, Ninja (vcpkg's copy is found
-automatically), vcpkg in manifest mode. `triplets/x64-windows-static-clang.cmake` and
+automatically), vcpkg in manifest mode. The LLVM directory is resolved by `cmake/find-llvm.cmake`
+(for CMake and every vcpkg port) and `scripts/llvm-dir.ps1` (for the scripts) in the same order:
+`PVDKIT_LLVM_DIR` (environment, or `-DPVDKIT_LLVM_DIR` for CMake), then the VS 2022 layouts
+(`Program Files (x86)\...\BuildTools`, `Program Files\...\{Enterprise,Professional,Community}`,
+`VC\Tools\Llvm\x64\bin` in each), then `clang-cl` on PATH; vcpkg is `VCPKG_ROOT` or the reference
+machine's install. `triplets/x64-windows-static-clang.cmake` and
 `triplets/x86-windows-static-clang.cmake` build every dependency with the same toolchain and the
 static CRT; `ports/` holds overlay ports (today `libavif`, patched for clang-cl's static-library
 merge). Each plugin's libraries are a vcpkg manifest feature named after the plugin (`vcpkg.json`).
@@ -64,9 +85,33 @@ vcpkg ports (dav1d's meson build needs it to link against the x86 CRT). Install 
 to the 32-bit `0PictureView.dll`; the two architectures are not interchangeable.
 
 `scripts/build-all.ps1` builds both architectures, runs the import and export checks on every
-DLL and copies them to `dist/x64/<NAME>.pvd` and `dist/x86/<NAME>.pvd`; `scripts/package.ps1`
-does the same from scratch and produces `dist/<NAME>-<version>-x64.zip` and
-`dist/<NAME>-<version>-x86.zip` with their SHA-256.
+DLL and copies them to `dist/x64/<NAME>.pvd` and `dist/x86/<NAME>.pvd`.
+
+### Packaging
+
+`scripts/pack.ps1` packages the plugins from **existing** release build directories - no
+configure, no build, no lint, no ASan:
+
+```powershell
+./scripts/pack.ps1                                   # build/release and build/release-x86 (or the PVDKIT_BUILD_SUFFIX ones)
+./scripts/pack.ps1 -Suffix -t23 -Plugins rpgmvp -DistDir out   # one plugin, another suffix, another directory
+```
+
+It discovers every `build/release<Suffix>/plugins/<id>/package/manifest.json` and its x86
+counterpart (a plugin missing on either architecture is an error), runs `check-imports.ps1` and
+`check-exports.ps1` on each DLL, checks that the DLL's `FileVersion` equals the manifest
+version, and writes `<DistDir>/<NAME>-<version>-<arch>.zip` holding exactly `<NAME>.pvd`,
+`readme_en.txt`, `readme_ru.txt`, `ChangeLog` and `LICENSES.txt` (`manifest.json` is build
+metadata and stays out). A zip of the same name is overwritten, other zips are left alone; every
+zip path is printed with its SHA-256, and one object per zip (Name, Version, Architecture, Zip,
+Sha256) goes to the pipeline. `-DistDir` defaults to `dist/`; a relative path is resolved against
+the repository root.
+
+`scripts/package.ps1` is the whole release pipeline on one machine: `build-all.ps1 -Clean` (suffix
+`-pkg`), `lint.ps1` on both release directories, the `asan` preset from scratch, then `pack.ps1`
+into `dist/` (previous release zips are removed first, so a failed gate leaves no stale
+archive). The GitHub release workflow runs `pack.ps1` on the CI build artifacts instead (see
+"Continuous integration and releases").
 
 Every DLL carries a VERSIONINFO resource (version, author, copyright, library versions). A
 plugin's name, version and priority are declared once, in `pvdkit_plugin_identity(...)` in its
@@ -107,8 +152,10 @@ BinSkim cannot judge `/HIGHENTROPYVA` on a DLL (BA2015 is not applicable), so th
 that bit from every 64-bit image with llvm-readobj itself. `-Tools` selects a subset
 (`-Tools clang-format,cppcheck`); `-Jobs` is the number of parallel clang-tidy processes, half
 the logical cores by default, and every tool runs at below-normal priority so the machine stays
-usable meanwhile. Suppressions live in those files, each with its reason. A new
-plugin copies `tests/.clang-tidy` into its own `tests/`. The gate is not part of `ctest`.
+usable meanwhile. `-LlvmDir`, `-CppcheckDir` and `-BinSkimDir` point the script at tool
+directories (by default the resolved LLVM directory, and cppcheck / binskim on PATH). Suppressions
+live in those files, each with its reason. A new plugin copies `tests/.clang-tidy` into its own
+`tests/`. The gate is not part of `ctest`.
 
 The `asan` preset builds every target - the plugin DLLs included - with AddressSanitizer
 (`-fsanitize=address /Od /Zi`, `/MT`, RelWithDebInfo so the release ports are used) and runs the
@@ -130,6 +177,64 @@ plugin's profiles do not count), prints the llvm-cov report, writes
 HTML to `build/<preset><suffix>/html` and fails unless `src/**` and `plugins/*/src/**` are at
 100 % lines and 100 % branches. It is a whole-tree gate: run it with every plugin enabled.
 
+## Continuous integration and releases
+
+GitHub Actions on `windows-latest` (Visual Studio 2022 Enterprise with its clang-cl 19, the
+Windows SDK, CMake, Ninja, `gh`). Every job that builds (`build-x64`, `build-x86`, `lint`,
+`coverage`) starts with the composite action `.github/actions/toolchain`: it checks out
+`microsoft/vcpkg` at the `builtin-baseline` of `vcpkg.json` (the runner's own vcpkg is not
+trusted to carry it) and points `VCPKG_ROOT` at it, restores vcpkg's binary cache from
+`actions/cache` (keyed by the hash of `vcpkg.json`, `ports/`, `triplets/`, `cmake/` and the
+runner image, with partial-match restore keys), and sets `PVDKIT_LLVM_DIR` to the runner's VS
+2022 LLVM so the CMake toolchains and the scripts use the same clang-cl the reference machine
+does. The release workflow's `verify` and `release` jobs build nothing and skip the action; the
+table gates `pack.ps1` runs there find the runner's LLVM through the VS 2022 layout fallback of
+`scripts/llvm-dir.ps1`. Every workflow declares `permissions: contents: read`; only the
+`release` job holds `contents: write` (for `gh release create` and the README push).
+
+- `.github/workflows/ci.yml` runs on every push to `master` and every pull request:
+  `build-x64` and `build-x86` (`.github/workflows/build.yml`, reusable: configure the `release` /
+  `release-x86` preset, `cmake --build --parallel`, `ctest` including the import/export-table
+  checks, then upload every `<NAME>.pvd` and its `package/` staging as the artifact
+  `plugins-<arch>`); `lint` (the x64 `debug` configure for `compile_commands.json`, the release
+  DLLs from the `plugins-x64` artifact, cppcheck 2.21.0 extracted from its release MSI, BinSkim
+  4.4.9.11 from its NuGet package - both pinned by SHA-256 - and PSScriptAnalyzer from the
+  gallery, then `scripts/lint.ps1 -CppcheckDir ... -BinSkimDir ...`); `coverage`
+  (`scripts/coverage.ps1 -Preset coverage`, fails below 100 %). No ASan job: that preset stays a
+  local gate (`scripts/package.ps1`). One run per ref at a time; every job has a timeout.
+- `.github/workflows/release.yml` runs on the tags `avif/vX.Y.Z` and `rpgmvp/vX.Y.Z`: `verify`
+  (`scripts/release-tag.ps1`: the tag names a plugin directory, `plugins/<id>/CMakeLists.txt`
+  declares exactly that `VERSION`, and `plugins/<id>/package/ChangeLog` opens with
+  `<NAME> <version>`), the two build jobs from `build.yml`, then `release`: `scripts/pack.ps1
+  -Plugins <id>` on the downloaded artifacts (table gates, `FileVersion` check, the two zips),
+  `scripts/release-notes.ps1` (the first ChangeLog entry, converted from its UTF-8 BOM/CRLF
+  form, its bullets normalised to Markdown list items, plus the SHA-256 of each zip),
+  `gh release create <tag> <zips> --title "<NAME> <version>" --notes-file` (a published release,
+  neither draft nor prerelease; when the release already exists - a re-run of a failed job - it
+  is kept as published, its two assets are only verified to be present, nothing is re-uploaded),
+  and finally `scripts/update-readme-downloads.ps1` on `master`: the plugin's row of the
+  "Downloads" table above (between the `<!-- downloads:begin -->` / `<!-- downloads:end -->`
+  anchors) is pointed at the new release and committed as `README: <NAME> <version> released`
+  with the workflow's `GITHUB_TOKEN`. The push retries up to five times from a freshly fetched
+  `origin/master` (two tags pushed together run two release jobs that both push to `master`);
+  a row that is already current, or that names a newer version, is left alone and nothing is
+  committed.
+
+To cut a release of one plugin: bump `VERSION` in `pvdkit_plugin_identity(...)` of
+`plugins/<id>/CMakeLists.txt`, add the entry at the top of `plugins/<id>/package/ChangeLog`
+(`<NAME> <version> DD.MM.YYYY`, UTF-8 BOM, CRLF; the configure-time check and `<id>_package_docs`
+enforce it) and the matching line in `plugins/<id>/README.md`, merge to `master` and let CI pass,
+then tag that commit and push the tag:
+
+```powershell
+git tag avif/v1.2.0
+git push origin avif/v1.2.0
+```
+
+The workflows cannot be run locally; their commands are the scripts above, which can
+(`scripts/release-tag.ps1 -Tag avif/v1.2.0`, `scripts/pack.ps1`, `scripts/release-notes.ps1`,
+`scripts/update-readme-downloads.ps1`).
+
 ## Layout
 
 ```
@@ -148,7 +253,8 @@ tests/          pvd, core, adapters (win), guard (source rules) — shared tests
                 scenarios every plugin's leak executable compiles in
 cmake/          toolchains, vcpkg wrapper, pvdkit-plugin.cmake (the plugin helpers)
 docs/           ARCHITECTURE.md (the shared design) and the task history
-scripts/        coverage, import/export checks, lint, build-all, package (all plugins)
+scripts/        coverage, import/export checks, lint, build-all, pack, package, the release helpers
+                (release-tag, release-notes, update-readme-downloads), llvm-dir (shared)
 ```
 
 `docs/ARCHITECTURE.md` describes the layering, the canonical interfaces and how a plugin is added;

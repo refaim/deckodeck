@@ -1,0 +1,149 @@
+# A release of one plugin: push the tag <id>/vX.Y.Z (avif/v1.2.0, rpgmvp/v1.2.0) on a commit
+# whose plugins/<id>/CMakeLists.txt declares that VERSION and whose ChangeLog opens with it.
+# The workflow verifies the tag (scripts/release-tag.ps1), builds both architectures with the CI
+# build jobs, packs the plugin with scripts/pack.ps1, creates the GitHub Release with the first
+# ChangeLog entry and the zips' SHA-256 as notes (scripts/release-notes.ps1), and then updates
+# that plugin's row of the README "Downloads" table on master (scripts/update-readme-downloads.ps1;
+# nothing is committed when the row is already current). Every step of the release job is
+# idempotent, so a failed job can be re-run: an existing release is kept (its assets verified,
+# not re-uploaded) and the README push retries on a fresh master when another release job
+# pushed first.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'avif/v*'
+      - 'rpgmvp/v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+
+# Read-only by default; only the release job (gh release create, git push) gets write access.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify the tag
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      id: ${{ steps.tag.outputs.id }}
+      name: ${{ steps.tag.outputs.name }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Parse and verify the tag against CMakeLists.txt and the ChangeLog
+        id: tag
+        shell: powershell
+        run: |
+          $info = .\scripts\release-tag.ps1 -Tag $env:GITHUB_REF_NAME
+          $info | Format-List | Out-String | Write-Host
+          @("id=$($info.Id)", "name=$($info.Name)", "version=$($info.Version)") |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+  build-x64:
+    needs: verify
+    uses: ./.github/workflows/build.yml
+    with:
+      arch: x64
+
+  build-x86:
+    needs: verify
+    uses: ./.github/workflows/build.yml
+    with:
+      arch: x86
+
+  release:
+    name: Publish ${{ needs.verify.outputs.name }} ${{ needs.verify.outputs.version }}
+    needs: [verify, build-x64, build-x86]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      PLUGIN_ID: ${{ needs.verify.outputs.id }}
+      PLUGIN_NAME: ${{ needs.verify.outputs.name }}
+      PLUGIN_VERSION: ${{ needs.verify.outputs.version }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Download the x64 plugins
+        uses: actions/download-artifact@v8
+        with:
+          name: plugins-x64
+          path: repo/build/release/plugins
+
+      - name: Download the x86 plugins
+        uses: actions/download-artifact@v8
+        with:
+          name: plugins-x86
+          path: repo/build/release-x86/plugins
+
+      - name: Pack (table gates, FileVersion check, the two zips)
+        shell: powershell
+        run: |
+          $zips = @(.\scripts\pack.ps1 -Plugins $env:PLUGIN_ID -DistDir dist)
+          if ($zips.Count -ne 2) { throw "pack.ps1 produced $($zips.Count) zip(s), expected the x64 and x86 ones" }
+          .\scripts\release-notes.ps1 -Id $env:PLUGIN_ID -Zip ($zips | ForEach-Object { $_.Zip }) -OutFile dist\notes.md
+          Get-Content -LiteralPath dist\notes.md -Encoding UTF8 | Write-Host
+
+      # Idempotent: a release that already exists (a re-run after a later step failed) is kept as
+      # published - its two assets must be present, nothing is re-uploaded and the notes are not
+      # rewritten, so the SHA-256 in the notes keep describing the assets that were published.
+      - name: Create the GitHub Release (kept as is when it already exists)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $zips = @(Get-ChildItem -LiteralPath dist -Filter "$env:PLUGIN_NAME-$env:PLUGIN_VERSION-*.zip" | ForEach-Object { $_.FullName })
+          if ($zips.Count -ne 2) { throw "expected two zips in dist, found $($zips.Count)" }
+          $assets = @(gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "release $env:RELEASE_TAG exists already; assets: $($assets -join ', ')"
+            foreach ($zip in $zips) {
+              $name = [IO.Path]::GetFileName($zip)
+              if ($assets -notcontains $name) { throw "release $env:RELEASE_TAG exists but lacks $name; delete the release (gh release delete $env:RELEASE_TAG) and re-run" }
+            }
+            return
+          }
+          gh release create $env:RELEASE_TAG @zips --title "$env:PLUGIN_NAME $env:PLUGIN_VERSION" --notes-file dist\notes.md --verify-tag
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
+
+      # Two tags pushed together run two of these jobs at once, and both push to master: every
+      # attempt starts from a fresh origin/master, re-applies the row there and pushes; a rejected
+      # (non-fast-forward) push is retried after a short pause, up to five times. A row that is
+      # already current (a re-run, or a newer version already listed) commits nothing.
+      - name: Point the README "Downloads" row at this release (on master)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          $attempts = 5
+          for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+            git fetch --depth=1 origin master
+            if ($LASTEXITCODE -ne 0) { throw "git fetch origin master failed with exit code $LASTEXITCODE" }
+            git checkout -B master origin/master
+            if ($LASTEXITCODE -ne 0) { throw "git checkout master failed with exit code $LASTEXITCODE" }
+            $result = @(powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update-readme-downloads.ps1 -Name $env:PLUGIN_NAME -Version $env:PLUGIN_VERSION -Tag $env:RELEASE_TAG -RepositoryUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY")
+            if ($LASTEXITCODE -ne 0) { throw "update-readme-downloads.ps1 failed with exit code $LASTEXITCODE`: $result" }
+            Write-Host "README (attempt $attempt): $result"
+            if ($result -contains "unchanged") { return }
+            git add README.md
+            git commit -m "README: $env:PLUGIN_NAME $env:PLUGIN_VERSION released"
+            if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE" }
+            git push origin master
+            if ($LASTEXITCODE -eq 0) { return }
+            Write-Host "push rejected (attempt $attempt of $attempts); retrying from a fresh origin/master"
+            Start-Sleep -Seconds (5 * $attempt)
+          }
+          throw "could not push the README row after $attempts attempts"

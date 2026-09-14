@@ -31,8 +31,10 @@ pvdkit/
                       leak/LeakScenarios.cpp compiled into every plugin's <id>_leak_tests
   tests/e2e/          the shared host driver + VERSIONINFO test, compiled into every plugin's e2e
   cmake/pvdkit-plugin.cmake   pvdkit_plugin_identity / pvdkit_add_plugin / pvdkit_add_plugin_e2e_tests
-  scripts/            coverage, check-imports, check-exports, lint, build-all, package (all plugins;
-                      package runs lint on both architectures and the asan preset)
+  scripts/            coverage, check-imports, check-exports, lint, build-all, pack (zips from
+                      existing release builds), package (build-all + lint on both architectures +
+                      the asan preset + pack), the release helpers release-tag / release-notes /
+                      update-readme-downloads (.github/workflows/release.yml), llvm-dir (shared)
   .clang-format .clang-tidy tests/.clang-tidy cppcheck-suppressions.txt PSScriptAnalyzerSettings.psd1
   binskim.psd1        the analyzer configuration scripts/lint.ps1 reads (Task 9)
   ports/ triplets/ vcpkg.json CMakePresets.json   one toolchain and one manifest for the kit
@@ -601,12 +603,21 @@ Decisions (Task 7, open point 1):
   gate applies to both presets. It is a whole-tree gate: run it with every plugin enabled.
 - `scripts/build-all.ps1`: builds `release` and `release-x86`, discovers every plugin through its
   `package/manifest.json`, runs both gates on each DLL and copies them to `dist/x64/<NAME>.pvd`
-  and `dist/x86/<NAME>.pvd`. `scripts/package.ps1`: the same from scratch (suffix `-pkg`), checks
-  each DLL's `FileVersion` against the manifest, then `dist/<NAME>-<version>-{x64,x86}.zip`
-  (`<NAME>.pvd`, `readme_en.txt`, `readme_ru.txt`, `ChangeLog`, `LICENSES.txt`; `manifest.json` is build metadata and stays out)
-  with their SHA-256.
-  Before the zips it also runs the `asan` preset from scratch (`build/asan-pkg`): configure, build,
-  `ctest --preset asan`; any AddressSanitizer report fails the packaging.
+  and `dist/x86/<NAME>.pvd`. `scripts/pack.ps1` (Task 23): from existing `release` /
+  `release-x86` build directories (`-Suffix`, optional `-Plugins` ids, `-DistDir`), no build, runs
+  both gates on each DLL, checks its `FileVersion` against the manifest, then writes
+  `<DistDir>/<NAME>-<version>-{x64,x86}.zip` (`<NAME>.pvd`, `readme_en.txt`, `readme_ru.txt`,
+  `ChangeLog`, `LICENSES.txt`; `manifest.json` is build metadata and stays out) with their
+  SHA-256, overwriting only same-named zips. `scripts/package.ps1`: the whole pipeline from
+  scratch (suffix `-pkg`): `build-all.ps1 -Clean`, `lint.ps1` on both release directories, the
+  `asan` preset from scratch (`build/asan-pkg`: configure, build, `ctest --preset asan`; any
+  AddressSanitizer report fails the packaging), then `pack.ps1` into `dist/`. The GitHub
+  workflows (`.github/workflows/`, Task 23; README.md "Continuous integration and releases")
+  run the release builds, `ctest`, `lint.ps1` and `coverage.ps1` on `windows-latest` and, on a
+  `<id>/vX.Y.Z` tag, `pack.ps1` plus `gh release create` and the README "Downloads" row update.
+  The toolchain files resolve the LLVM directory through `cmake/find-llvm.cmake`
+  (`PVDKIT_LLVM_DIR`, the known VS 2022 layouts, PATH; `scripts/llvm-dir.ps1` mirrors it for
+  the scripts), so the reference machine's Build Tools path is a default, not a requirement.
 - Preset `asan` (Task 10, level 2; x64 only): `CMAKE_BUILD_TYPE=RelWithDebInfo` with
   `PVDKIT_ASAN=ON`, which adds `-fsanitize=address /Od /Zi` to every target - the plugin DLLs
   included - and `/DEBUG` at link time, so a report names the line. RelWithDebInfo rather than

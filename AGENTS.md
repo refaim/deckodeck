@@ -74,6 +74,10 @@ only. No WIC, no GDI+, no system codecs.
 - clang-cl 19.1.5, lld-link, llvm-cov, llvm-profdata from VS 2022 Build Tools:
   `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\`.
   MSVC STL 14.44.35207, Windows SDK 10.0.26100. clang-cl auto-detects both; no vcvars needed.
+  That directory is the first default of `cmake/find-llvm.cmake` and `scripts/llvm-dir.ps1`
+  (`PVDKIT_LLVM_DIR` overrides it and must then be right - a set-but-wrong value is an error,
+  not a fallback; the CI build, lint and coverage jobs set it to the runner's VS 2022 LLVM,
+  the release job relies on the VS 2022 layout fallback); never hard-code it anywhere else.
 - CMake 4.4 on PATH. Ninja: use vcpkg's downloaded copy or `scoop install ninja` if absent.
   Fallback generator: `Visual Studio 17 2022` with `-T ClangCL`.
 - vcpkg at `C:\Users\Roma\scoop\apps\vcpkg\current` (`vcpkg` on PATH), manifest mode (`vcpkg.json`),

@@ -106,7 +106,8 @@ function Assert-PluginProfile {
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $buildDirectory = Join-Path $repository "build\$Preset$env:PVDKIT_BUILD_SUFFIX"
-$llvmDirectory = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin"
+. (Join-Path $PSScriptRoot "llvm-dir.ps1")
+$llvmDirectory = Get-LlvmDir
 $llvmProfdata = Join-Path $llvmDirectory "llvm-profdata.exe"
 $llvmCov = Join-Path $llvmDirectory "llvm-cov.exe"
 $hadProfileFile = Test-Path -LiteralPath "Env:LLVM_PROFILE_FILE"

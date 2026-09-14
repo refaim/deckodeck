@@ -1,0 +1,68 @@
+name: Toolchain
+description: >-
+  The build environment every job needs: microsoft/vcpkg checked out at the manifest's
+  builtin-baseline (VCPKG_ROOT; the runner's own copy is not trusted to have it), its binary cache
+  restored from actions/cache under a key that changes with vcpkg.json, ports/, triplets/, cmake/
+  and the runner image, and PVDKIT_LLVM_DIR pointing at the clang-cl of the runner's Visual
+  Studio 2022 (cmake/find-llvm.cmake and scripts/llvm-dir.ps1 read it). Expects the repository
+  checked out at repo/.
+inputs:
+  arch:
+    description: The target architecture the caller builds (x64 or x86); part of the cache key.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Read the vcpkg baseline from vcpkg.json
+      id: baseline
+      shell: pwsh
+      run: |
+        $baseline = (Get-Content -LiteralPath repo/vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+        if ($baseline -notmatch '^[0-9a-f]{40}$') { throw "repo/vcpkg.json has no builtin-baseline commit" }
+        "commit=$baseline" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        Write-Host "vcpkg baseline: $baseline"
+
+    - name: Check out microsoft/vcpkg at the baseline
+      uses: actions/checkout@v7
+      with:
+        repository: microsoft/vcpkg
+        ref: ${{ steps.baseline.outputs.commit }}
+        path: vcpkg
+
+    - name: Bootstrap vcpkg and locate the toolchain
+      shell: pwsh
+      run: |
+        $workspace = $env:GITHUB_WORKSPACE
+        $vcpkgRoot = Join-Path $workspace "vcpkg"
+        $binaryCache = Join-Path $workspace "vcpkg-binary-cache"
+        & (Join-Path $vcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
+        if ($LASTEXITCODE -ne 0) { throw "bootstrap-vcpkg.bat failed with exit code $LASTEXITCODE" }
+        New-Item -ItemType Directory -Force -Path $binaryCache | Out-Null
+        & (Join-Path $vcpkgRoot "vcpkg.exe") version
+        # The clang-cl that ships with the runner's Visual Studio 2022 (the same LLVM 19 the
+        # reference machine builds with); any VS major as a fallback, so a future image is at
+        # least tried.
+        $clang = @(Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\Llvm\x64\bin\clang-cl.exe" -ErrorAction SilentlyContinue)
+        if ($clang.Count -eq 0) {
+          $clang = @(Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin\clang-cl.exe" -ErrorAction SilentlyContinue)
+        }
+        if ($clang.Count -eq 0) { throw "No clang-cl.exe under C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin" }
+        $llvmDir = $clang[0].DirectoryName
+        & $clang[0].FullName --version
+        @(
+          "VCPKG_ROOT=$vcpkgRoot",
+          "VCPKG_DEFAULT_BINARY_CACHE=$binaryCache",
+          "PVDKIT_LLVM_DIR=$llvmDir",
+          "IMAGE_KEY=$env:ImageOS-$env:ImageVersion"
+        ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Write-Host "LLVM: $llvmDir"
+        Write-Host "runner image: $env:ImageOS $env:ImageVersion"
+
+    - name: Restore the vcpkg binary cache
+      uses: actions/cache@v6
+      with:
+        path: vcpkg-binary-cache
+        key: vcpkg-${{ inputs.arch }}-${{ env.IMAGE_KEY }}-${{ hashFiles('repo/vcpkg.json', 'repo/ports/**', 'repo/triplets/**', 'repo/cmake/**') }}
+        restore-keys: |
+          vcpkg-${{ inputs.arch }}-${{ env.IMAGE_KEY }}-
+          vcpkg-${{ inputs.arch }}-
