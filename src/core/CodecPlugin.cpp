@@ -10,9 +10,10 @@ namespace pvdkit::core
 {
 
     CodecPlugin::CodecPlugin(IFileSource &fileSource, IDecoderFactory &decoderFactory, const IImageDescriber &describer,
-                             const DecoderOptions &options, pvd::PluginInfo pluginInfo)
-        : fileSource_(fileSource), decoderFactory_(decoderFactory), describer_(describer), options_(options),
-          pluginInfo_(std::move(pluginInfo))
+                             const colour::SrgbOutputTables &outputTables, const DecoderOptions &options,
+                             pvd::PluginInfo pluginInfo)
+        : fileSource_(fileSource), decoderFactory_(decoderFactory), describer_(describer), outputTables_(outputTables),
+          options_(options), pluginInfo_(std::move(pluginInfo))
     {
     }
 
@@ -47,8 +48,8 @@ namespace pvdkit::core
         auto description = describer_.describe(meta);
         pvd::ImageInfo imageInfo{meta.frameCount, meta.animated, std::move(description.formatName),
                                  std::move(description.compression), std::move(description.comments)};
-        std::unique_ptr<pvd::IFileSession> session =
-            std::make_unique<FileSession>(std::move(fileData), std::move(*decoder), std::move(imageInfo), options_);
+        std::unique_ptr<pvd::IFileSession> session = std::make_unique<FileSession>(
+            std::move(fileData), std::move(*decoder), std::move(imageInfo), options_, outputTables_);
         return session;
     }
 

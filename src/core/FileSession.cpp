@@ -37,13 +37,14 @@ namespace pvdkit::core
     } // namespace
 
     FileSession::FileSession(std::unique_ptr<IFileData> fileData, std::unique_ptr<IDecoder> decoder,
-                             pvd::ImageInfo imageInfo, const DecoderOptions &options)
+                             pvd::ImageInfo imageInfo, const DecoderOptions &options,
+                             const colour::SrgbOutputTables &outputTables)
         : fileData_(std::move(fileData)), decoder_(std::move(decoder)), imageInfo_(std::move(imageInfo)),
-          options_(options)
+          options_(options), outputTables_(outputTables)
     {
         const auto &meta = decoder_->meta();
         if (colour::Presentation::needed(meta.cicp)) {
-            presentation_ = std::make_unique<colour::Presentation>(meta.cicp, meta.masteringPeakNits);
+            presentation_ = std::make_unique<colour::Presentation>(meta.cicp, meta.masteringPeakNits, outputTables_);
         }
     }
 
@@ -138,6 +139,11 @@ namespace pvdkit::core
         }
         outstanding_.erase(found);
         return true;
+    }
+
+    const colour::SrgbOutputTables &FileSession::outputTables() const noexcept
+    {
+        return outputTables_;
     }
 
 } // namespace pvdkit::core

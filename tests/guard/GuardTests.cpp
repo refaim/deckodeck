@@ -240,6 +240,12 @@ namespace
         std::regex adaptersInclude;
         std::regex anyInclude;
         std::regex catchOpen;
+        // Scope headers (the function-local static rule): what to blank out before classifying a
+        // header, the keywords that open a declarative scope, and an `extern "C"` block after
+        // literal stripping.
+        std::regex scopeNoise;
+        std::regex declarativeKeyword;
+        std::regex externBlock;
     };
 
     [[nodiscard]] const GuardRegexTable &guardRegexes()
@@ -262,6 +268,38 @@ namespace
                     CompiledRule{std::regex{R"(\blcov_excl)"}, "LCOV_EXCL"},
                     CompiledRule{std::regex{R"(\b__builtin_unreachable\b)"}, "__builtin_unreachable"},
                     CompiledRule{std::regex{R"(\[\[\s*assume\b)"}, "[[assume"},
+                    // The synchronisation family below is forbidden because MSVC >= 14.50 (VS 2026)
+                    // implements it over WaitOnAddress / WakeByAddressAll imported directly from
+                    // api-ms-win-core-synch-l1-2-0.dll, and a plugin imports KERNEL32.dll only
+                    // (AGENTS.md rule 13). std::thread + join, std::mutex (SRWLOCK) and plain
+                    // atomics stay allowed.
+                    // jthread: its stop_token state waits and notifies on atomics.
+                    CompiledRule{std::regex{R"(\bjthread\b)"}, "jthread"},
+                    // stop_token / stop_source / stop_callback: the same atomic wait/notify state.
+                    CompiledRule{std::regex{R"(\bstop_(?:token|source|callback)\b)"},
+                                 "stop_token/stop_source/stop_callback"},
+                    // call_once / once_flag: one-time initialisation, the same family as guarded statics.
+                    CompiledRule{std::regex{R"(\b(?:call_once|once_flag)\b)"}, "call_once/once_flag"},
+                    // <latch>: counts down on an atomic and waits on it.
+                    CompiledRule{std::regex{R"((?:#[ \t]*include[ \t]*<[ \t]*latch[ \t]*>)|(?:::[ \t]*latch\b))"},
+                                 "latch"},
+                    // <barrier>: phases complete through atomic wait/notify.
+                    CompiledRule{std::regex{R"((?:#[ \t]*include[ \t]*<[ \t]*barrier[ \t]*>)|(?:::[ \t]*barrier\b))"},
+                                 "barrier"},
+                    // <semaphore>: acquire blocks in an atomic wait.
+                    CompiledRule{
+                        std::regex{
+                            R"((?:#[ \t]*include[ \t]*<[ \t]*semaphore[ \t]*>)|(?:::[ \t]*(?:counting_|binary_)?semaphore\b))"},
+                        "semaphore"},
+                    // condition_variable(_any): the 14.5x STL builds it over the same primitives.
+                    CompiledRule{std::regex{R"(\bcondition_variable(?:_any)?\b)"}, "condition_variable"},
+                    // .wait( / .wait_for( / .wait_until( / .notify_one( / .notify_all( on an atomic
+                    // (or anything else): __std_atomic_wait_direct and its notify twins.
+                    CompiledRule{std::regex{R"((?:\.|->)\s*(?:wait(?:_for|_until)?|notify_one|notify_all)\s*\()"},
+                                 ".wait(/.notify_one(/.notify_all("},
+                    // The free-function spellings of the same operations.
+                    CompiledRule{std::regex{R"(\batomic_(?:wait|wait_explicit|notify_one|notify_all)\b)"},
+                                 "atomic_wait/atomic_notify_*"},
                 },
             .reinterpretCast = std::regex{R"(\breinterpret_cast\b)"},
             .windowsHeader = std::regex{R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*windows[.]h[ \t]*[>"])"},
@@ -280,8 +318,122 @@ namespace
             // against the source roots and ignores what resolves nowhere (std, SDK, vcpkg headers).
             .anyInclude = std::regex{R"((?:^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*([^>"]+?)[ \t]*[>"])"},
             .catchOpen = std::regex{R"(\bcatch\s*\()"},
+            .scopeNoise = std::regex{R"(\b(?:public|private|protected)\s*:|\[\[[^\]]*\]\]|\balignas\s*\([^)]*\))"},
+            .declarativeKeyword =
+                std::regex{R"(^\s*(?:(?:inline|export|typedef|friend)\s+)*(?:namespace|class|struct|union|enum)\b)"},
+            .externBlock = std::regex{R"(^\s*extern\s*$)"},
         };
         return table;
+    }
+
+    [[nodiscard]] bool isIdentifierCharacter(const unsigned char character)
+    {
+        return std::isalnum(character) != 0 || character == '_';
+    }
+
+    [[nodiscard]] std::string_view trimLeft(std::string_view text)
+    {
+        while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0) {
+            text.remove_prefix(1);
+        }
+        return text;
+    }
+
+    // Removes every leading `template <...>` (angle brackets balanced, so `Pair<T, T>` and `>>` are
+    // fine) from a scope header, so that `template <class T> struct Foo` is seen as `struct Foo` and
+    // `template <class F> auto guarded(...)` as the function it is.
+    [[nodiscard]] std::string_view withoutTemplateHeads(std::string_view header)
+    {
+        constexpr std::string_view keyword{"template"};
+        for (header = trimLeft(header); header.starts_with(keyword) &&
+                                        (header.size() == keyword.size() ||
+                                         !isIdentifierCharacter(static_cast<unsigned char>(header[keyword.size()])));
+             header = trimLeft(header)) {
+            const auto open = header.find('<');
+            if (open == std::string_view::npos) {
+                break;
+            }
+            int depth = 0;
+            std::size_t index = open;
+            for (; index < header.size(); ++index) {
+                if (header[index] == '<') {
+                    ++depth;
+                } else if (header[index] == '>' && --depth == 0) {
+                    break;
+                }
+            }
+            if (index >= header.size()) {
+                break;
+            }
+            header.remove_prefix(index + 1);
+        }
+        return header;
+    }
+
+    // A brace opens a declarative scope (namespace, class, struct, union, enum, or an `extern "C"`
+    // block, whose literal has been stripped) when its header - the code since the previous `;`,
+    // `{` or `}`, minus access specifiers, attributes, alignas and template heads - starts with one
+    // of those keywords and holds no parenthesis (so `struct tm *now()` is the function it is).
+    // Every other brace - a function body, a control statement, a lambda, a brace initialiser -
+    // opens an executable scope.
+    [[nodiscard]] bool opensDeclarativeScope(const std::string_view rawHeader, const GuardRegexTable &regexes)
+    {
+        const auto header = std::regex_replace(std::string{rawHeader}, regexes.scopeNoise, " ");
+        const auto body = withoutTemplateHeads(header);
+        if (std::regex_search(body.begin(), body.end(), regexes.externBlock)) {
+            return true;
+        }
+        return std::regex_search(body.begin(), body.end(), regexes.declarativeKeyword) &&
+               body.find('(') == std::string_view::npos;
+    }
+
+    [[nodiscard]] bool isWordAt(const std::string_view code, const std::size_t index, const std::string_view word)
+    {
+        if (code.compare(index, word.size(), word) != 0) {
+            return false;
+        }
+        const bool boundaryBefore = index == 0 || !isIdentifierCharacter(static_cast<unsigned char>(code[index - 1]));
+        const bool boundaryAfter = index + word.size() >= code.size() ||
+                                   !isIdentifierCharacter(static_cast<unsigned char>(code[index + word.size()]));
+        return boundaryBefore && boundaryAfter;
+    }
+
+    // Function-local statics. MSVC >= 14.50 implements their guarded initialisation
+    // (_Init_thread_wait / _Init_thread_notify) over WaitOnAddress / WakeByAddressAll from
+    // api-ms-win-core-synch-l1-2-0.dll, which a plugin (KERNEL32.dll only) must never import; a
+    // plugin owns such state through its composition root instead (ARCHITECTURE §7). A `static` in an
+    // executable scope (see opensDeclarativeScope) that is not `static constexpr` is one; `static_assert`
+    // and `static_cast` are different tokens (no word boundary after `static`). Namespace-scope and
+    // class-scope statics are not this rule's business.
+    void appendFunctionLocalStaticViolations(std::vector<Violation> &violations, const std::string_view code,
+                                             const GuardRegexTable &regexes)
+    {
+        constexpr std::string_view keyword{"static"};
+        constexpr std::string_view allowedSpecifier{"constexpr"};
+        std::vector<bool> executableScopes;
+        std::size_t headerStart = 0;
+        for (std::size_t index = 0; index < code.size(); ++index) {
+            const char current = code[index];
+            if (current == '{') {
+                executableScopes.push_back(
+                    !opensDeclarativeScope(code.substr(headerStart, index - headerStart), regexes));
+                headerStart = index + 1;
+            } else if (current == '}' || current == ';') {
+                if (current == '}' && !executableScopes.empty()) {
+                    executableScopes.pop_back();
+                }
+                headerStart = index + 1;
+            } else if (current == 's' && !executableScopes.empty() && executableScopes.back() &&
+                       isWordAt(code, index, keyword)) {
+                const auto rest = trimLeft(code.substr(index + keyword.size()));
+                if (!(rest.starts_with(allowedSpecifier) &&
+                      (rest.size() == allowedSpecifier.size() ||
+                       !isIdentifierCharacter(static_cast<unsigned char>(rest[allowedSpecifier.size()]))))) {
+                    violations.push_back({"function-local static (only static constexpr is allowed)"});
+                    return;
+                }
+            }
+        }
     }
 
     // Capture group 1 of every match of `pattern` in `includeCode`, in order.
@@ -438,6 +590,7 @@ namespace
         for (const auto &rule : regexes.forbiddenEverywhere) {
             appendIfMatches(violations, code, rule.pattern, rule.label);
         }
+        appendFunctionLocalStaticViolations(violations, code, regexes);
 
         if (!isAdapterOrPvd(normalizedPath)) {
             appendIfMatches(violations, code, regexes.reinterpretCast, "reinterpret_cast");
@@ -552,6 +705,31 @@ namespace
             std::string_view{"LCOV_EXCL_LINE"},
             std::string_view{"__builtin_unreachable();"},
             std::string_view{"[[assume(true)]];"},
+            // The synchronisation family for which MSVC >= 14.50 imports api-ms-win-core-synch-l1-2-0.dll.
+            std::string_view{"std::jthread worker;"},
+            std::string_view{"std::stop_token token;"},
+            std::string_view{"std::stop_source source;"},
+            std::string_view{"std::stop_callback<void (*)()> callback{token, fn};"},
+            std::string_view{"std::call_once(flag, fn);"},
+            std::string_view{"std::once_flag flag;"},
+            std::string_view{"#include <latch>"},
+            std::string_view{"std::latch done{2};"},
+            std::string_view{"#include <barrier>"},
+            std::string_view{"std::barrier sync{2};"},
+            std::string_view{"#include <semaphore>"},
+            std::string_view{"std::counting_semaphore<4> slots{4};"},
+            std::string_view{"std::binary_semaphore gate{0};"},
+            std::string_view{"#include <condition_variable>"},
+            std::string_view{"std::condition_variable ready;"},
+            std::string_view{"std::condition_variable_any ready;"},
+            std::string_view{"flag.wait(false);"},
+            std::string_view{"flag.notify_one();"},
+            std::string_view{"flag.notify_all();"},
+            std::string_view{"std::atomic_wait(&flag, 0);"},
+            std::string_view{"std::atomic_notify_one(&flag);"},
+            std::string_view{"std::atomic_notify_all(&flag);"},
+            // A function-local static with a non-constexpr initialiser (thread-safe statics).
+            std::string_view{"void f() { static const Tables tables; }"},
         };
 
         for (const auto sample : samples) {
@@ -841,6 +1019,166 @@ namespace
         // historically enumerated ones.
         CHECK(scan("project/src/core/Sample.cpp", "#include \"pvd/Types.hpp\"").empty());
         CHECK_FALSE(scan("project/src/core/Sample.cpp", "#include \"pvd/Marshal.hpp\"").empty());
+    }
+
+    TEST_CASE("the synchronisation family behind the Windows 8 synch API set is caught in every spelling")
+    {
+        // MSVC >= 14.50 imports WaitOnAddress / WakeByAddress* from api-ms-win-core-synch-l1-2-0.dll
+        // for thread-safe statics, atomic wait/notify and everything built on them; a plugin must
+        // stay KERNEL32-only, so each of these is forbidden under src/** and plugins/*/src/**.
+        constexpr std::array flagged{
+            std::string_view{"std::jthread worker{fn};"},
+            std::string_view{"std::vector<std::jthread> workers;"},
+            std::string_view{"jthread worker{fn};"},
+            std::string_view{"#include <stop_token>"},
+            std::string_view{"std::stop_token token = source.get_token();"},
+            std::string_view{"std::stop_source source;"},
+            std::string_view{"std::stop_callback callback{token, fn};"},
+            std::string_view{"std::once_flag once;"},
+            std::string_view{"std::call_once(once, fn);"},
+            std::string_view{"call_once(once, fn);"},
+            std::string_view{"#include <latch>"},
+            std::string_view{"# include < latch >"},
+            std::string_view{"std::latch done{2};"},
+            std::string_view{"std :: latch done{2};"},
+            std::string_view{"#include <barrier>"},
+            std::string_view{"std::barrier<> sync{2};"},
+            std::string_view{"#include <semaphore>"},
+            std::string_view{"std::counting_semaphore<4> slots{4};"},
+            std::string_view{"std::binary_semaphore gate{0};"},
+            std::string_view{"#include <condition_variable>"},
+            std::string_view{"std::condition_variable ready;"},
+            std::string_view{"std::condition_variable_any ready;"},
+            std::string_view{"condition_variable ready;"},
+            std::string_view{"flag.wait(false);"},
+            std::string_view{"flag .wait (false);"},
+            std::string_view{"flag->wait(false);"},
+            std::string_view{"ready.wait_for(lock, 1ms);"},
+            std::string_view{"ready.wait_until(lock, deadline);"},
+            std::string_view{"flag.notify_one();"},
+            std::string_view{"flag->notify_one();"},
+            std::string_view{"flag.notify_all();"},
+            std::string_view{"flag->notify_all();"},
+            std::string_view{"std::atomic_wait(&flag, 0);"},
+            std::string_view{"std::atomic_wait_explicit(&flag, 0, order);"},
+            std::string_view{"std::atomic_notify_one(&flag);"},
+            std::string_view{"std::atomic_notify_all(&flag);"},
+        };
+        for (const auto sample : flagged) {
+            CAPTURE(sample);
+            CHECK_FALSE(scan("project/src/core/Sample.cpp", sample).empty());
+            CHECK_FALSE(scan("project/plugins/avif/src/adapters/avif/Sample.cpp", sample).empty());
+            CHECK_FALSE(scan("project/src/pvd/Exports.cpp", sample).empty());
+        }
+
+        // std::thread plus join, std::mutex (SRWLOCK-backed) and plain atomics import nothing
+        // beyond KERNEL32; identifiers that merely contain a forbidden word are not the token.
+        constexpr std::array allowed{
+            std::string_view{"#include <thread>"},
+            std::string_view{"std::thread worker{fn};"},
+            std::string_view{"std::vector<std::thread> workers;"},
+            std::string_view{"worker.join();"},
+            std::string_view{"#include <mutex>"},
+            std::string_view{"std::mutex guard;"},
+            std::string_view{"const std::scoped_lock lock{guard};"},
+            std::string_view{"#include <atomic>"},
+            std::string_view{"std::atomic<int> counter{0};"},
+            std::string_view{"counter.fetch_add(1);"},
+            std::string_view{"counter.load();"},
+            std::string_view{"waiting = true;"},
+            std::string_view{"awaitable.await();"},
+            std::string_view{"notify_owner();"},
+            std::string_view{"host.notify_one_page();"},
+            std::string_view{"int latch_count = 0;"},
+            std::string_view{"std::vector<int> latches;"},
+            std::string_view{"barrier_free();"},
+            std::string_view{"semaphore_like();"},
+            std::string_view{"my_stop_token();"},
+            std::string_view{"call_once_more();"},
+            std::string_view{"jthreads_started = 0;"},
+            std::string_view{"// std::jthread worker;\nreturn;"},
+            std::string_view{"constexpr auto text = \"flag.notify_all();\";"},
+        };
+        for (const auto sample : allowed) {
+            CAPTURE(sample);
+            CHECK(scan("project/src/core/Sample.cpp", sample).empty());
+        }
+    }
+
+    TEST_CASE("a function-local static is forbidden unless it is constexpr")
+    {
+        // MSVC >= 14.50 implements the guarded initialisation of a function-local static
+        // (_Init_thread_wait / _Init_thread_notify) over WaitOnAddress / WakeByAddressAll from
+        // api-ms-win-core-synch-l1-2-0.dll; a plugin must own such state through its composition root.
+        constexpr std::array flagged{
+            std::string_view{"void f() { static const Tables tables; }"},
+            std::string_view{"void f() { static Tables tables; }"},
+            std::string_view{"void f() { static auto tables = make(); }"},
+            std::string_view{"void f() { static int counter = 0; }"},
+            std::string_view{"void f() { static std::string name{}; }"},
+            std::string_view{"void f() { static const Tables tables(1, 2); }"},
+            std::string_view{"void f() { static thread_local int slot = 0; }"},
+            std::string_view{"void f() { static Tables tables; return tables.value(); }"},
+            std::string_view{"void f()\n{\n    static\nconst Tables tables;\n}"},
+            std::string_view{"void f() { if (x) { static const Tables tables; } }"},
+            std::string_view{"void f() { for (;;) { static int n = 0; } }"},
+            std::string_view{"void f() { auto l = [] { static int z = 0; return z; }; }"},
+            std::string_view{"void f() { std::array<int, 2> a{1, 2}; static int q; }"},
+            std::string_view{"const Tables &tables() { static const Tables tables; return tables; }"},
+            std::string_view{
+                "[[nodiscard]] const Tables &tables() noexcept { static const Tables tables; return tables; }"},
+            std::string_view{"template <class F> auto guarded(F &&f) noexcept { static int calls = 0; return f(); }"},
+            std::string_view{"template <typename T, typename U = Pair<T, T>> T g() { static T value; return value; }"},
+            std::string_view{"extern \"C\" UINT32 __stdcall pvdInit(void) { static int calls = 0; return calls; }"},
+            std::string_view{"namespace { struct S { int f() { static int x = 1; return x; } }; }"},
+            std::string_view{"namespace a::b { class C { public: void f() { static int x; } }; }"},
+            std::string_view{"struct S { std::array<int, 2> a_{}; void g() { static int q; } };"},
+            std::string_view{"struct S final : Base { void g() override { static int q; } };"},
+            std::string_view{"enum class E : std::uint8_t { A, B }; void f() { static E e = E::A; }"},
+            std::string_view{"S::S() : a_(1), b_{2} { static int q; }"},
+            std::string_view{"auto f() -> Tables { static Tables t; return t; }"},
+            std::string_view{"int f() { switch (x) { case 1: { static int q; return q; } default: return 0; } }"},
+            std::string_view{"void f() { do { static int q; } while (x); }"},
+            std::string_view{"struct S { int x = [] { static int q = 0; return q; }(); };"},
+        };
+        for (const auto sample : flagged) {
+            CAPTURE(sample);
+            CHECK_FALSE(scan("project/src/core/Sample.cpp", sample).empty());
+            CHECK_FALSE(scan("project/plugins/avif/src/DefaultPlugin.cpp", sample).empty());
+            CHECK_FALSE(scan("project/src/pvd/Exports.cpp", sample).empty());
+        }
+
+        // static constexpr (no guard, constant initialisation), static_assert, static_cast, static
+        // member functions and static data members at class scope, and namespace-scope declarations
+        // are not function-local statics.
+        constexpr std::array allowed{
+            std::string_view{"void f() { static constexpr int k = 3; }"},
+            std::string_view{"void f() { static constexpr std::array<int, 2> k{1, 2}; }"},
+            std::string_view{"void f() { static_assert(sizeof(int) == 4); }"},
+            std::string_view{"void f() { return static_cast<int>(x); }"},
+            std::string_view{"void f() { static_assert(std::is_trivially_destructible_v<Tables>); }"},
+            std::string_view{"class Foo { static bool needed(const Cicp &cicp) noexcept; };"},
+            std::string_view{"class Foo {\n  public:\n    [[nodiscard]] static Result<Foo> create(int x);\n};"},
+            std::string_view{"struct Foo final : public Bar { static Result<Foo> open(std::wstring_view path); };"},
+            std::string_view{"template <class T> struct Foo { static constexpr std::size_t kCount = 65'536; };"},
+            std::string_view{"struct S { static int count(); };"},
+            std::string_view{"void f() { struct Local { static int h(); }; }"},
+            std::string_view{"namespace { int x = 0; }"},
+            std::string_view{"static int helper() { return 0; }"},
+            std::string_view{"namespace { static int x = 0; }"},
+            std::string_view{"class Foo { static bool needed(int) noexcept { return true; } };"},
+            std::string_view{"union U { static int f(); };"},
+            std::string_view{"enum class E : std::uint8_t { A, B };"},
+            std::string_view{"extern \"C\" { int x; }"},
+            std::string_view{"inline namespace v1 { class Foo { static int f(); }; }"},
+            std::string_view{"void f() { } }"},
+            std::string_view{"// void f() { static const Tables tables; }\n"},
+            std::string_view{"constexpr auto text = \"void f() { static const Tables tables; }\";"},
+        };
+        for (const auto sample : allowed) {
+            CAPTURE(sample);
+            CHECK(scan("project/src/core/Sample.cpp", sample).empty());
+        }
     }
 
     TEST_CASE("catch-all handling is restricted to Firewall")
