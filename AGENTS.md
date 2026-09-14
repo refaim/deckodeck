@@ -68,6 +68,18 @@ only. No WIC, no GDI+, no system codecs.
     vcpkg's own directories, and `%TEMP%`. Never touch `C:\Tools\FarManager`.
 12. **Report honestly.** Finish with: what was done, what was not, the exact commands run and their
     results (test counts, coverage numbers, import table). No claim without the output that proves it.
+13. **KERNEL32-only under every MSVC toolset.** No thread-safe statics (a function-local `static`
+    that is not `static constexpr`), no namespace-scope object with a constructor or destructor
+    (the composition root's `processState` in `Exports.cpp` is the one exception), no
+    `std::jthread`/`stop_token`/`stop_source`, no atomic `wait`/`notify_one`/`notify_all`, no
+    `<latch>`/`<barrier>`/`<semaphore>`, no `std::call_once`/`once_flag`, no `condition_variable`
+    anywhere in `src/**` and `plugins/*/src/**`: the newest MSVC runtime (≥ 14.50, Visual Studio
+    2026) implements all of them over `WaitOnAddress`/`WakeByAddressAll` imported from the
+    Windows 8+ synch API set (`api-ms-win-core-synch-l1-2-0.dll`), which failed `check_imports`
+    on CI while MSVC 14.44 still resolves them at run time. Use `std::thread` + `join`, the
+    SRWLOCK-backed `std::mutex` if a lock is ever needed, plain atomics without `wait`/`notify`,
+    and composition-root ownership instead of statics (`SrgbOutputTables` is the worked example,
+    ARCHITECTURE §7). The guard test enforces the tokens; the CI build prints the toolset it used.
 
 ## Toolchain (already installed, do not install other compilers)
 

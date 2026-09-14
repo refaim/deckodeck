@@ -179,29 +179,33 @@ HTML to `build/<preset><suffix>/html` and fails unless `src/**` and `plugins/*/s
 
 ## Continuous integration and releases
 
-GitHub Actions on `windows-latest` (Visual Studio 2022 Enterprise with its clang-cl 19, the
-Windows SDK, CMake, Ninja, `gh`). Every job that builds (`build-x64`, `build-x86`, `lint`,
-`coverage`) starts with the composite action `.github/actions/toolchain`: it checks out
-`microsoft/vcpkg` at the `builtin-baseline` of `vcpkg.json` (the runner's own vcpkg is not
-trusted to carry it) and points `VCPKG_ROOT` at it, restores vcpkg's binary cache from
-`actions/cache` (keyed by the hash of `vcpkg.json`, `ports/`, `triplets/`, `cmake/` and the
-runner image, with partial-match restore keys), and sets `PVDKIT_LLVM_DIR` to the runner's VS
-2022 LLVM so the CMake toolchains and the scripts use the same clang-cl the reference machine
-does. The release workflow's `verify` and `release` jobs build nothing and skip the action; the
-table gates `pack.ps1` runs there find the runner's LLVM through the VS 2022 layout fallback of
+GitHub Actions on `windows-latest` (the Windows Server 2025 image: Visual Studio 2026 Enterprise
+with MSVC 14.51 and clang-cl 22 at the time of Task 24 - newer than the reference machine's
+14.44 / clang-cl 19, which is why every build job prints the MSVC toolset directories and the
+clang-cl version it resolves before configuring - plus the Windows SDK, CMake, Ninja, `gh`).
+Every job that builds (`build-x64`, `build-x86`, `lint`, `coverage`) starts with the composite
+action `.github/actions/toolchain`: it checks out `microsoft/vcpkg` at the `builtin-baseline` of
+`vcpkg.json` (the runner's own vcpkg is not trusted to carry it) and points `VCPKG_ROOT` at it,
+restores vcpkg's binary cache from `actions/cache` (keyed by the hash of `vcpkg.json`, `ports/`,
+`triplets/`, `cmake/` and the runner image, with partial-match restore keys), and sets
+`PVDKIT_LLVM_DIR` to the runner's Visual Studio LLVM (the VS 2022 layout first, any VS major as
+the fallback) so the CMake toolchains and the scripts use one and the same clang-cl. The release
+workflow's `verify` and `release` jobs build nothing and skip the action; the table gates
+`pack.ps1` runs there find the runner's LLVM through the VS 2022 layout fallback of
 `scripts/llvm-dir.ps1`. Every workflow declares `permissions: contents: read`; only the
 `release` job holds `contents: write` (for `gh release create` and the README push).
 
 - `.github/workflows/ci.yml` runs on every push to `master` and every pull request:
   `build-x64` and `build-x86` (`.github/workflows/build.yml`, reusable: configure the `release` /
-  `release-x86` preset, `cmake --build --parallel`, `ctest` including the import/export-table
-  checks, then upload every `<NAME>.pvd` and its `package/` staging as the artifact
-  `plugins-<arch>`); `lint` (the x64 `debug` configure for `compile_commands.json`, the release
-  DLLs from the `plugins-x64` artifact, cppcheck 2.21.0 extracted from its release MSI, BinSkim
-  4.4.9.11 from its NuGet package - both pinned by SHA-256 - and PSScriptAnalyzer from the
-  gallery, then `scripts/lint.ps1 -CppcheckDir ... -BinSkimDir ...`); `coverage`
-  (`scripts/coverage.ps1 -Preset coverage`, fails below 100 %). No ASan job: that preset stays a
-  local gate (`scripts/package.ps1`). One run per ref at a time; every job has a timeout.
+  `release-x86` preset after printing the toolset versions, `cmake --build --parallel`, `ctest`
+  including the import/export-table checks, then upload every `<NAME>.pvd` and its `package/`
+  staging as the artifact `plugins-<arch>`); `lint` (the x64 `debug` configure for
+  `compile_commands.json`, the release DLLs from the `plugins-x64` artifact, cppcheck 2.21.0
+  extracted from its release MSI, BinSkim 4.4.9.11 from its NuGet package - both pinned by
+  SHA-256 - and PSScriptAnalyzer from the gallery, then `scripts/lint.ps1 -CppcheckDir ...
+  -BinSkimDir ...`); `coverage` (`scripts/coverage.ps1 -Preset coverage`, fails below 100 %). No
+  ASan job: that preset stays a local gate (`scripts/package.ps1`). One run per ref at a time;
+  every job has a timeout.
 - `.github/workflows/release.yml` runs on the tags `avif/vX.Y.Z` and `rpgmvp/vX.Y.Z`: `verify`
   (`scripts/release-tag.ps1`: the tag names a plugin directory, `plugins/<id>/CMakeLists.txt`
   declares exactly that `VERSION`, and `plugins/<id>/package/ChangeLog` opens with

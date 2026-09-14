@@ -12,6 +12,7 @@
 #include "core/CodecPlugin.hpp"
 #include "core/Describe.hpp"
 #include "core/IDecoder.hpp"
+#include "core/colour/Pipeline.hpp"
 #include "pvd/Plugin.hpp"
 #include "pvd/PluginConstants.hpp"
 #include "pvd/Types.hpp"
@@ -39,7 +40,7 @@ namespace pvdkit::pvd
         {
           public:
             explicit DefaultPlugin(const core::DecoderOptions &options)
-                : plugin_{fileSource_, decoderFactory_, describer_, options, defaultInfo()}
+                : plugin_{fileSource_, decoderFactory_, describer_, outputTables_, options, defaultInfo()}
             {
             }
 
@@ -57,6 +58,10 @@ namespace pvdkit::pvd
             win::FileSource fileSource_;
             rpgmvp::DecoderFactory decoderFactory_;
             rpgmvp::Describer describer_;
+            // The sRGB output tables every colour-presenting session of this plugin borrows: pure
+            // math built once here, in pvdInit, so no function-local static exists anywhere in the
+            // plugin (MSVC >= 14.50 would import api-ms-win-core-synch-l1-2-0.dll for its guard).
+            core::colour::SrgbOutputTables outputTables_;
             core::CodecPlugin plugin_;
         };
 

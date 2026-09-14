@@ -8,7 +8,10 @@ the v1 exclusions. Namespace: `pvdkit::avif`. Include root: `plugins/avif/src`.
 ## 1. Composition root (`src/DefaultPlugin.cpp`)
 
 `pvd::makePlugin()` returns an object that owns, in declaration order, `win::FileSource`,
-`avif::DecoderFactory`, `avif::Describer` and `core::CodecPlugin`, and forwards `IPlugin`.
+`avif::DecoderFactory`, `avif::Describer`, `core::colour::SrgbOutputTables` (the sRGB output tables
+every HDR/wide-gamut session of this plugin instance borrows; built once in `pvdInit`, ≈ 5 ms on
+x64, so that no function-local static exists in the DLL - ARCHITECTURE §7) and `core::CodecPlugin`,
+and forwards `IPlugin`.
 Options: `maxThreads = max(1, hardware_concurrency())`, `strict = false`,
 `maxPixels = 16384 × 16384`, `maxDimension = 32768`.
 The shared presentation pass reuses that thread budget but caps itself at four disjoint row bands;

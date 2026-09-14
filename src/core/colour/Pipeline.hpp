@@ -21,7 +21,10 @@ namespace pvdkit::core::colour
     /// The exact sRGB output quantizer. For every linear float it returns the 16-bit code the
     /// exact OETF-plus-lround computation returns, found by searching precomputed decision
     /// thresholds (never by interpolating an OETF value). Pure, immutable math that depends on no
-    /// Cicp, so one instance per module serves every Presentation: srgbOutputTables().
+    /// Cicp, so a plugin's composition root builds one instance per plugin and every Presentation
+    /// of that plugin borrows it by reference (docs/ARCHITECTURE.md section 7). Nothing here is a
+    /// function-local static: the guarded initialisation of one would make MSVC >= 14.50 import
+    /// api-ms-win-core-synch-l1-2-0.dll, and a plugin imports KERNEL32.dll only.
     class SrgbOutputTables
     {
       public:
@@ -38,14 +41,12 @@ namespace pvdkit::core::colour
         std::array<std::uint16_t, kBucketCount + 1> buckets_{};
     };
 
-    /// The tables shared by every Presentation of this module, built once on first use. The one
-    /// deliberate piece of process-wide state in the kit: see docs/ARCHITECTURE.md §7.
-    [[nodiscard]] const SrgbOutputTables &srgbOutputTables();
-
     class Presentation
     {
       public:
-        Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits);
+        /// `outputTables` is borrowed for the lifetime of this object; the caller keeps it alive
+        /// (the composition root owns it and outlives every session, ARCHITECTURE section 2).
+        Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits, const SrgbOutputTables &outputTables);
 
         Presentation(const Presentation &) = delete;
         Presentation &operator=(const Presentation &) = delete;
@@ -60,7 +61,7 @@ namespace pvdkit::core::colour
         /// Converts a whole tightly packed BGRA64 image (`height` rows of `pitchBytes`) in place.
         /// Images of at least 256 Ki pixels are split into min(clamp(maxThreads, 1, 4), height)
         /// disjoint row bands: the last band runs on the calling thread, the others on
-        /// std::jthread workers that are joined before the call returns.
+        /// std::thread workers that are joined before the call returns, on every path.
         void applyImage(std::span<std::byte> pixels, std::uint32_t pitchBytes, std::uint32_t height,
                         unsigned maxThreads) const;
         [[nodiscard]] float sourcePeakNits() const noexcept;

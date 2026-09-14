@@ -61,7 +61,7 @@ namespace pvdkit::core
             test::FakeDecoderFactory factory(factoryState, decoderState, test::meta());
             test::DescriberState describerState;
             test::FakeImageDescriber describer(describerState);
-            CodecPlugin plugin(source, factory, describer, test::options(), pluginInfo());
+            CodecPlugin plugin(source, factory, describer, test::outputTables(), test::options(), pluginInfo());
             const std::vector head{std::byte{1}};
 
             CHECK_THROWS_AS(static_cast<void>(plugin.open(pvd::OpenRequest{"throw.avif", 1, head})),
@@ -85,7 +85,7 @@ namespace pvdkit::core
             test::FakeDecoderFactory factory(factoryState, decoderState, test::meta());
             test::DescriberState describerState;
             test::FakeImageDescriber describer(describerState);
-            CodecPlugin plugin(source, factory, describer, test::options(), pluginInfo());
+            CodecPlugin plugin(source, factory, describer, test::outputTables(), test::options(), pluginInfo());
             const std::vector head{std::byte{1}};
 
             CHECK_THROWS_AS(static_cast<void>(plugin.open(pvd::OpenRequest{"throw.avif", 1, head})),
@@ -110,7 +110,7 @@ namespace pvdkit::core
             test::FakeDecoderFactory factory(factoryState, decoderState, test::meta());
             test::DescriberState describerState;
             test::FakeImageDescriber describer(describerState);
-            CodecPlugin plugin(source, factory, describer, test::options(), pluginInfo());
+            CodecPlugin plugin(source, factory, describer, test::outputTables(), test::options(), pluginInfo());
             const std::vector head{std::byte{1}};
 
             CHECK_THROWS_AS(static_cast<void>(plugin.open(pvd::OpenRequest{"throw.avif", 2, head})),
@@ -135,7 +135,7 @@ namespace pvdkit::core
             test::DescriberState describerState;
             describerState.throwOnDescribe = true;
             test::FakeImageDescriber describer(describerState);
-            CodecPlugin plugin(source, factory, describer, test::options(), pluginInfo());
+            CodecPlugin plugin(source, factory, describer, test::outputTables(), test::options(), pluginInfo());
             const std::vector head{std::byte{1}};
 
             CHECK_THROWS_AS(static_cast<void>(plugin.open(pvd::OpenRequest{"throw.avif", 2, head})),
@@ -157,7 +157,7 @@ namespace pvdkit::core
                 auto fileData =
                     std::make_unique<test::FakeFileData>(std::vector<std::byte>{std::byte{1}}, dataDestructions);
                 FileSession session(std::move(fileData), decoder(imageMeta, state), test::imageInfo(imageMeta),
-                                    test::options());
+                                    test::options(), test::outputTables());
                 const auto existing = session.decodePage(0, pvd::Progress{});
                 REQUIRE(existing.has_value());
                 const auto existingPixels = bytesOf(*existing);
@@ -186,7 +186,7 @@ namespace pvdkit::core
                 auto fileData =
                     std::make_unique<test::FakeFileData>(std::vector<std::byte>{std::byte{1}}, dataDestructions);
                 FileSession session(std::move(fileData), decoder(imageMeta, state), test::imageInfo(imageMeta),
-                                    test::options());
+                                    test::options(), test::outputTables());
                 const auto existing = session.decodePage(0, pvd::Progress{});
                 REQUIRE(existing.has_value());
                 const auto existingPixels = bytesOf(*existing);
@@ -226,7 +226,7 @@ namespace pvdkit::core
                     auto fileData =
                         std::make_unique<test::FakeFileData>(std::vector<std::byte>{std::byte{1}}, dataDestructions);
                     FileSession session(std::move(fileData), decoder(imageMeta, state), test::imageInfo(imageMeta),
-                                        test::options());
+                                        test::options(), test::outputTables());
                     const auto existing = session.decodePage(0, pvd::Progress{});
                     REQUIRE(existing.has_value());
                     const auto existingPixels = bytesOf(*existing);

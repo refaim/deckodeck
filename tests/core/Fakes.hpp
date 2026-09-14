@@ -16,6 +16,7 @@
 #include "core/IDecoder.hpp"
 #include "core/IFileSource.hpp"
 #include "core/IImageDescriber.hpp"
+#include "core/colour/Pipeline.hpp"
 
 namespace pvdkit::core::test
 {
@@ -317,6 +318,15 @@ namespace pvdkit::core::test
     inline DecoderOptions options(const std::uint64_t maxPixels = 1'000)
     {
         return DecoderOptions{2, false, maxPixels, 100};
+    }
+
+    /// The sRGB output tables a plugin's composition root would own, built once for the test
+    /// executable (a function-local static is fine in a test executable; the guard forbids it in
+    /// plugin code, where the composition root owns the instance instead).
+    inline const colour::SrgbOutputTables &outputTables()
+    {
+        static const colour::SrgbOutputTables tables;
+        return tables;
     }
 
     inline pvd::ImageInfo imageInfo(const ImageMeta &imageMeta)

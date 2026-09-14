@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <thread>
-#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "core/colour/Transfer.hpp"
@@ -31,6 +31,42 @@ namespace pvdkit::core::colour
             const auto scale = kDefaultHdrPeakNits * std::pow(luminance, 0.2F);
             return {scene[0] * scale, scene[1] * scale, scene[2] * scale};
         }
+
+        /// The band workers of Presentation::applyImage: std::thread objects joined when this goes
+        /// out of scope, on the normal path and during unwinding (a std::thread constructor that
+        /// fails throws std::system_error after the earlier workers have started). std::jthread
+        /// would join the same way, but its stop_token state is built on atomic wait/notify, for
+        /// which MSVC >= 14.50 imports api-ms-win-core-synch-l1-2-0.dll; a plugin imports
+        /// KERNEL32.dll only (docs/ARCHITECTURE.md section 7). No stop request exists here: a
+        /// band either runs to completion or was never started.
+        class BandWorkers
+        {
+          public:
+            explicit BandWorkers(const std::size_t capacity)
+            {
+                workers_.reserve(capacity);
+            }
+
+            ~BandWorkers()
+            {
+                for (auto &worker : workers_) {
+                    worker.join();
+                }
+            }
+
+            BandWorkers(const BandWorkers &) = delete;
+            BandWorkers &operator=(const BandWorkers &) = delete;
+            BandWorkers(BandWorkers &&) = delete;
+            BandWorkers &operator=(BandWorkers &&) = delete;
+
+            template <class Task> void start(Task &&task)
+            {
+                workers_.emplace_back(std::forward<Task>(task));
+            }
+
+          private:
+            std::vector<std::thread> workers_;
+        };
 
         std::uint16_t exactQuantize(const float linear) noexcept
         {
@@ -96,19 +132,6 @@ namespace pvdkit::core::colour
         return static_cast<std::uint16_t>(found - thresholds_.begin());
     }
 
-    const SrgbOutputTables &srgbOutputTables()
-    {
-        // Built once per module on first use; the language guarantees one thread-safe
-        // initialisation ([stmt.dcl]). Immutable afterwards, trivially destructible, no host or
-        // file dependency: docs/ARCHITECTURE.md §7 records why this is not injected.
-        // A destructor here would register an atexit entry in every plugin DLL's CRT for a
-        // function-local static that in fact never needs to run one; pin triviality so a future
-        // member (e.g. a std::vector) fails to compile instead of adding one silently.
-        static_assert(std::is_trivially_destructible_v<SrgbOutputTables>);
-        static const SrgbOutputTables tables;
-        return tables;
-    }
-
     float sourcePeakNits(const std::uint16_t transfer, const std::optional<float> masteringPeakNits) noexcept
     {
         if (transfer == 18) {
@@ -123,12 +146,13 @@ namespace pvdkit::core::colour
         return std::min(*masteringPeakNits, 10'000.0F);
     }
 
-    Presentation::Presentation(const Cicp &cicp, const std::optional<float> masteringPeakNits)
+    Presentation::Presentation(const Cicp &cicp, const std::optional<float> masteringPeakNits,
+                               const SrgbOutputTables &outputTables)
         : active_(needed(cicp)), hlg_(cicp.transfer == 18), hdr_(Transfer::isHdr(cicp.transfer)),
           sourcePeakNits_(colour::sourcePeakNits(cicp.transfer, masteringPeakNits)),
           primaries_(Primaries::toSrgb(cicp.primaries)),
           sourceLuminance_(Primaries::luminanceCoefficients(cicp.primaries)), toneMap_(sourcePeakNits_),
-          outputTables_(srgbOutputTables())
+          outputTables_(outputTables)
     {
         if (!active_) {
             return;
@@ -198,9 +222,9 @@ namespace pvdkit::core::colour
 
         // This object is immutable after construction and apply() is const noexcept, so the
         // workers share it safely; every band is a disjoint row range. The last band runs on the
-        // calling thread, and the jthread destructors join the others before this returns.
-        std::vector<std::jthread> workers;
-        workers.reserve(bandCount - 1);
+        // calling thread, and the BandWorkers destructor joins the others before this returns,
+        // on the normal path and while unwinding.
+        BandWorkers workers{bandCount - 1};
         const auto rowsPerBand = height / bandCount;
         const auto extraRows = height % bandCount;
         std::uint32_t firstRow = 0;
@@ -208,7 +232,7 @@ namespace pvdkit::core::colour
             const auto rowCount = rowsPerBand + (bandIndex < extraRows ? 1U : 0U);
             const auto band = pixels.subspan(static_cast<std::size_t>(firstRow) * pitchBytes,
                                              static_cast<std::size_t>(rowCount) * pitchBytes);
-            workers.emplace_back([this, band]() noexcept { apply(band); });
+            workers.start([this, band]() noexcept { apply(band); });
             firstRow += rowCount;
         }
         apply(pixels.subspan(static_cast<std::size_t>(firstRow) * pitchBytes));

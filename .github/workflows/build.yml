@@ -36,6 +36,28 @@ jobs:
         with:
           arch: ${{ inputs.arch }}
 
+      # Which MSVC toolset (vcruntime + STL) and which clang-cl this run builds with, printed
+      # before anything is compiled so that an import-table failure is attributable to a toolset
+      # at a glance: MSVC >= 14.50 imports api-ms-win-core-synch-l1-2-0.dll for thread-safe
+      # statics and atomic waits (AGENTS.md rule 13, Task 24). clang-cl takes the newest toolset
+      # under <VS>\VC\Tools\MSVC unless VCToolsInstallDir points elsewhere; the probe prints the
+      # one it actually resolves (its -### driver line names the MSVC include directory).
+      - name: Toolset versions (MSVC, clang-cl)
+        run: |
+          $clang = Join-Path $env:PVDKIT_LLVM_DIR "clang-cl.exe"
+          & $clang --version
+          if ($env:VCToolsVersion) { "VCToolsVersion (vcvars): $env:VCToolsVersion" }
+          if ($env:VCToolsInstallDir) { "VCToolsInstallDir: $env:VCToolsInstallDir" }
+          $vsRoot = (Get-Item $env:PVDKIT_LLVM_DIR).Parent.Parent.Parent.Parent.Parent.FullName
+          $toolsets = @(Get-ChildItem (Join-Path $vsRoot "VC\Tools\MSVC") -Directory -ErrorAction SilentlyContinue | Sort-Object Name)
+          "MSVC toolsets under ${vsRoot}: $($toolsets.Name -join ', ')"
+          $probe = Join-Path $env:RUNNER_TEMP "toolset-probe.cpp"
+          Set-Content -LiteralPath $probe -Value "int main() { return 0; }"
+          $driver = cmd /c "`"$clang`" -### /c `"$probe`" 2>&1" | Out-String
+          $used = @([regex]::Matches($driver, 'VC\\+Tools\\+MSVC\\+([0-9.]+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+          if ($used.Count -eq 0) { throw "clang-cl -### names no VC\Tools\MSVC directory:`n$driver" }
+          "MSVC toolset resolved by clang-cl: $($used -join ', ')"
+
       - name: Configure
         run: cmake --preset $env:PRESET
 

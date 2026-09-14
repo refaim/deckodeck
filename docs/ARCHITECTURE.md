@@ -117,8 +117,10 @@ build enforces the ownership (the shared libraries do not see the plugin roots) 
 enforces it independently by resolving every include against the source roots (§5).
 
 Everything is a value or a `std::unique_ptr`. Objects that are injected by reference (`IFileSource&`,
-`IDecoderFactory&`, `const IImageDescriber&`) outlive their users by construction (the composition
-root owns them in declaration order). Classes holding references delete copy and move.
+`IDecoderFactory&`, `const IImageDescriber&`, `const colour::SrgbOutputTables&`) outlive their users
+by construction (the composition root owns them in declaration order). Classes holding references
+delete copy and move. There is no other way to hold state across sessions: no function-local
+static, no namespace-scope object with a constructor or destructor (§7).
 
 ## 3. Canonical interfaces
 
@@ -414,8 +416,11 @@ Decisions (Task 7, open point 1):
   built in one merge pass over the sorted thresholds; no OETF value is ever interpolated, and the
   result is proven equal to the former per-pixel `pow` path over every float in [0, 1] on both
   architectures (`tests/core/colour/PipelineTests.cpp`, the skipped exhaustive diagnostic). Those
-  tables depend on no `Cicp`, so every `Presentation` borrows the one instance `srgbOutputTables()`
-  returns (§7) instead of building 384 KiB per session. PQ uses `masteringPeakNits` clamped to 10,000
+  tables depend on no `Cicp`, so the composition root builds one `SrgbOutputTables` per plugin
+  instance (in `pvdInit`, ≈ 5 ms on x64 / 15 ms on x86 in Release) and every `Presentation` of that
+  plugin borrows it by `const&` through `CodecPlugin` and `FileSession` (§7) instead of building
+  384 KiB per session; `Presentation::outputTables()` and `FileSession::outputTables()` expose the
+  borrowed instance so the tests can pin the sharing. PQ uses `masteringPeakNits` clamped to 10,000
   nits or 1,000 nits when absent/invalid; HLG always uses its 1,000-nit reference display.
   Identity is primaries 1 or 2 plus transfer 1, 2, 6, 13, 14 or 15. It is short-circuited so the
   existing SDR byte stream is unchanged; conversion is selected for any other primaries or
@@ -424,9 +429,12 @@ Decisions (Task 7, open point 1):
   BGRA64 image: below 256 Ki pixels on the calling thread, otherwise in
   `min(clamp(maxThreads, 1, 4), height)` disjoint row bands (`maxThreads == 0`, the
   `DecoderOptions` default, means one band), the last band on the calling thread and the others
-  on `std::jthread` workers joined before the call returns. `Presentation` is immutable after
-  construction and `apply` is `const noexcept`, so the workers share it safely and no exception
-  can cross a thread boundary.
+  on `std::thread` workers that a scope-bound joiner (`BandWorkers`, private to `Pipeline.cpp`)
+  joins before the call returns, on the normal path and while unwinding after a failed thread
+  start. `std::jthread` is not used: its `stop_token` state waits and notifies on atomics, for
+  which MSVC ≥ 14.50 imports `api-ms-win-core-synch-l1-2-0.dll` (§7). `Presentation` is immutable
+  after construction and `apply` is `const noexcept`, so the workers share it safely and no
+  exception can cross a thread boundary.
 - `Transform` (`src/core/Transform.hpp/.cpp`): pure functions over `PixelView`
   (`std::span<const std::byte>`, width, height, bytesPerPixel, pitch, the four integers defaulted
   to 0; always passed by `const&`):
@@ -443,16 +451,18 @@ Decisions (Task 7, open point 1):
   `imir` semantics follow the installed `avif.h` comment for `axis`; the adapter maps the number to
   `MirrorAxis`. Unit tests use 2×3 / 3×2 synthetic images with hand-derived expected outputs.
 - `CodecPlugin : pvd::IPlugin` (`src/core/CodecPlugin.hpp/.cpp`), ctor
-  `(IFileSource&, IDecoderFactory&, const IImageDescriber&, const DecoderOptions&, PluginInfo)`
-  (the options are copied into the member; `FileSession` takes them the same way).
+  `(IFileSource&, IDecoderFactory&, const IImageDescriber&, const colour::SrgbOutputTables&,
+  const DecoderOptions&, PluginInfo)` (the options are copied into the member; `FileSession` takes
+  them the same way; the tables are borrowed and handed to every session).
   `open()`: `recognises(head)` else `NotRecognised`; if `fileSize == 0` data = `head`, else
   `fileSource.open(name)` → `IFileData` owned by the session; `factory.create(data, options)`;
   `describer.describe(meta)`; build `ImageInfo{frameCount, animated, formatName, compression,
   comments}`; return `FileSession`. It is the same class for every plugin.
 - `FileSession : pvd::IFileSession` (`src/core/FileSession.hpp/.cpp`): owns
   `std::unique_ptr<IFileData>` (null in memory mode), `std::unique_ptr<IDecoder>`, `ImageInfo`,
-  `std::vector<std::unique_ptr<PixelBuffer>> outstanding_`, `DecoderOptions`, and one immutable
-  `Presentation` for the session when colour conversion is needed.
+  `std::vector<std::unique_ptr<PixelBuffer>> outstanding_`, `DecoderOptions`, the borrowed
+  `const colour::SrgbOutputTables&` (ctor parameter, exposed by `outputTables()`), and one immutable
+  `Presentation` over those tables for the session when colour conversion is needed.
   - `pageInfo(p)`: range check; `displaySize(meta)`;
     `bitsPerPixel = indexed ? depth : depth × (hasAlpha ? 4 : 3)` (informational, so indexed4
     reports 4 and 10-bit RGBA reports 40); `frameTimeMs` = `frameTiming(p)` when animated else 0.
@@ -471,7 +481,8 @@ Decisions (Task 7, open point 1):
   - `freePage(span)`: erase the buffer whose `bytes().data() == span.data()`; return whether found.
 - A plugin's composition root (`plugins/<id>/src/DefaultPlugin.cpp`) defines `pvd::makePlugin()`
   returning an object that owns `win::FileSource`, the plugin's `IDecoderFactory`, its
-  `IImageDescriber` and a `core::CodecPlugin` (declared in that order) and forwards `IPlugin`.
+  `IImageDescriber`, the `core::colour::SrgbOutputTables` and a `core::CodecPlugin` (declared in
+  that order) and forwards `IPlugin`.
   It chooses the `DecoderOptions` and builds `PluginInfo` from `kPluginIdentity` plus run-time
   library versions. Every production composition sets `deepOutput = true`, so sources deeper than
   8 bits are delivered as BGRA64 without a build switch; 8-bit-and-shallower sources keep their
@@ -613,7 +624,9 @@ Decisions (Task 7, open point 1):
   `asan` preset from scratch (`build/asan-pkg`: configure, build, `ctest --preset asan`; any
   AddressSanitizer report fails the packaging), then `pack.ps1` into `dist/`. The GitHub
   workflows (`.github/workflows/`, Task 23; README.md "Continuous integration and releases")
-  run the release builds, `ctest`, `lint.ps1` and `coverage.ps1` on `windows-latest` and, on a
+  run the release builds (each build job first prints the MSVC toolset directories and the
+  clang-cl version it builds with, so an import-table failure is attributable to a toolset at a
+  glance - Task 24), `ctest`, `lint.ps1` and `coverage.ps1` on `windows-latest` and, on a
   `<id>/vX.Y.Z` tag, `pack.ps1` plus `gh release create` and the README "Downloads" row update.
   The toolchain files resolve the LLVM directory through `cmake/find-llvm.cmake`
   (`PVDKIT_LLVM_DIR`, the known VS 2022 layouts, PATH; `scripts/llvm-dir.ps1` mirrors it for
@@ -754,8 +767,14 @@ Decisions (Task 7, open point 1):
   counterparts: `tests/adapters/LeakTests.cpp` (`FileMapping`/`FileSource` open and close, every
   failure path) and `plugins/<id>/tests/adapters/LeakTests.cpp` (decoder create/decode/destroy on
   every fixture with the error paths, refusals, the composed plugin). Cost: the task's "< 30 s per
-  architecture" budget applies to the plain presets, and `avif_leak_tests` meets it there: ~15 s
-  in Release, ~24-27 s in Debug, x64 and x86 alike. The instrumented builds run the same N and
+  architecture" budget applies to the plain presets, and `avif_leak_tests` met it there until Task
+  24: ~15 s in Release, ~24-27 s in Debug, x64 and x86 alike. Since Task 24 every `pvdInit` builds
+  the plugin's `SrgbOutputTables` (§7: ≈ 5 / 12 ms per call on x64 Release / Debug, ≈ 15 / 25 ms
+  on x86), and the scenarios that cycle `pvdInit` about 650 times (the disk and memory round
+  trips, init/exit cycle, LoadLibrary/FreeLibrary) pay it: measured on a loaded machine,
+  `avif_leak_tests` went from 46 s to 64 s in Debug x86 and the init/exit cycle alone from 1 ms
+  to 2.5 s in Debug x64 - a test-time cost only, since the host calls `pvdInit` once per plugin
+  load. The instrumented builds run the same N and
   are deliberately not trimmed (a smaller N there would test less of exactly the build the gate
   is instrumented for): ~30-42 s under `coverage`, ~30 s under `asan`.
 - `tests/guard`: walks `src/` and every `plugins/*/src/` and fails on forbidden tokens: `new `,
@@ -764,7 +783,19 @@ Decisions (Task 7, open point 1):
   `plugins/*/src/adapters/**`, `src/pvd/Exports.cpp` and `src/pvd/PvdApi.hpp` (the same set
   AGENTS.md rule 4 names), codec headers (`avif/avif.h`, `dav1d/dav1d.h`; extend the list with
   each plugin's library) outside those adapters and `Exports.cpp`, `catch (`
-  outside `Firewall.hpp`, `LCOV_EXCL`, `__builtin_unreachable`, `[[assume`. Layering rules,
+  outside `Firewall.hpp`, `LCOV_EXCL`, `__builtin_unreachable`, `[[assume`, and (Task 24, AGENTS.md
+  rule 13) the synchronisation family for which MSVC ≥ 14.50 imports
+  `api-ms-win-core-synch-l1-2-0.dll`: `jthread`, `stop_token`/`stop_source`/`stop_callback`,
+  `call_once`/`once_flag`, `<latch>`/`std::latch`, `<barrier>`/`std::barrier`,
+  `<semaphore>`/`std::counting_semaphore`/`std::binary_semaphore`, `condition_variable(_any)`,
+  `.wait(`/`.wait_for(`/`.wait_until(`/`.notify_one(`/`.notify_all(` (also `->`) and
+  `std::atomic_wait*`/`std::atomic_notify_*`, plus any function-local `static` that is not
+  `static constexpr` (thread-safe statics: `_Init_thread_*`). For that last rule every brace scope
+  is classified by its header - the code since the previous `;`, `{` or `}` minus access
+  specifiers, attributes, `alignas` and `template <...>` heads - as declarative (`namespace`,
+  `class`, `struct`, `union`, `enum`, `extern "C" {`; no parenthesis in the header) or executable
+  (function bodies, control statements, lambdas, brace initialisers); `static_assert` and
+  `static_cast` are different tokens. Layering rules,
   re-expressed for the two-root tree (Task 7, open point 3), the same under `src/` and under
   `plugins/<id>/src/`:
   - `core/**` includes no `pvd/` header other than `pvd/Types.hpp` and `pvd/Plugin.hpp` (allowlist);
@@ -808,23 +839,41 @@ Decisions (Task 7, open point 1):
 
 ## 7. Concurrency and lifetime
 
-- The host may decode several files at once (prefetch). Every session is independent; the only
-  process-wide state is the composition root created in `pvdInit`, plus one deliberate exception
-  described next. Codec libraries must be thread-safe across decoder instances (libavif/dav1d are).
-- The sRGB output tables (`colour::srgbOutputTables()`, `src/core/colour/Pipeline.cpp`) are the
-  single piece of process-wide state outside the composition root: a function-local `static const
-  SrgbOutputTables` built on first use, once per module (each plugin DLL links its own copy of
-  `pvdkit_core`), which the language initialises exactly once and thread-safely ([stmt.dcl]) even
-  when two sessions open HDR files at the same moment. It is immutable after construction, pure
-  math (the decision thresholds of the sRGB OETF and their bucket index), trivially destructible,
-  and depends on no host call, file, option or `Cicp`; it is a constant of the sRGB standard that
-  happens to be computed rather than typed. That is why it is not injected through the composition
-  root: injecting it would thread a reference to a constant through `CodecPlugin`, `FileSession`
-  and `Presentation` for no configurability, and the alternative of building it per session cost
-  ≈ 7.7 ms on x64 (≈ 18 ms on x86) inside every `pvdFileOpen` of an HDR or wide-gamut file. Every
-  `Presentation` borrows it by reference (`Presentation::outputTables()` exposes the borrowed
-  object so a test can pin that two sessions and two threads share the same instance). Nothing
-  else in `src/**` or `plugins/*/src/**` may hold state across sessions.
+- The host may decode several files at once (prefetch) and may open files from several threads;
+  every session is independent, and the only process-wide state is the composition root created
+  in `pvdInit` (the `std::unique_ptr<ProcessState>` in `Exports.cpp`, whose destructor is the one
+  `atexit` registration a plugin DLL makes). Codec libraries must be thread-safe across decoder
+  instances (libavif/dav1d are).
+- No thread-safe statics, no `std::jthread`/`stop_token`/`stop_source`, no atomic
+  `wait`/`notify_*`, no `<latch>`/`<barrier>`/`<semaphore>`, no `call_once`/`once_flag`, no
+  `condition_variable` anywhere in `src/**` or `plugins/*/src/**` (AGENTS.md rule 13, guard
+  test). Reason (Task 24, observed on the first CI run): the vcruntime and STL of MSVC ≥ 14.50
+  (Visual Studio 2026) implement all of them over `WaitOnAddress`/`WakeByAddressAll`, imported
+  directly from `api-ms-win-core-synch-l1-2-0.dll` instead of the run-time lookup with a fallback
+  that MSVC 14.44 still performs - the guarded initialisation of a function-local `static`
+  (`_Init_thread_wait`/`_Init_thread_notify`) and `std::jthread`'s `stop_token` state
+  (`__std_atomic_wait_direct`/`__std_atomic_notify_all_direct`) were the two users in the tree,
+  and both `AVIF.pvd` and `RPGMVP.pvd` failed `check_imports` on x64 and x86 there while the same
+  sources import `KERNEL32.dll` only on 14.44. What to use instead: `std::thread` plus `join`
+  (`_beginthreadex`/`WaitForSingleObjectEx`), the SRWLOCK-backed `std::mutex` if a lock is ever
+  needed, plain atomics without `wait`/`notify`, and composition-root ownership instead of
+  statics.
+- The sRGB output tables (`colour::SrgbOutputTables`, `src/core/colour/Pipeline.cpp`) are the
+  case in point: pure math (the decision thresholds of the sRGB OETF and their bucket index) that
+  depends on no host call, file, option or `Cicp`, so it is built once per plugin instance - by
+  the composition root, in `pvdInit`, ≈ 5 ms on x64 and ≈ 15 ms on x86 in Release (12 / 25 ms in
+  Debug) - and borrowed by `const&` through `CodecPlugin` and `FileSession` by every
+  `Presentation` of that plugin (`Presentation::outputTables()` and `FileSession::outputTables()`
+  expose the borrowed object so a test can pin that every session of one plugin shares one
+  instance and that a second plugin has its own). Building it at construction rather than lazily
+  on the first HDR session is what keeps it free of synchronisation: `pvdFileOpen` may run on
+  several threads at once (the 8-thread leak scenario and the four-thread e2e case do exactly
+  that), so a lazily built member would need a lock, and a function-local static would need the
+  runtime's guard - the import this section forbids. The price is paid once per `pvdInit`, which
+  the host calls once per plugin load; only the leak scenarios that cycle `pvdInit` (init/exit
+  cycle, the disk and memory round trips, LoadLibrary/FreeLibrary) see it, ≈ +7 s per plugin in
+  Debug x64. The tables are immutable after construction and live in the composition root, which
+  outlives every session by construction (§2).
 - A `DecodedPage` view is valid until `freePage` or session destruction, whichever comes first.
 - In memory mode the file bytes belong to the host and are valid until `pvdFileClose` (SDK
   guarantee); the session stores only a `std::span` and no `IFileData`.

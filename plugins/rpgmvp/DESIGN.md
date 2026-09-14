@@ -53,8 +53,11 @@ carried noise - version 2 makes it opaque, so a re-measurement starts from a fre
 ## Core and composition
 
 `src/core/Describe` derives the public format, compression and comment strings solely from
-`ImageMeta`. `DefaultPlugin.cpp` owns the Win32 file source, libspng decoder factory, describer and
-shared `CodecPlugin` in dependency order. Its limits and identity match the generated VERSIONINFO.
+`ImageMeta`. `DefaultPlugin.cpp` owns the Win32 file source, libspng decoder factory, describer,
+the shared `core::colour::SrgbOutputTables` (built once in `pvdInit`; libspng reports identity
+CICP, so no session of this plugin presents colour today, but `CodecPlugin` takes the tables by
+reference and no function-local static may replace them - ARCHITECTURE §7) and the shared
+`CodecPlugin` in dependency order. Its limits and identity match the generated VERSIONINFO.
 Deep output is enabled by default: sources deeper than 8 bits are preserved as BGRA64. Sources at
 8 bits or below retain the BGR24/BGRA32 layouts.
 

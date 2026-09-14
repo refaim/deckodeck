@@ -8,6 +8,8 @@
 
 #include "Fakes.hpp"
 #include "core/CodecPlugin.hpp"
+#include "core/FileSession.hpp"
+#include "core/colour/Pipeline.hpp"
 
 namespace pvdkit::core
 {
@@ -30,11 +32,14 @@ namespace pvdkit::core
             test::FakeFileSource source{fileState};
             test::FakeDecoderFactory factory;
             test::FakeImageDescriber describer{describerState};
+            // Heap-held: 384 KiB does not belong on the test stack.
+            std::unique_ptr<const colour::SrgbOutputTables> outputTables =
+                std::make_unique<const colour::SrgbOutputTables>();
             CodecPlugin plugin;
 
             explicit Harness(ImageMeta imageMeta = test::meta(), const DecoderOptions options = test::options())
                 : factory(factoryState, decoderState, imageMeta),
-                  plugin(source, factory, describer, options, pluginInfo())
+                  plugin(source, factory, describer, *outputTables, options, pluginInfo())
             {
             }
         };
@@ -112,6 +117,41 @@ namespace pvdkit::core
             CHECK(info.formatName == "Format name");
             CHECK(info.compression == "Codec name");
             CHECK(info.comments == "described by the plugin");
+        }
+
+        TEST_CASE("every session of one CodecPlugin borrows the plugin's sRGB output tables")
+        {
+            // The composition root builds one SrgbOutputTables per plugin instance and injects it
+            // by reference; CodecPlugin hands that same instance to every session it opens, HDR
+            // or not, and a second plugin over another instance hands out that one. The sessions
+            // are the concrete FileSession the plugin constructs, hence the cast.
+            auto hdrMeta = test::meta(3, 2, false, 10);
+            hdrMeta.cicp = Cicp{12, 16, 12, true};
+            Harness hdr(hdrMeta);
+            Harness sdr;
+            const std::vector wholeFile{std::byte{3}};
+
+            auto first = hdr.plugin.open(pvd::OpenRequest{"a.bin", 0, wholeFile});
+            auto second = hdr.plugin.open(pvd::OpenRequest{"b.bin", 0, wholeFile});
+            auto third = sdr.plugin.open(pvd::OpenRequest{"c.bin", 0, wholeFile});
+            REQUIRE(first.has_value());
+            REQUIRE(second.has_value());
+            REQUIRE(third.has_value());
+
+            const auto &firstSession = dynamic_cast<const FileSession &>(**first);
+            const auto &secondSession = dynamic_cast<const FileSession &>(**second);
+            const auto &thirdSession = dynamic_cast<const FileSession &>(**third);
+            CHECK(&firstSession.outputTables() == hdr.outputTables.get());
+            CHECK(&secondSession.outputTables() == hdr.outputTables.get());
+            CHECK(&thirdSession.outputTables() == sdr.outputTables.get());
+            CHECK(&firstSession.outputTables() != &thirdSession.outputTables());
+
+            // Opening sessions built nothing of its own: the plugin's tables are the ones it was
+            // given, and they outlive every session by the harness's declaration order.
+            const auto decoded = (*first)->decodePage(0, pvd::Progress{});
+            REQUIRE(decoded.has_value());
+            CHECK(decoded->bitsPerPixel == 64);
+            CHECK((*first)->freePage(decoded->pixels));
         }
 
         TEST_CASE("CodecPlugin file mode parses opened file bytes and retains their "

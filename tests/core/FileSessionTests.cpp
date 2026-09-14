@@ -11,6 +11,7 @@
 
 #include "Fakes.hpp"
 #include "core/FileSession.hpp"
+#include "core/colour/Pipeline.hpp"
 
 namespace pvdkit::core
 {
@@ -56,7 +57,7 @@ namespace pvdkit::core
             DecoderState state;
             const auto imageMeta = test::meta(3, 2, false, 8, 2, true);
             const auto info = test::imageInfo(imageMeta);
-            FileSession session(nullptr, decoder(imageMeta, state), info, test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), info, test::options(), test::outputTables());
 
             CHECK(session.imageInfo().pageCount == 2);
             CHECK(session.imageInfo().animated);
@@ -79,7 +80,8 @@ namespace pvdkit::core
         {
             DecoderState state;
             const auto imageMeta = test::meta(3, 2, false, 8);
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                test::outputTables());
 
             const auto info = session.pageInfo(0);
 
@@ -96,7 +98,8 @@ namespace pvdkit::core
             for (const bool alpha : {false, true}) {
                 DecoderState state;
                 const auto imageMeta = test::meta(3, 2, alpha, 10);
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                    test::outputTables());
 
                 const auto info = session.pageInfo(0);
 
@@ -111,7 +114,8 @@ namespace pvdkit::core
                 DecoderState state;
                 auto imageMeta = test::meta(3, 2, true, 4);
                 imageMeta.indexed = indexed;
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                    test::outputTables());
 
                 const auto info = session.pageInfo(0);
 
@@ -125,7 +129,8 @@ namespace pvdkit::core
             DecoderState state;
             state.durationMs = 321;
             const auto imageMeta = test::meta(3, 2, false, 8, 3, true);
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                test::outputTables());
 
             const auto info = session.pageInfo(2);
             REQUIRE(info.has_value());
@@ -143,7 +148,8 @@ namespace pvdkit::core
         {
             DecoderState state;
             const auto imageMeta = test::meta();
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                test::outputTables());
             std::vector<std::pair<std::uint32_t, std::uint32_t>> reports;
             const pvd::Progress progress{[&reports](const std::uint32_t step, const std::uint32_t steps) {
                 reports.emplace_back(step, steps);
@@ -175,7 +181,8 @@ namespace pvdkit::core
                 DecoderState state;
                 auto imageMeta = test::meta();
                 imageMeta.exifOrientation = static_cast<std::uint8_t>(orientation);
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                    test::outputTables());
 
                 const auto info = session.pageInfo(0);
                 REQUIRE(info.has_value());
@@ -192,7 +199,7 @@ namespace pvdkit::core
             auto invalidMeta = test::meta();
             invalidMeta.exifOrientation = 9;
             FileSession invalidSession(nullptr, decoder(invalidMeta, state), test::imageInfo(invalidMeta),
-                                       test::options());
+                                       test::options(), test::outputTables());
             const auto invalid = invalidSession.decodePage(0, pvd::Progress{});
             REQUIRE(invalid.has_value());
             CHECK(invalid->hostOrientation == 0);
@@ -211,7 +218,8 @@ namespace pvdkit::core
                 auto imageMeta = test::meta();
                 imageMeta.exifOrientation = 6;
                 imageMeta.transforms = transform;
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                    test::outputTables());
 
                 const auto decoded = session.decodePage(0, pvd::Progress{});
                 REQUIRE(decoded.has_value());
@@ -224,7 +232,8 @@ namespace pvdkit::core
         {
             DecoderState state;
             const auto imageMeta = test::meta(3, 2, true);
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                test::outputTables());
 
             const auto decoded = session.decodePage(0, pvd::Progress{});
 
@@ -244,7 +253,8 @@ namespace pvdkit::core
                 const auto imageMeta = test::meta(3, 2, alpha, 16);
                 auto options = test::options();
                 options.deepOutput = true;
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options);
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options,
+                                    test::outputTables());
 
                 const auto decoded = session.decodePage(0, pvd::Progress{});
 
@@ -267,7 +277,8 @@ namespace pvdkit::core
             const auto imageMeta = test::meta(3, 2, false, 8);
             auto options = test::options();
             options.deepOutput = true;
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options);
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options,
+                                test::outputTables());
 
             const auto decoded = session.decodePage(0, pvd::Progress{});
 
@@ -291,7 +302,8 @@ namespace pvdkit::core
             auto imageMeta = test::meta(2, 1, true, 8, 1, false, Transforms{std::nullopt, 0, MirrorAxis::LeftRight});
             imageMeta.cicp = Cicp{1, 8, 0, true};
             imageMeta.masteringPeakNits = 400.0F;
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                test::outputTables());
 
             const auto decoded = session.decodePage(0, pvd::Progress{});
 
@@ -302,6 +314,45 @@ namespace pvdkit::core
             // alpha is not colour-managed. The black pixel moves second unchanged.
             CHECK(samples16(*decoded) == std::vector<std::uint16_t>{48'192, 48'192, 48'192, 0x5678, 0, 0, 0, 0x1234});
             CHECK(session.freePage(decoded->pixels));
+        }
+
+        TEST_CASE("a FileSession borrows the sRGB output tables it is given and never builds its own")
+        {
+            // The tables are owned by the plugin's composition root and injected by reference
+            // (docs/ARCHITECTURE.md section 7); a session with or without colour presentation
+            // reports exactly the injected instance, and two sessions over one instance share it.
+            const auto tables = std::make_unique<const colour::SrgbOutputTables>();
+            const auto otherTables = std::make_unique<const colour::SrgbOutputTables>();
+            DecoderState state;
+            auto hdrMeta = test::meta(3, 2, false, 10);
+            hdrMeta.cicp = Cicp{12, 16, 12, true};
+            const auto sdrMeta = test::meta();
+
+            FileSession hdr(nullptr, decoder(hdrMeta, state), test::imageInfo(hdrMeta), test::options(), *tables);
+            FileSession sdr(nullptr, decoder(sdrMeta, state), test::imageInfo(sdrMeta), test::options(), *tables);
+            FileSession other(nullptr, decoder(hdrMeta, state), test::imageInfo(hdrMeta), test::options(),
+                              *otherTables);
+
+            CHECK(&hdr.outputTables() == tables.get());
+            CHECK(&sdr.outputTables() == tables.get());
+            CHECK(&other.outputTables() == otherTables.get());
+            CHECK(&hdr.outputTables() != &other.outputTables());
+
+            // The presentation built over the borrowed tables converts exactly like one built
+            // directly over the same instance.
+            const auto decoded = hdr.decodePage(0, pvd::Progress{});
+            REQUIRE(decoded.has_value());
+            CHECK(decoded->bitsPerPixel == 64);
+            std::vector<std::byte> expected(decoded->pixels.size());
+            const colour::Presentation reference{hdrMeta.cicp, hdrMeta.masteringPeakNits, *tables};
+            {
+                DecoderState referenceState;
+                auto referenceDecoder = decoder(hdrMeta, referenceState);
+                REQUIRE(referenceDecoder->decodeFrame(0, pvd::PixelFormat::Bgra64, expected, 24).has_value());
+            }
+            reference.apply(std::span{expected});
+            CHECK(std::vector<std::byte>(decoded->pixels.begin(), decoded->pixels.end()) == expected);
+            CHECK(hdr.freePage(decoded->pixels));
         }
 
         TEST_CASE("large display conversion is identical with one two or capped decoder thread counts")
@@ -316,7 +367,8 @@ namespace pvdkit::core
                 DecoderState state;
                 auto options = test::options(static_cast<std::uint64_t>(kWidth) * kHeight);
                 options.maxThreads = maxThreads;
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options);
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), options,
+                                    test::outputTables());
                 const auto decoded = session.decodePage(0, pvd::Progress{});
                 REQUIRE(decoded.has_value());
                 return std::vector<std::byte>{decoded->pixels.begin(), decoded->pixels.end()};
@@ -339,7 +391,8 @@ namespace pvdkit::core
                 DecoderState state;
                 state.decodeError = test::error(code);
                 const auto imageMeta = test::meta();
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                    test::outputTables());
 
                 const auto decoded = session.decodePage(0, pvd::Progress{});
 
@@ -353,7 +406,8 @@ namespace pvdkit::core
             for (std::uint32_t abortStep = 0; abortStep < 3; ++abortStep) {
                 DecoderState state;
                 const auto imageMeta = test::meta();
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                    test::outputTables());
                 std::vector<std::uint32_t> reports;
                 const pvd::Progress progress{[&](const std::uint32_t step, const std::uint32_t steps) {
                     CHECK(steps == 3);
@@ -380,7 +434,8 @@ namespace pvdkit::core
         {
             DecoderState state;
             const auto imageMeta = test::meta(3, 2);
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(5));
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(5),
+                                test::outputTables());
 
             const auto decoded = session.decodePage(0, pvd::Progress{});
 
@@ -395,7 +450,8 @@ namespace pvdkit::core
             DecoderState state;
             const Transforms transforms{CropRect{1, 0, 2, 2}, 1, MirrorAxis::LeftRight};
             const auto imageMeta = test::meta(3, 2, true, 8, 1, false, transforms);
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                test::outputTables());
 
             const auto info = session.pageInfo(0);
             REQUIRE(info.has_value());
@@ -414,7 +470,8 @@ namespace pvdkit::core
             DecoderState state;
             const Transforms transforms{CropRect{2, 1, 2, 2}, 0, std::nullopt};
             const auto imageMeta = test::meta(3, 2, false, 8, 1, false, transforms);
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                test::outputTables());
 
             const auto decoded = session.decodePage(0, pvd::Progress{});
 
@@ -427,7 +484,8 @@ namespace pvdkit::core
             for (const bool reverse : {false, true}) {
                 DecoderState state;
                 const auto imageMeta = test::meta(3, 2, false, 8, 2, true);
-                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+                FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                    test::outputTables());
 
                 const auto first = session.decodePage(0, pvd::Progress{});
                 REQUIRE(first.has_value());
@@ -453,7 +511,8 @@ namespace pvdkit::core
         {
             DecoderState state;
             const auto imageMeta = test::meta();
-            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options());
+            FileSession session(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                test::outputTables());
             const std::array<std::byte, 3> unknown{};
             CHECK_FALSE(session.freePage(unknown));
 
@@ -474,7 +533,7 @@ namespace pvdkit::core
                 auto fileData = std::make_unique<test::FakeFileData>(std::vector<std::byte>{std::byte{1}, std::byte{2}},
                                                                      dataDestructions);
                 FileSession session(std::move(fileData), decoder(imageMeta, state), test::imageInfo(imageMeta),
-                                    test::options());
+                                    test::options(), test::outputTables());
                 REQUIRE(session.decodePage(0, pvd::Progress{}).has_value());
                 REQUIRE(session.decodePage(1, pvd::Progress{}).has_value());
                 CHECK(dataDestructions == 0);
