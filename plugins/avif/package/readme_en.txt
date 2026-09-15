@@ -32,8 +32,8 @@ Install:
   The plugin is self-contained: no runtime, no codecs, no GDI+, only
   Windows itself.
 
-Licence: MIT. The plugin bundles libavif (BSD-2-clause), dav1d
-(BSD-2-clause) and libyuv (BSD-3-clause); their licence texts are in
+License: MIT. The plugin bundles libavif (BSD-2-clause), dav1d
+(BSD-2-clause) and libyuv (BSD-3-clause); their license texts are in
 LICENSES.txt. The PictureView plugin interface header is (c) Pavel Skakov.
 
 Roman Kharitonov

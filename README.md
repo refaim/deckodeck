@@ -25,9 +25,9 @@ SHA-256 in the release notes.
 Unpack the archive into PictureView's folder (the one with `0PictureView.dll`, usually
 `Plugins\PictureView` in your Far), and restart Far.
 
-## Licence
+## License
 
-MIT, see [LICENSE](LICENSE). The bundled codec libraries keep their own licences, listed in each
+MIT, see [LICENSE](LICENSE). The bundled codec libraries keep their own licenses, listed in each
 archive's `LICENSES.txt`; the PictureView plugin interface header is © Pavel Skakov.
 
 Building, packaging and CI: [docs/BUILD.md](docs/BUILD.md).

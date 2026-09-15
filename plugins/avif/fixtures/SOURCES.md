@@ -3,11 +3,11 @@
 The libavif corpus files are pinned to commit
 [`66663952a677bb8a13ea1530d5694775d7d143d4`](https://github.com/AOMediaCodec/libavif/commit/66663952a677bb8a13ea1530d5694775d7d143d4).
 `LIBAVIF_DATA_README.md` is the upstream `tests/data/README.md` from that commit and preserves its
-per-file notices. Unless overridden below, those files use libavif's BSD-2-Clause licence.
+per-file notices. Unless overridden below, those files use libavif's BSD-2-Clause license.
 
 `scripts/libavif-fixtures.sha256` attests only to the integrity of the bytes committed to this
 repository (that `fetch-fixtures.ps1` downloaded and stored exactly what was pinned here), not to
-upstream provenance; trust in the origin and licence of each file rests on the table below and the
+upstream provenance; trust in the origin and license of each file rests on the table below and the
 pinned libavif commit, not on the checksum matching.
 
 Expected stream values were measured with FFmpeg/ffprobe 9.0.1 using `-count_frames -show_streams
@@ -17,7 +17,7 @@ not the one-frame primary item. “Alpha: yes” means ffprobe exposed an auxili
 
 ## Pinned libavif files
 
-| File | Origin | Licence | Exercises | Verified expectation |
+| File | Origin | License | Exercises | Verified expectation |
 |---|---|---|---|---|
 | `white_1x1.avif` | [`tests/data/white_1x1.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/white_1x1.avif) | BSD-2-Clause | Smallest still image | 1×1, 1 frame, `yuv444p`, alpha: no |
 | `kodim03_yuv420_8bpc.avif` | [`tests/data/io/kodim03_yuv420_8bpc.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/io/kodim03_yuv420_8bpc.avif) | Eastman Kodak: unrestricted use (upstream notice) | Real 8-bit 4:2:0 photo | 768×512, 1 frame, `yuv420p`, alpha: no |
@@ -37,11 +37,11 @@ not the one-frame primary item. “Alpha: yes” means ffprobe exposed an auxili
 | `paris_icc_exif_xmp.avif` | [`tests/data/paris_icc_exif_xmp.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/paris_icc_exif_xmp.avif) | BSD-2-Clause | ICC, EXIF, and XMP metadata | 403×302, 1 frame, `yuv444p`, alpha: no |
 | `draw_points_idat_progressive.avif` | [`tests/data/draw_points_idat_progressive.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/draw_points_idat_progressive.avif) | BSD-2-Clause | Progressive layers stored in `idat` | ffprobe rejects the header as “Not yet implemented”; dimensions/frame/pixel format/alpha unavailable from ffprobe |
 | `extended_pixi.avif` | [`tests/data/extended_pixi.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/extended_pixi.avif) | BSD-2-Clause | Extended `pixi` and vertical chroma position | 4×4, 1 frame, `yuv420p`, alpha: no |
-| `weld_sato_12B_8B_q0.avif` | [`tests/data/weld_sato_12B_8B_q0.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/weld_sato_12B_8B_q0.avif) | Signature Edits irrevocable unrestricted-use licence (full text in upstream notice) | 12-bit sample-transform extension | 1024×684, 1 frame, `yuv444p12le`, alpha: no |
+| `weld_sato_12B_8B_q0.avif` | [`tests/data/weld_sato_12B_8B_q0.avif`](https://raw.githubusercontent.com/AOMediaCodec/libavif/66663952a677bb8a13ea1530d5694775d7d143d4/tests/data/weld_sato_12B_8B_q0.avif) | Signature Edits irrevocable unrestricted-use license (full text in upstream notice) | 12-bit sample-transform extension | 1024×684, 1 frame, `yuv444p12le`, alpha: no |
 
 ## Derived EXIF-orientation files
 
-These files inherit their source file's licence. They were made byte-for-byte with the installed
+These files inherit their source file's license. They were made byte-for-byte with the installed
 ExifTool and the following commands, then checked with `exiftool -Orientation -n <file>`:
 
 ```powershell
@@ -50,7 +50,7 @@ exiftool -overwrite_original -Orientation=3 -n kodim03_exif_orientation_3.avif
 exiftool -overwrite_original -Orientation=6 -n abc_color_irot_alpha_irot_plus_exif6.avif
 ```
 
-| File | Derived from | Licence | Exercises | Verified expectation | SHA-256 |
+| File | Derived from | License | Exercises | Verified expectation | SHA-256 |
 |---|---|---|---|---|---|
 | `kodim03_exif_orientation_6.avif` | `kodim03_yuv420_8bpc.avif` | Eastman Kodak: unrestricted use (upstream notice) | EXIF orientation 6 without AVIF transforms | 768×512 coded dimensions; EXIF orientation 6; PictureView code 7 | `473182907469BA4DA616F228F4F68EEB29CC150D12D3E98A90207ABBF712FC79` |
 | `kodim03_exif_orientation_3.avif` | `kodim03_yuv420_8bpc.avif` | Eastman Kodak: unrestricted use (upstream notice) | EXIF orientation 3 without AVIF transforms | 768×512 coded dimensions; EXIF orientation 3; PictureView code 3 | `B338DBC677E552B70C138F79EB799C3A1256BE39FAECE9B99A103F91C06668AD` |
@@ -63,7 +63,7 @@ and are dedicated to CC0-1.0. The animation is built from a concat-demuxer timel
 without its repeated end-marker frame; ffprobe verifies its three `stts` sample durations as 100,
 200, and 300 ms.
 
-| File | Origin | Licence | Exercises | Verified expectation |
+| File | Origin | License | Exercises | Verified expectation |
 |---|---|---|---|---|
 | `quad_rgb_lossless.avif` | Project script, ffmpeg 9.0.1/libaom-av1 | CC0-1.0 | Lossless RGB with identity matrix/full range | 64×64, 1 frame, `gbrp`, alpha: no; TL `(255,0,0)`, TR `(0,255,0)`, BL `(0,0,255)`, BR `(255,255,255)` exactly |
 | `quad_yuv420.avif` | Project script, ffmpeg 9.0.1/libaom-av1 | CC0-1.0 | Lossy limited-range 4:2:0 conversion | 64×64, 1 frame, `yuv420p`, alpha: no; the generator paints ideal red `(255,0,0)`, green `(0,255,0)`, blue `(0,0,255)` and white `(255,255,255)` quadrants. The values `(254,0,1)`, `(0,253,0)`, `(1,0,254)`, `(255,255,255)` (±2) are ffmpeg-swscale conversions of the coded YUV at the quadrant centres; libavif+libyuv converts the same coded planes to values up to ~11 away on the saturated quadrants (dav1d's output is bit-exact, only the YUV→RGB rounding differs). Tests therefore compare against the generator's ideal colours with tolerance 16, which still rejects a wrong matrix, a wrong range or swapped channels |

@@ -839,7 +839,7 @@ Decisions (Task 7, open point 1):
    `pvdkit_plugin_identity(<id> NAME <NAME> VERSION x.y.z PRIORITY n DESCRIPTION ... COMMENTS ...)`,
    `add_library(<id>_core ...)`, `add_library(<id>_adapter ...)`, `add_library(<id>_composition
    src/DefaultPlugin.cpp)`, `pvdkit_add_plugin(<id> LINK <id>_composition LICENSES <port>
-   "<name (licence)>" ...)`, `add_subdirectory(tests)` under `BUILD_TESTING`.
+   "<name (license)>" ...)`, `add_subdirectory(tests)` under `BUILD_TESTING`.
 2. `vcpkg.json`: a feature `<id>` with the codec ports; add it to `default-features`.
 3. `src/adapters/<lib>/`: `IDecoderFactory` (`recognises` = signature check on the head,
    `create` = parse) and `IDecoder` over the library, one-to-one, no decisions.

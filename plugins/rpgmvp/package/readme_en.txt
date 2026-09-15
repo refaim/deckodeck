@@ -22,8 +22,8 @@ Install:
   The plugin is self-contained: no runtime, no codecs, no GDI+, only
   Windows itself.
 
-Licence: MIT. The plugin bundles libspng (BSD-2-clause) and zlib (zlib
-licence); their licence texts are in LICENSES.txt. The PictureView plugin
+License: MIT. The plugin bundles libspng (BSD-2-clause) and zlib (zlib
+license); their license texts are in LICENSES.txt. The PictureView plugin
 interface header is (c) Pavel Skakov.
 
 Roman Kharitonov

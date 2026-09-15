@@ -101,7 +101,7 @@ or primaries codes use the safe sRGB/BT.709 fallback and that fallback is writte
   patch checks `MSVC` first so the merge uses the lib.exe-style bundling (`CMAKE_LIBTOOL` /
   llvm-lib). The chainload toolchain must **not** replace `CMAKE_AR` for the same reason.
 - `plugins/avif/CMakeLists.txt`: `avif_core` (Describe), `avif_adapter` (links `avif`, `yuv`),
-  `avif_composition` (DefaultPlugin.cpp), then `pvdkit_add_plugin(avif ...)` with the licence
+  `avif_composition` (DefaultPlugin.cpp), then `pvdkit_add_plugin(avif ...)` with the license
   ports `libavif`, `dav1d`, `libyuv` for `LICENSES.txt`; `package/` holds the static English and
   Russian readmes and ChangeLog for the zip.
 - Tests: `avif_core_tests` (Describe, Describer), `avif_adapter_tests` (Decoder on the fixtures,
@@ -113,7 +113,7 @@ or primaries codes use the safe sRGB/BT.709 fallback and that fallback is writte
 
 ## 5. Fixtures (`plugins/avif/fixtures/`)
 
-`SOURCES.md` lists every file: origin URL + commit, licence, what it exercises, expected values.
+`SOURCES.md` lists every file: origin URL + commit, license, what it exercises, expected values.
 Committed to the repo so builds are offline. Keep the total under ~10 MB.
 
 From `https://github.com/AOMediaCodec/libavif/tree/<pinned commit>/tests/data` (BSD-2-Clause; read

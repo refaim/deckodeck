@@ -40,7 +40,7 @@ target_link_libraries(
 pvdkit_add_plugin(
   rpgmvp
   LINK rpgmvp_composition
-  LICENSES libspng "libspng (BSD-2-Clause)" zlib "zlib (zlib licence)")
+  LICENSES libspng "libspng (BSD-2-Clause)" zlib "zlib (zlib license)")
 
 if(BUILD_TESTING)
   set(RPGMVP_FIXTURE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

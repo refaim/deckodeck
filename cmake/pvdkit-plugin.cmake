@@ -130,7 +130,7 @@ function(pvdkit_add_plugin id)
   target_link_libraries(${id}_plugin PRIVATE ${id}_identity pvdkit_pvd ${arg_LINK} pvdkit_options)
 
   # Package staging for scripts/package.ps1: the plugin's hand-written documents copied without
-  # changing a byte, LICENSES.txt assembled from the licence texts vcpkg installed for the listed
+  # changing a byte, LICENSES.txt assembled from the license texts vcpkg installed for the listed
   # ports (share/<port>/copyright), and manifest.json naming the DLL, version and architecture.
   set(package_dir "${CMAKE_CURRENT_BINARY_DIR}/package")
   set(package_source_dir "${CMAKE_CURRENT_SOURCE_DIR}/package")
