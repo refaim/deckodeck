@@ -1,10 +1,32 @@
+# Build output and caches
 build/
 out/
 .cache/
+.clangd/
+CMakeUserPresets.json
+compile_commands.json
+
+# Coverage artefacts (an instrumented binary run by hand drops default.profraw next to it)
 *.profraw
 *.profdata
 coverage/
+
+# Packaging output
+dist/
+
+# IDE and editor files
 .vs/
 .vscode/
+.idea/
 *.user
-dist/
+*.swp
+*~
+
+# Stray logs, backups, OS droppings
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+Thumbs.db
+desktop.ini
