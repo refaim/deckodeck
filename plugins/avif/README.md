@@ -2,7 +2,7 @@
 
 AVIF decoder plugin for PictureView 3 (the image viewer plugin for Far Manager 3 by Pavel
 Skakov), built for both the x64 and the x86 (32-bit) Far Manager. It is the `avif` plugin of the
-deckodeck monorepo (see the top-level `README.md` for the build) and decodes with libavif 1.4.2,
+deckodeck monorepo (see the top-level `docs/BUILD.md` for the build) and decodes with libavif 1.4.2,
 dav1d 1.5.3 and libyuv, all linked statically: the finished `AVIF.pvd` imports `KERNEL32.dll` and
 nothing else, so it needs no runtime, no WIC codec and no GDI+.
 

@@ -7,7 +7,7 @@ are canonical: implement them as written; if something is genuinely impossible, 
 of improvising. Plugin-specific design (what AVIF.pvd does with libavif, its fixtures, its
 limitations) lives next to the plugin: `plugins/avif/DESIGN.md`. "deckodeck" names the product and
 the repository (`https://github.com/refaim/deckodeck`); `pvdkit`, used throughout this document,
-names the shared PVD kit layer underneath both plugins (README.md explains the split).
+names the shared PVD kit layer underneath both plugins (`docs/BUILD.md` explains the split).
 
 ## 0. Shape of the repository
 
@@ -38,7 +38,7 @@ pvdkit/
   .clang-format .clang-tidy tests/.clang-tidy cppcheck-suppressions.txt PSScriptAnalyzerSettings.psd1
   binskim.psd1        the analyzer configuration scripts/lint.ps1 reads (Task 9)
   ports/ triplets/ vcpkg.json CMakePresets.json   one toolchain and one manifest for the kit
-  docs/               this file and the task history
+  docs/               this file, BUILD.md (build, packaging and CI) and the task history
 ```
 
 Every plugin is one DLL `<NAME>.pvd` = the shared `Exports.cpp` + `Plugin.def` + `Plugin.rc`
@@ -628,7 +628,7 @@ Decisions (Task 7, open point 1):
   scratch (suffix `-pkg`): `build-all.ps1 -Clean`, `lint.ps1` on both release directories, the
   `asan` preset from scratch (`build/asan-pkg`: configure, build, `ctest --preset asan`; any
   AddressSanitizer report fails the packaging), then `pack.ps1` into `dist/`. The GitHub
-  workflows (`.github/workflows/`, Task 23; README.md "Continuous integration and releases")
+  workflows (`.github/workflows/`, Task 23; `docs/BUILD.md` "Continuous integration and releases")
   run the release builds (each build job first prints the MSVC toolset directories and the
   clang-cl version it builds with, so an import-table failure is attributable to a toolset at a
   glance - Task 24), `ctest`, `lint.ps1` and `coverage.ps1` on `windows-latest` and, on a

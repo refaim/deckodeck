@@ -8,8 +8,8 @@ lives next to it (`plugins/<id>/DESIGN.md`).
 
 **deckodeck** (`https://github.com/refaim/deckodeck`): decoder plugins for PictureView 3 (image
 viewer plugin for Far Manager 3, by Pavel Skakov), as a monorepo of shared libraries plus one
-directory per plugin. The shared libraries keep their original name, `pvdkit` (README.md explains
-the split); this file and `docs/ARCHITECTURE.md` use `pvdkit` throughout for exactly that shared
+directory per plugin. The shared libraries keep their original name, `pvdkit` (`docs/BUILD.md`
+explains the split); this file and `docs/ARCHITECTURE.md` use `pvdkit` throughout for exactly that shared
 layer, never for the product. Every plugin speaks the
 PVD decoder interface v1 defined in `third_party/pvd/PictureViewPlugin.h` (UTF-8 copy of the
 SDK original; never edit it). The author's reference decoders (`third_party/pvd/examples/pvdBMP.cpp`,
@@ -118,7 +118,7 @@ only. No WIC, no GDI+, no system codecs.
 ## Layout
 
 ```
-AGENTS.md CLAUDE.md README.md docs/ARCHITECTURE.md
+AGENTS.md CLAUDE.md README.md docs/ARCHITECTURE.md docs/BUILD.md
 CMakeLists.txt CMakePresets.json vcpkg.json cmake/ (incl. pvdkit-plugin.cmake) scripts/ ports/ triplets/
 third_party/pvd/PictureViewPlugin.h
 src/pvd/        PVD boundary: value types, IPlugin/IFileSession, Shim (marshalling + firewall),

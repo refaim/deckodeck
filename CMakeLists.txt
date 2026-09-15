@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 # deckodeck (https://github.com/refaim/deckodeck): shared libraries for PictureView (Far Manager)
 # decoder plugins plus one directory per plugin under plugins/. The shared PVD layer underneath
-# keeps its original name, pvdkit (see README.md); every pvdkit_* CMake target, variable, function,
+# keeps its original name, pvdkit (see docs/BUILD.md); every pvdkit_* CMake target, variable, function,
 # preset, script parameter, directory and file name is unaffected by the product name. Versions
 # belong to the plugins (pvdkit_plugin_identity in each plugins/<id>/CMakeLists.txt), not to the
 # kit.
