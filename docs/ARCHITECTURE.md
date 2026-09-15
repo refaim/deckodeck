@@ -560,9 +560,11 @@ Decisions (Task 7, open point 1):
     `Exports.cpp` + `Plugin.def` + `Plugin.rc` read from properties of `pvdkit_pvd`) and the
     package staging `<bindir>/package/` (static `readme_en.txt`, `readme_ru.txt` and `ChangeLog`
     copied byte-for-byte after configure-time identity/encoding/line-ending checks,
-    `LICENSES.txt` assembled from vcpkg's `share/<port>/copyright` files, `manifest.json` = name,
-    version, architecture, file name); `<id>_package_docs` repeats the document checks on the
-    staged files under CTest;
+    `LICENSES.txt` = a header paragraph plus each port's own license, assembled from vcpkg's
+    `share/<port>/copyright` files and truncated before any Debian-style `Files:` section for
+    components of the upstream source tree that are not part of this plugin (a standalone line of
+    10+ dashes marks the cut), `manifest.json` = name, version, architecture, file name);
+    `<id>_package_docs` repeats the document checks on the staged files under CTest;
   - tests: `<id>_core_tests`, `<id>_adapter_tests` (the plugin's own `add_executable`), and
     `pvdkit_add_plugin_e2e_tests(<id> FIXTURES <dir> SOURCES ...)` → `<id>_e2e_tests` (in
     coverage builds with the ctest `ENVIRONMENT` property

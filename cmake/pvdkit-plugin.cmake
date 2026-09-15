@@ -131,7 +131,9 @@ function(pvdkit_add_plugin id)
 
   # Package staging for scripts/package.ps1: the plugin's hand-written documents copied without
   # changing a byte, LICENSES.txt assembled from the license texts vcpkg installed for the listed
-  # ports (share/<port>/copyright), and manifest.json naming the DLL, version and architecture.
+  # ports (share/<port>/copyright) - truncated to each port's own license, before any Debian-style
+  # "Files: <other source-tree paths>" section documenting components that are not part of this
+  # plugin - and manifest.json naming the DLL, version and architecture.
   set(package_dir "${CMAKE_CURRENT_BINARY_DIR}/package")
   set(package_source_dir "${CMAKE_CURRENT_SOURCE_DIR}/package")
   pvdkit_check_package_docs(
@@ -151,7 +153,12 @@ function(pvdkit_add_plugin id)
     set(PVDKIT_PLUGIN_ARCHITECTURE "x86")
   endif()
 
-  set(licenses "")
+  string(CONCAT licenses
+         "${name}.pvd bundles the libraries below, statically linked. Each section is\n"
+         "that library's own license text as installed by vcpkg (share/<port>/copyright);\n"
+         "where an upstream file also carries notices for components of its own source\n"
+         "tree that are not part of this plugin, only the library's own license is\n"
+         "reproduced here - see the upstream repository for the full file.\n\n\n")
   set(license_names "")
   string(REPEAT "=" 78 rule)
   while(arg_LICENSES)
@@ -159,6 +166,14 @@ function(pvdkit_add_plugin id)
     # find_file searches CMAKE_PREFIX_PATH, which the vcpkg toolchain points at vcpkg_installed.
     find_file(PVDKIT_${id}_${port}_COPYRIGHT NAMES copyright PATH_SUFFIXES "share/${port}" REQUIRED)
     file(READ "${PVDKIT_${id}_${port}_COPYRIGHT}" text)
+    # Some upstream copyright files (e.g. libavif's) are Debian-style: their own license first,
+    # then "Files: <path>" sections documenting other components of the upstream source tree that
+    # are not part of this plugin. Keep only the text before the first such section, i.e. before
+    # the first standalone line of 10+ dashes (CMake's regex engine has no {n,m} interval syntax,
+    # hence the literal run below); ports with no such separator (dav1d, libyuv, libspng, zlib)
+    # keep their whole text.
+    string(REPLACE "\r\n" "\n" text "${text}")
+    string(REGEX REPLACE "\n----------[-]*\n.*" "" text "${text}")
     string(REGEX REPLACE "[ \t\r\n]+$" "" text "${text}")
     string(APPEND licenses "${rule}\n${display} - as installed by vcpkg in share/${port}/copyright\n${rule}\n\n${text}\n\n\n")
     list(APPEND license_names "\"${display}\"")
