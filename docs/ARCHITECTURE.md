@@ -754,7 +754,7 @@ Decisions (Task 7, open point 1):
   heap bytes +n, handles +n, views +n (+n KiB), cs-debug +n, private +n KiB (...) (warm-up w x
   ms, measured N x ms)` line, with both passes appended when a second one ran. N = 200
   host-level operations per scenario
-  (`PVDKIT_LEAK_ITERATIONS` overrides). Scenarios (`docs/tasks/task10-leaks.md`): disk and memory
+  (`PVDKIT_LEAK_ITERATIONS` overrides). Scenarios: disk and memory
   round trips with `pvdInit`/`pvdExit` inside the loop; close without free; decode aborted at
   callback step 0, 1 and 2; every rejection path (each rejected fixture in both modes, empty and
   11-byte heads, a valid head for a missing file, pages out of range); two pages outstanding freed

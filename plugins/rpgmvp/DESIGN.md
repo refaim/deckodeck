@@ -38,17 +38,17 @@ on both architectures) against vcpkg's stock zlib 1.3.2 on identical inputs with
 timing cases in `tests/adapters/DecodeTimingTests.cpp` (a synthetic 4000x3000 photo-like RGBA8
 PNG, 46 % of its raw size, and a 16-bit variant, 54 %; `--no-skip=true` runs them, median of 5
 decodes after a warm-up, two runs each, Release, Ryzen 5 5500X3D; the adapter-only figures,
-which exclude the page allocation, are the inflate-bound ones and are quoted here - the full
-report table is in `docs/tasks/report-task23.md`). x64: 185.9-188.4 ms -> 154.5-158.6 ms for
-RGBA8 (1.17-1.22x) and 532.7-535.4 ms -> 452.0-470.5 ms for RGBA16 (1.13-1.18x). x86:
-195.7-195.8 ms -> 230.3-232.2 ms for RGBA8 (0.84-0.85x, slower) and 615.8-617.7 ms ->
-652.7-654.8 ms for RGBA16 (0.94-0.95x, slower). The adoption bar was 1.3x on x64, so the plugin
-stays on stock zlib. The decode is not inflate-bound: libspng's own row handling (unfiltering,
-format conversion) and the adapter's R/B swap take the larger share, so a faster inflate moves
-the total by a fifth at best. The timing cases stay in the tree as the instrument for any later
-comparison (`PVDKIT_RPGMVP_TIMING_CACHE=<dir>` keeps the encoded input identical across builds;
-the numbers above were taken with generator version 1 of the 16-bit input, whose alpha low byte
-carried noise - version 2 makes it opaque, so a re-measurement starts from a fresh cache).
+which exclude the page allocation, are the inflate-bound ones and are quoted here). x64:
+185.9-188.4 ms -> 154.5-158.6 ms for RGBA8 (1.17-1.22x) and 532.7-535.4 ms -> 452.0-470.5 ms
+for RGBA16 (1.13-1.18x). x86: 195.7-195.8 ms -> 230.3-232.2 ms for RGBA8 (0.84-0.85x, slower)
+and 615.8-617.7 ms -> 652.7-654.8 ms for RGBA16 (0.94-0.95x, slower). The adoption bar was
+1.3x on x64, so the plugin stays on stock zlib. The decode is not inflate-bound: libspng's own
+row handling (unfiltering, format conversion) and the adapter's R/B swap take the larger share,
+so a faster inflate moves the total by a fifth at best. The timing cases stay in the tree as
+the instrument for any later comparison (`PVDKIT_RPGMVP_TIMING_CACHE=<dir>` keeps the encoded
+input identical across builds; the numbers above were taken with generator version 1 of the
+16-bit input, whose alpha low byte carried noise - version 2 makes it opaque, so a
+re-measurement starts from a fresh cache).
 
 ## Core and composition
 

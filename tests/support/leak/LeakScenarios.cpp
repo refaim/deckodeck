@@ -3,7 +3,7 @@
 // directory. Every scenario drives the DLL through the shared host driver (tests/e2e/PluginHost)
 // exactly as 0PictureView.dll would, and asserts - after a warm-up - a zero delta in live heap
 // blocks, heap bytes and handles, and a bounded delta in private bytes (tests/support/LeakCheck.hpp).
-// The list of scenarios is docs/tasks/task10-leaks.md, level 1.
+// The scenarios are the level-1 leak gate described in docs/ARCHITECTURE.md (Tests).
 //
 // Fixtures are discovered, not listed: every regular file in PVDKIT_FIXTURE_DIR that is not *.md
 // is offered to the plugin once at start-up (both host modes); what it accepts is "accepted",

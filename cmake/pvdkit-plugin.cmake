@@ -295,7 +295,7 @@ function(pvdkit_add_plugin_sequence_tests id)
   add_test(NAME ${id}_sequence_tests COMMAND ${id}_sequence_tests)
 endfunction()
 
-# The leak gate (docs/tasks/task10-leaks.md, level 1): the shared scenarios in tests/support/leak
+# The leak gate (level 1, heap and handle counts): the shared scenarios in tests/support/leak
 # drive the DLL like the host through the same driver the e2e test uses, for N host-level
 # operations per scenario after a warm-up, and require zero heap-block, heap-byte and handle
 # deltas (tests/support/LeakCheck.hpp explains the accounting and why it is one mechanism for

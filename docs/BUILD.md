@@ -268,7 +268,7 @@ scripts/        coverage, import/export checks, lint, build-all, pack, package, 
   `Visual Studio 17 2022 -T ClangCL` fallback `ctest -C Release` selects them.
 - `<id>_package_docs` - repeats the identity, encoding and CRLF checks on the static distribution
   documents copied into the plugin's package staging directory.
-- `leakcheck_tests` and `<id>_leak_tests` - the leak gate (level 1 of `docs/tasks/task10-leaks.md`,
+- `leakcheck_tests` and `<id>_leak_tests` - the leak gate (level 1: heap and handle counts,
   every preset, both architectures). `tests/support/LeakCheck` snapshots the process - live blocks
   and bytes of the process heap (`HeapWalk`; one mechanism for Debug and Release because every
   static CRT in the process, the plugin DLL's included, allocates from that heap, which

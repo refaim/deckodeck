@@ -40,7 +40,7 @@ foreach ($buildDirectory in @($built | ForEach-Object { $_.BuildDirectory } | So
 }
 # --- end lint ---
 
-# --- asan: the AddressSanitizer gate (docs/tasks/task10-leaks.md, level 2) runs the whole test
+# --- asan: the AddressSanitizer gate (level 2 of the leak gate) runs the whole test
 # suite - leak scenarios and hostile corpus included - once, on x64, with every target instrumented
 # (the `asan` preset; its build directory is build/asan<Suffix>, rebuilt from scratch like the
 # release ones). Any ASan report fails a test and therefore the packaging. The preset itself
