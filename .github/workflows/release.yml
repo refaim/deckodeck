@@ -2,7 +2,7 @@
 # whose plugins/<id>/CMakeLists.txt declares that VERSION and whose ChangeLog opens with it.
 # The workflow verifies the tag (scripts/release-tag.ps1), builds both architectures with the CI
 # build jobs, packs the plugin with scripts/pack.ps1, creates the GitHub Release with the first
-# ChangeLog entry and the zips' SHA-256 as notes (scripts/release-notes.ps1), and then updates
+# ChangeLog entry as notes (scripts/release-notes.ps1), and then updates
 # that plugin's row of the README "Downloads" table on master (scripts/update-readme-downloads.ps1;
 # nothing is committed when the row is already current). Every step of the release job is
 # idempotent, so a failed job can be re-run: an existing release is kept (its assets verified,
@@ -96,12 +96,12 @@ jobs:
         run: |
           $zips = @(.\scripts\pack.ps1 -Plugins $env:PLUGIN_ID -DistDir dist)
           if ($zips.Count -ne 2) { throw "pack.ps1 produced $($zips.Count) zip(s), expected the x64 and x86 ones" }
-          .\scripts\release-notes.ps1 -Id $env:PLUGIN_ID -Zip ($zips | ForEach-Object { $_.Zip }) -OutFile dist\notes.md
+          .\scripts\release-notes.ps1 -Id $env:PLUGIN_ID -OutFile dist\notes.md
           Get-Content -LiteralPath dist\notes.md -Encoding UTF8 | Write-Host
 
       # Idempotent: a release that already exists (a re-run after a later step failed) is kept as
       # published - its two assets must be present, nothing is re-uploaded and the notes are not
-      # rewritten, so the SHA-256 in the notes keep describing the assets that were published.
+      # rewritten.
       - name: Create the GitHub Release (kept as is when it already exists)
         run: |
           $PSNativeCommandUseErrorActionPreference = $false

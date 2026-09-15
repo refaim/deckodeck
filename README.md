@@ -8,8 +8,7 @@ codecs, only Windows.
 
 ## Download
 
-Each release has a zip per architecture, x64 for 64-bit Far and x86 for 32-bit, with the
-SHA-256 in the release notes.
+Each release has a zip per architecture, x64 for 64-bit Far and x86 for 32-bit.
 
 <!-- The rows are seeded for the 1.1.0 releases; each link resolves once its tag (avif/v1.1.0,
      rpgmvp/v1.1.0) has been pushed and the release workflow has published it. -->

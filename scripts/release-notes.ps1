@@ -3,19 +3,16 @@ param(
   # Plugin id (directory name under plugins/) whose ChangeLog opens the notes.
   [Parameter(Mandatory = $true)]
   [string]$Id,
-  # The release zips; each is listed with its SHA-256. As separate arguments or comma-separated
-  # (`-Zip a.zip,b.zip` reaches a script started with `powershell -File` as one string).
-  [Parameter(Mandatory = $true)]
-  [string[]]$Zip,
   # Where to write the notes (UTF-8 without BOM, LF); standard output when empty.
   [string]$OutFile
 )
 
-# Composes the GitHub Release notes: the first entry of plugins/<id>/package/ChangeLog (a UTF-8
-# BOM, CRLF file for Far users; the entry is everything before the next "<NAME> X.Y.Z DD.MM.YYYY"
-# header, rendered as Markdown: the dashed underline makes the header a heading, and the " * " /
-# " + " bullets Far users read become "- " so GitHub renders one list rather than a new list at
-# every change of bullet character) followed by the SHA-256 of every zip.
+# Composes the GitHub Release notes from the first entry of plugins/<id>/package/ChangeLog (a
+# UTF-8 BOM, CRLF file for Far users; the entry is everything before the next
+# "<NAME> X.Y.Z DD.MM.YYYY" header), minus that header line and its dashed underline (the release
+# title already gives the name and version, and GitHub shows the date), with the " * " / " + "
+# bullets Far users read rendered as "- " so GitHub renders one list rather than a new list at
+# every change of bullet character.
 $ErrorActionPreference = "Stop"
 
 $repository = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -29,24 +26,21 @@ $header = '^[A-Za-z0-9_]+ \d+\.\d+\.\d+ \d\d\.\d\d\.\d{4}$'
 if ($lines[0] -notmatch $header) {
   throw "$changeLog must start with '<NAME> X.Y.Z DD.MM.YYYY'; its first line is '$($lines[0])'"
 }
-$entry = @($lines[0])
+$entry = [Collections.Generic.List[string]]::new()
+$entry.Add($lines[0])
 for ($index = 1; $index -lt $lines.Count -and $lines[$index] -notmatch $header; $index++) {
-  $entry += $lines[$index] -replace '^ [*+] ', '- '
+  $entry.Add(($lines[$index] -replace '^ [*+] ', '- '))
 }
-while ($entry.Count -gt 1 -and $entry[-1].Trim() -eq "") {
-  $entry = $entry[0..($entry.Count - 2)]
+# Drop the header line and its dashed underline; only the bullets remain.
+if ($entry.Count -ge 2) { $entry.RemoveRange(0, 2) } else { $entry.Clear() }
+while ($entry.Count -gt 0 -and $entry[0].Trim() -eq "") {
+  $entry.RemoveAt(0)
+}
+while ($entry.Count -gt 0 -and $entry[$entry.Count - 1].Trim() -eq "") {
+  $entry.RemoveAt($entry.Count - 1)
 }
 
-$notes = @($entry) + @("", "SHA-256:", "")
-$Zip = @($Zip | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-foreach ($path in $Zip) {
-  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-    throw "$path does not exist"
-  }
-  $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-  $notes += "    $([IO.Path]::GetFileName($path))  $hash"
-}
-$text = ($notes -join "`n") + "`n"
+$text = ($entry -join "`n") + "`n"
 if ($OutFile) {
   [IO.File]::WriteAllText([IO.Path]::GetFullPath($OutFile), $text, [Text.UTF8Encoding]::new($false))
 } else {

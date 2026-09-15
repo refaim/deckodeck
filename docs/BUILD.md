@@ -197,8 +197,9 @@ workflow declares `permissions: contents: read`; only the `release` job holds `c
   declares exactly that `VERSION`, and `plugins/<id>/package/ChangeLog` opens with
   `<NAME> <version>`), the two build jobs from `build.yml`, then `release`: `scripts/pack.ps1
   -Plugins <id>` on the downloaded artifacts (table gates, `FileVersion` check, the two zips),
-  `scripts/release-notes.ps1` (the first ChangeLog entry, converted from its UTF-8 BOM/CRLF
-  form, its bullets normalised to Markdown list items, plus the SHA-256 of each zip),
+  `scripts/release-notes.ps1` (the first ChangeLog entry, minus its header line and dashed
+  underline, converted from its UTF-8 BOM/CRLF form and its bullets normalised to Markdown
+  list items),
   `gh release create <tag> <zips> --title "<NAME> <version>" --notes-file` (a published release,
   neither draft nor prerelease; when the release already exists - a re-run of a failed job - it
   is kept as published, its two assets are only verified to be present, nothing is re-uploaded),
