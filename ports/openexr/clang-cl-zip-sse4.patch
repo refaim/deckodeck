@@ -1,0 +1,52 @@
+--- a/src/lib/OpenEXRCore/internal_zip.c
++++ b/src/lib/OpenEXRCore/internal_zip.c
+@@ -23,6 +23,13 @@
+ #if defined __SSE4_1__ || (_MSC_VER >= 1300 && (_M_IX86 || _M_X64) && !defined(_M_ARM64EC))
+ #    define IMF_HAVE_SSE4_1 1
+ #    include <smmintrin.h>
++#    if defined(__clang__) && !defined(__SSE4_1__)
++/* clang-cl defines _MSC_VER but, unlike cl.exe, refuses SSSE3/SSE4.1 intrinsics in a function
++ * compiled without those target features; give this one function what cl.exe assumes. */
++#        define IMF_ZIP_SSE4_1_TARGET __attribute__ ((target ("ssse3,sse4.1")))
++#    else
++#        define IMF_ZIP_SSE4_1_TARGET
++#    endif
+ #endif
+ #if defined(__aarch64__)
+ #    define IMF_HAVE_NEON_AARCH64 1
+@@ -47,7 +54,7 @@
+ /**************************************/
+ 
+ #ifdef IMF_HAVE_SSE4_1
+-static void
++IMF_ZIP_SSE4_1_TARGET static void
+ reconstruct (uint8_t* buf, const uint64_t outSize)
+ {
+     static const uint64_t bytesPerChunk = sizeof (__m128i);
+--- a/src/lib/OpenEXR/ImfSimd.h
++++ b/src/lib/OpenEXR/ImfSimd.h
+@@ -19,6 +19,13 @@
+ 
+ #if defined __SSE4_1__ || (_MSC_VER && (_M_IX86 || _M_X64) && !defined(_M_ARM64EC))
+ #    define IMF_HAVE_SSE4_1 1
++#    if defined(__clang__) && !defined(__SSE4_1__)
++/* clang-cl defines _MSC_VER but, unlike cl.exe, refuses SSSE3/SSE4.1 intrinsics in a function
++ * compiled without those target features; the run-time-dispatched kernels get them per function. */
++#        define IMF_SSE4_1_TARGET __attribute__ ((target ("ssse3,sse4.1")))
++#    else
++#        define IMF_SSE4_1_TARGET
++#    endif
+ #endif
+ 
+ // Compiler flags on e2k (MCST Elbrus 2000) architecture
+--- a/src/lib/OpenEXR/ImfZip.cpp
++++ b/src/lib/OpenEXR/ImfZip.cpp
+@@ -112,7 +112,7 @@
+ 
+ #ifdef IMF_HAVE_SSE4_1
+ 
+-void
++IMF_SSE4_1_TARGET void
+ reconstruct_sse41 (char* buf, size_t outSize)
+ {
+     static const size_t bytesPerChunk = sizeof (__m128i);

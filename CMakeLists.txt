@@ -58,6 +58,13 @@ target_compile_options(
     $<$<BOOL:${PVDKIT_ASAN}>:/Od>
     $<$<BOOL:${PVDKIT_ASAN}>:/Zi>
     $<$<BOOL:${PVDKIT_ASAN}>:-fsanitize=address>)
+# The MSVC STL marks every object that includes <string> or <vector> with detect_mismatch
+# "annotate_string"/"annotate_vector" = 1 under ASan (container annotations on) and 0 otherwise,
+# and lld-link refuses to mix them. The uninstrumented ports are 0, and OpenEXR is the first C++
+# port whose objects carry the mark (dav1d, libavif, spng, libdeflate are C), so the ASan preset
+# turns the STL's container annotations off (__msvc_sanitizer_annotate_container.hpp documents
+# the switch): the report loses the intra-container overflow class, nothing else.
+target_compile_definitions(pvdkit_options INTERFACE $<$<BOOL:${PVDKIT_ASAN}>:_DISABLE_STL_ANNOTATION>)
 target_link_options(
   pvdkit_options
   INTERFACE

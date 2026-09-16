@@ -10,13 +10,16 @@
 #include <numeric>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include <doctest/doctest.h>
 
+#include "PresentationReference.hpp"
 #include "core/colour/Pipeline.hpp"
 #include "core/colour/Primaries.hpp"
+#include "core/colour/ToneMap.hpp"
 #include "core/colour/Transfer.hpp"
 
 namespace pvdkit::core::colour
@@ -60,13 +63,44 @@ namespace pvdkit::core::colour
             return image;
         }
 
-        double measurePresentation(const std::size_t width, const std::size_t height, const unsigned maxThreads)
+        /// The pixels of `converted` (tightly packed BGRA64 bytes, `Presentation::apply` output of
+        /// `source`) that differ from the scalar reference of `source`; alpha must be untouched.
+        std::size_t pixelsDifferingFromReference(const tests::PresentationReference &reference,
+                                                 const std::span<const std::byte> source,
+                                                 const std::span<const std::byte> converted)
+        {
+            REQUIRE(source.size() == converted.size());
+            const auto load = [](const std::span<const std::byte> bytes, const std::size_t offset) {
+                return static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(bytes[offset]) |
+                                                  (std::to_integer<std::uint8_t>(bytes[offset + 1]) << 8U));
+            };
+            std::size_t differing = 0;
+            for (std::size_t offset = 0; offset < source.size(); offset += 8) {
+                const auto expected =
+                    reference.convert(load(source, offset), load(source, offset + 2), load(source, offset + 4));
+                const bool same = load(converted, offset) == expected[0] &&
+                                  load(converted, offset + 2) == expected[1] &&
+                                  load(converted, offset + 4) == expected[2] &&
+                                  load(converted, offset + 6) == load(source, offset + 6);
+                differing += same ? 0U : 1U;
+            }
+            return differing;
+        }
+
+        /// ACES AP1 as EXR hands it over: PQ over explicit chromaticities, the per-pixel EETF
+        /// after the matrix (the path Tasks 16-26 used for everything).
+        constexpr Primaries::Chromaticities kAp1{
+            {0.713F, 0.293F}, {0.165F, 0.830F}, {0.128F, 0.044F}, {0.32168F, 0.33767F}};
+
+        double measurePresentation(const std::size_t width, const std::size_t height, const unsigned maxThreads,
+                                   const std::optional<Primaries::Chromaticities> &chromaticities = std::nullopt)
         {
             const auto pixelCount = width * height;
             const auto source = patternImage(width, height);
             const auto pitchBytes = static_cast<std::uint32_t>(width * 8);
 
-            const Presentation presentation{Cicp{12, 16, 12, true}, 1'000.0F, testTables()};
+            const Presentation presentation{chromaticities ? Cicp{2, 16, 0, true} : Cicp{12, 16, 12, true}, 1'000.0F,
+                                            chromaticities, testTables()};
             auto working = source;
             presentation.applyImage(working, pitchBytes, static_cast<std::uint32_t>(height), maxThreads);
 
@@ -125,6 +159,19 @@ namespace pvdkit::core::colour
                            << kTimingIterations << " iterations after one warm-up, four bands)");
         }
 
+        TEST_CASE("Presentation release timing: explicit chromaticities 1024x428" * doctest::skip())
+        {
+            constexpr std::size_t kWidth = 1'024;
+            constexpr std::size_t kHeight = 428;
+            const auto scalar = measurePresentation(kWidth, kHeight, 1, kAp1);
+            const auto banded = measurePresentation(kWidth, kHeight, 4, kAp1);
+            MESSAGE(kWidth << "x" << kHeight << " over ACES AP1 (per-pixel EETF after the matrix): median " << scalar
+                           << " ns/pixel, " << scalar * static_cast<double>(kWidth * kHeight) / 1'000'000.0
+                           << " ms scalar; " << banded << " ns/pixel, "
+                           << banded * static_cast<double>(kWidth * kHeight) / 1'000'000.0 << " ms four bands ("
+                           << kTimingIterations << " iterations after one warm-up)");
+        }
+
         TEST_CASE("Presentation release timing: construction" * doctest::skip())
         {
             constexpr std::size_t kRuns = 10;
@@ -141,20 +188,24 @@ namespace pvdkit::core::colour
                            static_cast<double>(kRuns)
                     << " ms over " << kRuns << " constructions");
 
-            // The tables are borrowed, so a session's Presentation costs only its transfer LUT;
-            // the first construction is no longer special.
-            std::array<double, kRuns> milliseconds{};
-            for (auto &run : milliseconds) {
-                const auto start = std::chrono::steady_clock::now();
-                const auto presentation =
-                    std::make_unique<Presentation>(Cicp{12, 16, 12, true}, 1'000.0F, testTables());
-                run = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-                CHECK(presentation->sourcePeakNits() == 1'000.0F);
-            }
-            MESSAGE("Presentation(P3/PQ 1000 nit) construction over borrowed tables: best "
-                    << *std::ranges::min_element(milliseconds) << " ms, mean "
-                    << std::accumulate(milliseconds.begin(), milliseconds.end(), 0.0) / static_cast<double>(kRuns)
-                    << " ms over " << kRuns << " constructions");
+            // The tables are borrowed, so a session's Presentation costs its transfer LUT and, for
+            // PQ over coded primaries, the BT.2390 gain table: 65,536 EETF evaluations on the
+            // calling thread (a session starts no thread at construction).
+            const auto measureConstruction = [&](const Cicp &cicp, const std::string_view label) {
+                std::array<double, kRuns> milliseconds{};
+                for (auto &run : milliseconds) {
+                    const auto start = std::chrono::steady_clock::now();
+                    const auto presentation = std::make_unique<Presentation>(cicp, 1'000.0F, testTables());
+                    run = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+                    CHECK(presentation->sourcePeakNits() == 1'000.0F);
+                }
+                MESSAGE(label << ": best " << *std::ranges::min_element(milliseconds) << " ms, mean "
+                              << std::accumulate(milliseconds.begin(), milliseconds.end(), 0.0) /
+                                     static_cast<double>(kRuns)
+                              << " ms over " << kRuns << " constructions");
+            };
+            measureConstruction(Cicp{9, 1, 9, false}, "Presentation(Rec.2020/BT.1886) construction, LUT only");
+            measureConstruction(Cicp{12, 16, 12, true}, "Presentation(P3/PQ 1000 nit) construction, LUT + gain table");
         }
 
         TEST_CASE("diagnostic: exhaustive quantizer proof over every float in [0, 1]" * doctest::skip())
@@ -263,6 +314,28 @@ namespace pvdkit::core::colour
                 CHECK(serial != source);
 
                 for (const unsigned maxThreads : {0U, 1U, 2U, 3U, 4U, 8U}) {
+                    CAPTURE(maxThreads);
+                    auto banded = source;
+                    presentation.applyImage(banded, kWidth * 8, kHeight, maxThreads);
+                    CHECK(banded == serial);
+                }
+            }
+
+            SUBCASE("a large image whose rows are not whole 64-pixel blocks")
+            {
+                // 500 % 64 = 52: every row (and so every band, and the serial reference) ends in a
+                // partial block of the block-wise conversion; 265,000 pixels: banded; 530 % 4 = 2.
+                constexpr std::size_t kWidth = 500;
+                constexpr std::size_t kHeight = 530;
+                const auto source = patternImage(kWidth, kHeight);
+                auto serial = source;
+                presentation.apply(serial);
+                CHECK(serial != source);
+                const tests::PresentationReference reference{Cicp{12, 16, 12, true}, 1'000.0F, std::nullopt,
+                                                             testTables()};
+                CHECK(pixelsDifferingFromReference(reference, source, serial) == 0);
+
+                for (const unsigned maxThreads : {2U, 3U, 4U}) {
                     CAPTURE(maxThreads);
                     auto banded = source;
                     presentation.applyImage(banded, kWidth * 8, kHeight, maxThreads);
@@ -434,6 +507,83 @@ namespace pvdkit::core::colour
             CHECK(black == std::array<std::uint16_t, 4>{42, 42, 42, 12'345});
         }
 
+        TEST_CASE("explicit chromaticities select the run-time primaries matrix and make presentation needed")
+        {
+            // ACES AP1 (ACEScg) is not an H.273 code: the container reports primaries 2 plus the
+            // chromaticities, and the presentation must convert through the run-time matrix
+            // exactly as a Presentation over the coded set would through its table.
+            constexpr Primaries::Chromaticities ap1{
+                {0.713F, 0.293F}, {0.165F, 0.830F}, {0.128F, 0.044F}, {0.32168F, 0.33767F}};
+            constexpr Primaries::Chromaticities bt2020{
+                {0.708F, 0.292F}, {0.170F, 0.797F}, {0.131F, 0.046F}, {0.3127F, 0.3290F}};
+            constexpr Cicp unspecifiedSrgb{2, 13, 0, true};
+            constexpr Cicp unspecifiedLinear{2, 8, 0, true};
+            CHECK_FALSE(Presentation::needed(unspecifiedSrgb, std::nullopt));
+            CHECK(Presentation::needed(unspecifiedSrgb, ap1));
+            CHECK(Presentation::needed(unspecifiedLinear, std::nullopt));
+            CHECK(Presentation::needed(Cicp{2, 16, 0, true}, std::nullopt));
+
+            // Linear AP1 codes (32768, 16384, 8192)/65535 through the AP1-to-sRGB matrix, then the
+            // sRGB OETF (the LUT input is the 16-bit code, not an exact 0.5/0.25/0.125).
+            std::array<std::uint16_t, 4> row{8'192, 16'384, 32'768, 60'000};
+            const Presentation presentation{unspecifiedLinear, std::nullopt, ap1, testTables()};
+            presentation.apply(row);
+            const auto expected = [](const float linear) {
+                return static_cast<std::uint16_t>(
+                    std::lround(std::clamp(Transfer::linearToSrgb(linear), 0.0F, 1.0F) * 65'535.0F));
+            };
+            const auto converted = Primaries::apply(
+                Primaries::toSrgb(ap1), {32'768.0F / 65'535.0F, 16'384.0F / 65'535.0F, 8'192.0F / 65'535.0F});
+            CHECK(row[0] == expected(converted[2]));
+            CHECK(row[1] == expected(converted[1]));
+            CHECK(row[2] == expected(converted[0]));
+            CHECK(row[3] == 60'000);
+
+            // Chromaticities equal to a coded set take the run-time path: the matrix derived from
+            // them (within a few ULPs of the coded table) and the EETF after it, per pixel, while
+            // the coded session tone-maps before the matrix from its gain table. The two orders
+            // differ for saturated codes, so the pixels are not expected to agree; each agrees
+            // with the scalar reference of its own path (the sweep case below).
+            std::array<std::uint16_t, 4> viaCode{8'192, 16'384, 32'768, 1};
+            std::array<std::uint16_t, 4> viaChromaticities = viaCode;
+            const Presentation coded{Cicp{9, 16, 9, true}, 1'000.0F, testTables()};
+            const Presentation explicitSet{Cicp{2, 16, 0, true}, 1'000.0F, bt2020, testTables()};
+            CHECK(coded.toneMapGains().size() == 65'536);
+            CHECK(explicitSet.toneMapGains().empty());
+            coded.apply(viaCode);
+            explicitSet.apply(viaChromaticities);
+            const tests::PresentationReference codedReference{Cicp{9, 16, 9, true}, 1'000.0F, std::nullopt,
+                                                              testTables()};
+            const tests::PresentationReference explicitReference{Cicp{2, 16, 0, true}, 1'000.0F, bt2020, testTables()};
+            CHECK(codedReference.toneMapsInSource());
+            CHECK_FALSE(explicitReference.toneMapsInSource());
+            CHECK(std::array<std::uint16_t, 3>{viaCode[0], viaCode[1], viaCode[2]} ==
+                  codedReference.convert(8'192, 16'384, 32'768));
+            CHECK(std::array<std::uint16_t, 3>{viaChromaticities[0], viaChromaticities[1], viaChromaticities[2]} ==
+                  explicitReference.convert(8'192, 16'384, 32'768));
+
+            // With explicit chromaticities the coded primaries are ignored, so the identity code
+            // still converts through the explicit set.
+            std::array<std::uint16_t, 4> identityCode{8'192, 16'384, 32'768, 1};
+            const Presentation ignoredCode{Cicp{1, 16, 0, true}, 1'000.0F, bt2020, testTables()};
+            ignoredCode.apply(identityCode);
+            CHECK(identityCode == viaChromaticities);
+
+            // A set no derivation can use (a white with y = 0) is ignored in favour of the coded
+            // primaries: a container validates before handing over, the presentation never divides.
+            // Only a usable set forces the presentation: with sRGB signalling and an unusable set
+            // nothing is converted, so a session must not build a Presentation at all.
+            constexpr Primaries::Chromaticities unusable{
+                {0.708F, 0.292F}, {0.170F, 0.797F}, {0.131F, 0.046F}, {0.3127F, 0.0F}};
+            CHECK_FALSE(Primaries::isUsable(unusable));
+            CHECK_FALSE(Presentation::needed(unspecifiedSrgb, unusable));
+            CHECK(Presentation::needed(Cicp{9, 13, 9, false}, unusable));
+            std::array<std::uint16_t, 4> viaUnusable{8'192, 16'384, 32'768, 1};
+            const Presentation ignoredSet{Cicp{9, 16, 9, true}, 1'000.0F, unusable, testTables()};
+            ignoredSet.apply(viaUnusable);
+            CHECK(viaUnusable == viaCode);
+        }
+
         TEST_CASE("invalid and unavailable PQ mastering peaks use the 1000-nit fallback")
         {
             CHECK(Presentation{Cicp{9, 16, 9, false}, std::nullopt, testTables()}.sourcePeakNits() == 1'000.0F);
@@ -444,37 +594,185 @@ namespace pvdkit::core::colour
             CHECK(Presentation{Cicp{9, 16, 9, false}, 600.0F, testTables()}.sourcePeakNits() == 600.0F);
         }
 
-        TEST_CASE("PQ transfer and P3-D65 primaries agree with independent zscale SDR-range samples")
+        TEST_CASE("the tabulated tone map agrees bit for bit with the scalar reference on every code sweep")
+        {
+            // The gain table is indexed by the maximum channel code, so every code must be swept
+            // in every channel position, alone, as grey and with the other two channels lower: the
+            // PQ sessions the plugins produce over coded primaries (P3, Rec.2020 and BT.709,
+            // mastering peaks from the SDR range to the PQ peak, the 1000-nit fallback) take the
+            // table; PQ over explicit chromaticities (ACES AP1 and a Rec.2020 set as EXR hands
+            // them over) and HLG take the per-pixel EETF after the matrix. Each path is held to
+            // the scalar reference of the same order.
+            constexpr Primaries::Chromaticities ap1{
+                {0.713F, 0.293F}, {0.165F, 0.830F}, {0.128F, 0.044F}, {0.32168F, 0.33767F}};
+            constexpr Primaries::Chromaticities bt2020{
+                {0.708F, 0.292F}, {0.170F, 0.797F}, {0.131F, 0.046F}, {0.3127F, 0.3290F}};
+            struct Session
+            {
+                Cicp cicp;
+                std::optional<float> masteringPeakNits;
+                std::optional<Primaries::Chromaticities> chromaticities;
+                bool tabulated;
+            };
+            const std::array sessions{
+                Session{Cicp{12, 16, 12, true}, 1'000.0F, std::nullopt, true},
+                Session{Cicp{9, 16, 9, true}, 470.0F, std::nullopt, true},
+                Session{Cicp{1, 16, 1, true}, 10'000.0F, std::nullopt, true},
+                Session{Cicp{9, 16, 9, false}, std::nullopt, std::nullopt, true},
+                Session{Cicp{9, 16, 9, true}, 100.0F, std::nullopt, true},
+                Session{Cicp{2, 16, 0, true}, 497.0F, ap1, false},
+                Session{Cicp{2, 16, 0, true}, 1'000.0F, bt2020, false},
+                Session{Cicp{9, 18, 9, false}, std::nullopt, std::nullopt, false},
+            };
+            for (const auto &session : sessions) {
+                CAPTURE(session.cicp.primaries);
+                CAPTURE(session.cicp.transfer);
+                const Presentation presentation{session.cicp, session.masteringPeakNits, session.chromaticities,
+                                                testTables()};
+                const tests::PresentationReference reference{session.cicp, session.masteringPeakNits,
+                                                             session.chromaticities, testTables()};
+                CHECK(presentation.toneMapGains().empty() != session.tabulated);
+                CHECK(reference.toneMapsInSource() == session.tabulated);
+                std::size_t differing = 0;
+                std::size_t alphaChanged = 0;
+                for (std::uint32_t code = 0; code < 65'536; ++code) {
+                    const auto c = static_cast<std::uint16_t>(code);
+                    const auto half = static_cast<std::uint16_t>(code / 2);
+                    const auto quarter = static_cast<std::uint16_t>(code / 4);
+                    const std::array<std::array<std::uint16_t, 3>, 7> pixels{{{c, 0, 0},
+                                                                              {0, c, 0},
+                                                                              {0, 0, c},
+                                                                              {c, c, c},
+                                                                              {c, half, quarter},
+                                                                              {quarter, c, half},
+                                                                              {half, quarter, c}}};
+                    for (const auto &pixel : pixels) {
+                        std::array<std::uint16_t, 4> row{pixel[0], pixel[1], pixel[2], c};
+                        presentation.apply(row);
+                        const auto expected = reference.convert(pixel[0], pixel[1], pixel[2]);
+                        differing += row[0] == expected[0] && row[1] == expected[1] && row[2] == expected[2] ? 0U : 1U;
+                        alphaChanged += row[3] == c ? 0U : 1U;
+                    }
+                }
+                CHECK(differing == 0);
+                CHECK(alphaChanged == 0);
+            }
+        }
+
+        TEST_CASE("the tabulated tone map agrees with the scalar reference on every pixel of whole images")
+        {
+            const Cicp p3Pq{12, 16, 12, true};
+            const Presentation presentation{p3Pq, 1'000.0F, testTables()};
+            const tests::PresentationReference reference{p3Pq, 1'000.0F, std::nullopt, testTables()};
+
+            SUBCASE("a random image through four bands")
+            {
+                constexpr std::size_t kWidth = 1'024;
+                constexpr std::size_t kHeight = 512; // 512 Ki pixels: banded
+                std::vector<std::byte> source(kWidth * kHeight * 8);
+                std::uint32_t state = 0x2545'F491U;
+                for (auto &value : source) {
+                    state = state * 1'664'525U + 1'013'904'223U;
+                    value = static_cast<std::byte>(state >> 24U);
+                }
+                auto converted = source;
+                presentation.applyImage(converted, kWidth * 8, kHeight, 4);
+                CHECK(pixelsDifferingFromReference(reference, source, converted) == 0);
+            }
+
+            SUBCASE("the timing pattern on the calling thread")
+            {
+                const auto source = patternImage(512, 256);
+                auto converted = source;
+                presentation.apply(std::span{converted});
+                CHECK(pixelsDifferingFromReference(reference, source, converted) == 0);
+            }
+        }
+
+        TEST_CASE("the tone-map gain table is built for coded PQ sessions only and holds the per-code EETF gain")
+        {
+            // SDR, wide-gamut-only and HLG sessions have no use for it and must not pay for it,
+            // and PQ over explicit chromaticities tone-maps after the matrix (a usable set; an
+            // unusable one is ignored and the coded set's table stands).
+            constexpr Primaries::Chromaticities ap0{
+                {0.7347F, 0.2653F}, {0.0F, 1.0F}, {0.0001F, -0.0770F}, {0.32168F, 0.33767F}};
+            constexpr Primaries::Chromaticities unusable{
+                {0.7347F, 0.2653F}, {0.0F, 1.0F}, {0.0001F, -0.0770F}, {0.32168F, 0.0F}};
+            CHECK(Presentation{Cicp{1, 13, 6, false}, std::nullopt, testTables()}.toneMapGains().empty());
+            CHECK(Presentation{Cicp{9, 13, 9, false}, std::nullopt, testTables()}.toneMapGains().empty());
+            CHECK(Presentation{Cicp{12, 8, 0, true}, std::nullopt, testTables()}.toneMapGains().empty());
+            CHECK(Presentation{Cicp{9, 18, 9, false}, 1'000.0F, testTables()}.toneMapGains().empty());
+            CHECK(Presentation{Cicp{2, 16, 0, true}, 600.0F, ap0, testTables()}.toneMapGains().empty());
+            CHECK(Presentation{Cicp{9, 16, 9, true}, 600.0F, unusable, testTables()}.toneMapGains().size() == 65'536);
+
+            // Entry c is the EETF gain of the code's own linear value, mapNits(lut[c]) / lut[c];
+            // entry 0 is unused (a pixel whose maximum code is 0 is black by definition) and zero.
+            const Presentation serial{Cicp{12, 16, 12, true}, 600.0F, testTables()};
+            const auto gains = serial.toneMapGains();
+            REQUIRE(gains.size() == 65'536);
+            CHECK(gains[0] == 0.0F);
+            const ToneMap::Eetf eetf{600.0F};
+            std::size_t differing = 0;
+            for (std::uint32_t code = 1; code < 65'536; ++code) {
+                const auto nits = Transfer::toLinear(16, static_cast<float>(code) / 65'535.0F);
+                differing += gains[code] == eetf.mapNits(nits) / nits ? 0U : 1U;
+            }
+            CHECK(differing == 0);
+
+            // A second session over the same signalling builds the same table and the same pixels.
+            std::array<std::uint16_t, 8> row{1, 2, 3, 4, 40'000, 50'000, 60'000, 7};
+            serial.apply(row);
+            const Presentation again{Cicp{12, 16, 12, true}, 600.0F, testTables()};
+            CHECK(std::ranges::equal(again.toneMapGains(), gains));
+            std::array<std::uint16_t, 8> againRow{1, 2, 3, 4, 40'000, 50'000, 60'000, 7};
+            again.apply(againRow);
+            CHECK(againRow == row);
+        }
+
+        TEST_CASE(
+            "PQ transfer and P3/Rec.2020 primaries agree with independent zscale samples in and above the SDR range")
         {
             struct ReferenceSample
             {
+                std::uint16_t primaries;
                 Primaries::Rgb encoded;
                 Primaries::Rgb linearBt709;
+                bool aboveSdrRange;
             };
-            // cosmos1650_yuv444_10bpc_p3pq.avif was decoded by zscale to encoded P3/PQ GBR float,
-            // then independently converted to linear BT.709 with npl=100. Both selected output
-            // pixels are wholly within [0, 1], and tone mapping is deliberately absent.
+            // cosmos1650_yuv444_10bpc_p3pq.avif (P3/PQ) and colors_hdr_rec2020.avif (Rec.2020/PQ)
+            // were decoded by zscale to encoded GBR float, then independently converted to linear
+            // BT.709 with npl=100 (ffmpeg -vf zscale, the commands in the Task 16 report; re-run for
+            // Task 27). Tone mapping is deliberately absent on both sides: the two cosmos pixels are
+            // wholly within [0, 1], the colors pixel is above it in red and green (an HDR-range
+            // sample that the tone map would compress), so only the transfer and the matrix are
+            // compared, which is what an untouched zscale reference can validate.
             constexpr std::array samples{
-                ReferenceSample{{0.401375532F, 0.292456090F, 0.172915980F},
-                                {0.382961124F, 0.0811400041F, 0.00322370953F}},
-                ReferenceSample{{0.494066209F, 0.439880162F, 0.320413500F},
-                                {0.952770710F, 0.482266605F, 0.0859083757F}},
+                ReferenceSample{12,
+                                {0.401375532F, 0.292456090F, 0.172915980F},
+                                {0.382961124F, 0.0811400041F, 0.00322370953F},
+                                false},
+                ReferenceSample{
+                    12, {0.494066209F, 0.439880162F, 0.320413500F}, {0.952770710F, 0.482266605F, 0.0859083757F}, false},
+                ReferenceSample{
+                    9, {0.547426581F, 0.525673628F, 0.334289908F}, {1.73502994F, 1.16382432F, 0.0248015784F}, true},
             };
             constexpr auto tolerance = 2.0F / 255.0F;
 
             for (const auto &sample : samples) {
+                CAPTURE(sample.primaries);
                 const Primaries::Rgb sourceNits{Transfer::toLinear(16, sample.encoded[0]),
                                                 Transfer::toLinear(16, sample.encoded[1]),
                                                 Transfer::toLinear(16, sample.encoded[2])};
-                auto actual = Primaries::apply(Primaries::toSrgb(12), sourceNits);
+                auto actual = Primaries::apply(Primaries::toSrgb(sample.primaries), sourceNits);
                 for (auto &channel : actual) {
                     channel /= 100.0F;
                 }
 
+                CHECK(std::ranges::any_of(sample.linearBt709, [](const float value) { return value > 1.0F; }) ==
+                      sample.aboveSdrRange);
                 for (std::size_t channel = 0; channel < actual.size(); ++channel) {
                     CAPTURE(channel);
                     CHECK(sample.linearBt709[channel] >= 0.0F);
-                    CHECK(sample.linearBt709[channel] <= 1.0F);
                     CHECK(std::abs(actual[channel] - sample.linearBt709[channel]) <= tolerance);
                 }
             }

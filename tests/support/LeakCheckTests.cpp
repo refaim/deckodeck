@@ -13,9 +13,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -246,11 +249,29 @@ TEST_CASE("a leaked mapped view is charged exactly, even with its section handle
 {
     const auto before = snapshotResources();
     auto leaked = mapView();
-    const auto during = snapshotResources() - before;
+    const auto afterLeak = snapshotResources();
+    const auto during = afterLeak - before;
     CHECK(during.mappedViews == 1);
     CHECK(during.mappedBytes == kViewBytes);
     CHECK(during.handles == 0);
     CHECK(during.heapBlocks == 0);
+    {
+        // The region listing names the view that appeared: its base, its size, and - a pagefile-
+        // backed section having no file - that there is none. Seen from the other side, the same
+        // region is the one that vanished. Everything this block allocates dies with it.
+        const auto appeared = pvdkit::test::describeRegionChanges(afterLeak, before);
+        CAPTURE(appeared);
+        CHECK(std::ranges::count(appeared, '\n') == 1);
+        CHECK(appeared.find("  + 0x") == 0);
+        CHECK(appeared.find(" 1024 KiB (pagefile-backed)") != std::string::npos);
+        const auto vanished = pvdkit::test::describeRegionChanges(before, afterLeak);
+        CAPTURE(vanished);
+        CHECK(std::ranges::count(vanished, '\n') == 1);
+        CHECK(vanished.find("  - 0x") == 0);
+        CHECK(vanished.find(" 1024 KiB (pagefile-backed)") != std::string::npos);
+        CHECK(vanished.substr(3) == appeared.substr(3)); // the same region, the sign apart
+        CHECK(pvdkit::test::describeRegionChanges(afterLeak, afterLeak).empty());
+    }
 
     // Three more: still one region per view. Everything this block allocates (the vector's
     // buffer, the report line) dies with it, before the final snapshot.
@@ -274,6 +295,56 @@ TEST_CASE("a leaked mapped view is charged exactly, even with its section handle
     }
     leaked.reset();
     CHECK(exactCountersZero(snapshotResources() - before));
+}
+
+TEST_CASE("a view of a file is listed with the file behind it, so a lazily mapped system section has a name")
+{
+    // A file of this process's own in %TEMP%, mapped read-only; the region listing must carry
+    // the mapped file's name (an NT device path ending in the file name) next to the view.
+    const auto path =
+        std::filesystem::temp_directory_path() / ("pvdkit-region-" + std::to_string(GetCurrentProcessId()) + ".bin");
+    {
+        std::ofstream stream{path, std::ios::binary};
+        REQUIRE(stream.good());
+        const std::string bytes(8192, 'r');
+        stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(stream.good());
+    }
+    const auto before = snapshotResources();
+    {
+        const UniqueHandle file{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                            FILE_ATTRIBUTE_NORMAL, nullptr)};
+        REQUIRE(file.get() != INVALID_HANDLE_VALUE);
+        const UniqueHandle section{CreateFileMappingW(file.get(), nullptr, PAGE_READONLY, 0, 0, nullptr)};
+        REQUIRE(section);
+        const UniqueView view{MapViewOfFile(section.get(), FILE_MAP_READ, 0, 0, 0)};
+        REQUIRE(view);
+        const auto mapped = snapshotResources();
+        const auto during = mapped - before;
+        CHECK(during.mappedViews == 1);
+        CHECK(during.mappedBytes == 8192);
+        const auto appeared = pvdkit::test::describeRegionChanges(mapped, before);
+        CAPTURE(appeared);
+        CHECK(std::ranges::count(appeared, '\n') == 1);
+        CHECK(appeared.find("  + 0x") == 0);
+        CHECK(appeared.find(" 8 KiB ") != std::string::npos);
+        CHECK(appeared.find("\\Device\\") != std::string::npos);
+        CHECK(appeared.find(path.filename().string() + "\n") != std::string::npos);
+        CHECK(appeared.find("pagefile-backed") == std::string::npos);
+        // The region record itself answers the same name.
+        bool found = false;
+        for (const auto &region : mapped.regions) {
+            if (region.base == reinterpret_cast<std::uintptr_t>(view.get())) {
+                found = true;
+                CHECK(region.size == 8192);
+                CHECK(std::string{pvdkit::test::name(region)}.ends_with(path.filename().string()));
+            }
+        }
+        CHECK(found);
+    }
+    CHECK(exactCountersZero(snapshotResources() - before));
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
 }
 
 TEST_CASE("a critical section's debug block is recognised and reported, not charged")
@@ -375,6 +446,7 @@ TEST_CASE("measureLeaks charges the measured iterations only and reports the cou
         CHECK(exactCountersZero(report.delta));
         CHECK_FALSE(report.secondPassRan);
         CHECK(retained.size() == 3);
+        CHECK(pvdkit::test::formatReportLists(report).empty());
         pvdkit::test::requireNoLeak(report);
     }
 
@@ -382,11 +454,12 @@ TEST_CASE("measureLeaks charges the measured iterations only and reports the cou
     {
         retained.reserve(64);
         const auto report =
-            measureLeaks("leaking body", 1, 5, [&](const std::size_t) { retained.push_back(allocateBlock(2048)); });
+            measureLeaks("leaking body", 1, 5, [&](const std::size_t) { retained.push_back(allocateBlock(4096)); });
         CHECK(report.delta.heapBlocks == expectedBlocks(5));
         if (!underAddressSanitizer()) {
-            CHECK(report.delta.heapBytes >= 5 * 2048);
-            // Five blocks is beyond noise: the first pass decides, the second is reported.
+            CHECK(report.delta.heapBytes >= 5 * 4096);
+            // Five blocks are within the block noise but 5 x 4096 bytes are beyond the byte noise:
+            // the first pass decides, the second is reported.
             CHECK(report.secondPassRan);
             CHECK_FALSE(report.firstPassWithinNoise);
             CHECK(report.firstPass.heapBlocks == 5);
@@ -394,8 +467,15 @@ TEST_CASE("measureLeaks charges the measured iterations only and reports the cou
             CHECK(std::ranges::count(report.newBlocks, '\n') == 5);
             CHECK(std::ranges::count(report.firstPassNewBlocks, '\n') == 5);
             CHECK(std::ranges::count(report.secondPassNewBlocks, '\n') == 5);
-            CHECK((report.newBlocks.find(" 2048 bytes: ") != std::string::npos) == !debugCrt());
+            CHECK((report.newBlocks.find(" 4096 bytes: ") != std::string::npos) == !debugCrt());
             CHECK(report.newBlocks.find(" bytes: ") != std::string::npos);
+            // The lists under the report line: both passes' blocks, no regions (none moved).
+            const auto lists = pvdkit::test::formatReportLists(report);
+            CAPTURE(lists);
+            CHECK(lists.find("[leak]   blocks that appeared in the first pass:\n  0x") != std::string::npos);
+            CHECK(lists.find("[leak]   blocks that appeared in the second pass:\n  0x") != std::string::npos);
+            CHECK(lists.find("mapped regions") == std::string::npos);
+            CHECK(std::ranges::count(lists, '\n') == 12);
         }
         CHECK(report.delta.handles == 0);
     }
@@ -416,12 +496,33 @@ TEST_CASE("measureLeaks charges the measured iterations only and reports the cou
         views.reserve(64);
         const auto report =
             measureLeaks("view-leaking body", 2, 6, [&](const std::size_t) { views.push_back(mapView()); });
+        // Views are the second pass's to decide (a leaked view recurs, a one-time mapping does
+        // not): the first pass is within noise, the second charges the six views again, and each
+        // pass lists the regions that appeared.
         CHECK(report.delta.mappedViews == 6);
         CHECK(report.delta.mappedBytes == 6 * kViewBytes);
         CHECK(report.delta.handles == 0);
         CHECK(report.secondPassRan);
-        CHECK_FALSE(report.firstPassWithinNoise);
+        CHECK(report.firstPassWithinNoise);
+        CHECK(report.firstPass.mappedViews == 6);
         CHECK(report.secondPass.mappedViews == 6);
+        // Under ASan the runtime's own regions may move as well (LeakCheck.hpp); elsewhere the
+        // six views are the whole list.
+        if (!underAddressSanitizer()) {
+            CHECK(std::ranges::count(report.firstPassRegionChanges, '\n') == 6);
+            CHECK(std::ranges::count(report.secondPassRegionChanges, '\n') == 6);
+            CHECK(report.secondPassRegionChanges.find("  - 0x") == std::string::npos);
+        }
+        CHECK(report.regionChanges == report.secondPassRegionChanges);
+        CHECK(report.secondPassRegionChanges.find("  + 0x") != std::string::npos);
+        CHECK(report.secondPassRegionChanges.find(" 1024 KiB (pagefile-backed)\n") != std::string::npos);
+        const auto lists = pvdkit::test::formatReportLists(report);
+        CAPTURE(lists);
+        CHECK(lists.find("[leak]   mapped regions that changed in the first pass (+ appeared, - vanished):\n  + 0x") !=
+              std::string::npos);
+        CHECK(lists.find("[leak]   mapped regions that changed in the second pass (+ appeared, - vanished):\n  + 0x") !=
+              std::string::npos);
+        CHECK(lists.find("blocks that appeared") == std::string::npos);
     }
 
     SUBCASE("a one-off allocation within noise is decided by a second pass; anything larger is not")
@@ -479,7 +580,9 @@ TEST_CASE("measureLeaks charges the measured iterations only and reports the cou
         CHECK(handle.delta.handles == 1);
         CHECK(handle.secondPass.handles == 0);
 
-        // One view, once: neither have views.
+        // One view, once: a one-time mapping (a system section the CRT maps on first use, say)
+        // is not a leak - a region that appeared in the first pass and did not appear again in
+        // the second is what the second pass decides away, and the report names it.
         calls = 0;
         views.reserve(64);
         const auto view = measureLeaks("one-off view body", 1, 3, [&](const std::size_t) {
@@ -488,23 +591,176 @@ TEST_CASE("measureLeaks charges the measured iterations only and reports the cou
             }
         });
         CHECK(view.secondPassRan);
-        CHECK_FALSE(view.firstPassWithinNoise);
-        CHECK(view.delta.mappedViews == 1);
+        CHECK(view.firstPassWithinNoise);
+        CHECK(view.firstPass.mappedViews == 1);
+        CHECK(view.firstPass.mappedBytes == kViewBytes);
         CHECK(view.secondPass.mappedViews == 0);
+        CHECK(exactCountersZero(view.delta));
+        CHECK(view.firstPassRegionChanges.find("  + 0x") != std::string::npos);
+        CHECK(view.firstPassRegionChanges.find(" 1024 KiB (pagefile-backed)\n") != std::string::npos);
+        if (!underAddressSanitizer()) {
+            CHECK(std::ranges::count(view.firstPassRegionChanges, '\n') == 1);
+            CHECK(view.secondPassRegionChanges.empty());
+            CHECK(view.regionChanges.empty());
+        }
+        const auto viewLine = pvdkit::test::formatReport(view);
+        CAPTURE(viewLine);
+        CHECK(viewLine.find("views +0 (+0 KiB)") != std::string::npos);
+        CHECK(viewLine.find("[first pass: heap blocks +0, heap bytes +0, handles +0, views +1 (+1024 KiB)") !=
+              std::string::npos);
+        CHECK(viewLine.find("the first pass grew within noise, the second decided]") != std::string::npos);
+        const auto viewLists = pvdkit::test::formatReportLists(view);
+        CAPTURE(viewLists);
+        CHECK(viewLists.find(
+                  "[leak]   mapped regions that changed in the first pass (+ appeared, - vanished):\n  + 0x") !=
+              std::string::npos);
+        CHECK(viewLists.find("second pass") == std::string::npos);
+        pvdkit::test::requireNoLeak(view);
+
+        // Mapped bytes up with the view count flat, once (a region that grew in place - the
+        // pagefile-backed section committed further): the same rule, since the region set says
+        // which region it was.
+        calls = 0;
+        const UniqueHandle growing{CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE | SEC_RESERVE, 0,
+                                                      4 * kViewBytes, nullptr)};
+        REQUIRE(growing);
+        UniqueView reserved{MapViewOfFile(growing.get(), FILE_MAP_ALL_ACCESS, 0, 0, 0)};
+        REQUIRE(reserved);
+        REQUIRE(VirtualAlloc(reserved.get(), kViewBytes, MEM_COMMIT, PAGE_READWRITE) != nullptr);
+        constexpr SIZE_T kGrownBytes = 2 * static_cast<SIZE_T>(kViewBytes);
+        const auto grown = measureLeaks("growing view body", 1, 3, [&](const std::size_t) {
+            if (++calls == 2) {
+                REQUIRE(VirtualAlloc(reserved.get(), kGrownBytes, MEM_COMMIT, PAGE_READWRITE) != nullptr);
+            }
+        });
+        CHECK(grown.secondPassRan);
+        CHECK(grown.firstPassWithinNoise);
+        CHECK(grown.firstPass.mappedViews == 0);
+        CHECK(grown.firstPass.mappedBytes == kViewBytes);
+        CHECK(exactCountersZero(grown.delta));
+        CAPTURE(grown.firstPassRegionChanges);
+        CHECK(grown.firstPassRegionChanges.find("  + 0x") != std::string::npos);
+        CHECK(grown.firstPassRegionChanges.find("  - 0x") != std::string::npos);
+        CHECK(grown.firstPassRegionChanges.find(" 2048 KiB (pagefile-backed)\n") != std::string::npos);
+        CHECK(grown.firstPassRegionChanges.find(" 1024 KiB (pagefile-backed)\n") != std::string::npos);
+        pvdkit::test::requireNoLeak(grown);
+        reserved.reset();
     }
 }
 
-TEST_CASE("the retry noise bound is two small blocks and nothing else")
+// A real system section the OS maps on first use, forced inside the measured pass past a warm-up
+// that never got there: the sorting table behind the first CompareStringEx of a process
+// (SortDefault.nls, 3296 KiB on Windows 10). The first pass lists it by name, the second pass
+// maps nothing more. What the gate makes of it is not asserted: on Windows 10 kernelbase also
+// keeps the table's section handle (handles +1) and two small blocks, on which the first pass
+// decides - a kept OS handle is indistinguishable from a leaked one, and a plugin whose warm-up
+// reaches the call never sees any of this; the report is printed so a CI log shows what its OS
+// does. The one-off pagefile-backed view above is the self-test of the rule itself.
+TEST_CASE("a system section mapped on first use inside the measured pass is listed by name")
+{
+    // Nothing in this process has collated yet, so the table is not mapped; should some day
+    // something before this test map it, there is nothing left to force here.
+    const auto regionsBefore = snapshotResources();
+    const auto sortTableMapped = std::ranges::any_of(regionsBefore.regions, [](const pvdkit::test::MappedRegion &r) {
+        return std::string_view{pvdkit::test::name(r)}.find("SortDefault.nls") != std::string_view::npos;
+    });
+    if (sortTableMapped) {
+        MESSAGE("SortDefault.nls is already mapped in this process; nothing to force");
+        return;
+    }
+    std::size_t calls = 0;
+    const auto report = measureLeaks("first collation body", 1, 3, [&](const std::size_t) {
+        if (++calls == 2) {
+            CHECK(CompareStringEx(LOCALE_NAME_INVARIANT, 0, L"abc", -1, L"abd", -1, nullptr, nullptr, 0) ==
+                  CSTR_LESS_THAN);
+        }
+    });
+    pvdkit::test::printReport(report);
+    CHECK(report.secondPassRan);
+    CHECK(report.firstPass.mappedViews == 1);
+    CHECK(report.firstPass.mappedBytes > 1024 * 1024);
+    CHECK(report.secondPass.mappedViews == 0);
+    CHECK(report.secondPass.mappedBytes == 0);
+    CAPTURE(report.firstPassRegionChanges);
+    CHECK(report.firstPassRegionChanges.find("  + 0x") != std::string::npos);
+    CHECK(report.firstPassRegionChanges.find("\\Windows\\Globalization\\Sorting\\SortDefault.nls\n") !=
+          std::string::npos);
+    CHECK(report.secondPassRegionChanges.empty());
+}
+
+// The failed gate's follow-up: the same body, one item at a time with a snapshot pair around
+// each, names the item after which busy blocks stayed - and says so when none did.
+TEST_CASE("localiseHeapGrowth names the item after which blocks stayed, with the blocks, and only that item")
+{
+    using pvdkit::test::localiseHeapGrowth;
+    std::vector<std::unique_ptr<std::byte[]>> retained;
+    retained.reserve(8);
+    const auto label = [](const std::size_t item) { return "item-" + std::to_string(item) + " (fake)"; };
+
+    // Item 2 keeps a block, item 4 keeps two; the others allocate and free.
+    const auto text = localiseHeapGrowth(
+        6,
+        [&](const std::size_t item) {
+            auto transient = allocateBlock(512);
+            if (item == 2) {
+                retained.push_back(allocateBlock(3000));
+            }
+            if (item == 4) {
+                retained.push_back(allocateBlock(100));
+                retained.push_back(allocateBlock(200));
+            }
+        },
+        label);
+    CAPTURE(text);
+    CHECK(retained.size() == 3);
+    if (!underAddressSanitizer()) {
+        CHECK(text.find("[leak]   after item-2 (fake): heap blocks +1, heap bytes +") == 0);
+        CHECK(text.find("[leak]   after item-4 (fake): heap blocks +2, heap bytes +") != std::string::npos);
+        CHECK((text.find(" 3000 bytes: ") != std::string::npos) == !debugCrt());
+        CHECK(std::ranges::count(text, '\n') == 5); // two headers, one block, two blocks
+        for (const std::size_t clean : {0, 1, 3, 5}) {
+            CHECK(text.find(label(clean)) == std::string::npos);
+        }
+        CHECK(text.find("no item retained") == std::string::npos);
+    } else {
+        // Under ASan the heap walk does not see malloc'd blocks (LeakCheck.hpp); the diagnostic
+        // then has nothing to name and says so.
+        CHECK(text.find("[leak]   no item retained a block") == 0);
+    }
+
+    // A body that keeps nothing: one line saying so, so a log never ends on a bare failure.
+    const auto clean = localiseHeapGrowth(4, [&](const std::size_t) { auto transient = allocateBlock(64); }, label);
+    CAPTURE(clean);
+    CHECK(clean == "[leak]   no item retained a block: the growth did not recur one item at a time (a one-time "
+                   "allocation of the failed pass, not any item's)\n");
+}
+
+TEST_CASE("the retry noise bound is forty-eight small blocks and no handle; views are the second pass's to decide")
 {
     using pvdkit::test::withinRetryNoise;
     CHECK(withinRetryNoise({0, 0, 0, 0, 0, 0, 0}));
     CHECK(withinRetryNoise({2, 1024, 0, 0, 0, 0, 0}));
+    // The per-thread bookkeeping one exited band worker leaves behind (LeakCheck.hpp): 11 to 16
+    // blocks of 3200 to 3888 bytes on x64, 15 of 2188 on x86. A decode starts up to three such
+    // workers, so up to three sets may be outstanding at one snapshot - two were on the CI
+    // runner (+30 blocks, +6744 bytes) - and the bound holds three with a little room above.
+    CHECK(withinRetryNoise({15, 3200, 0, 0, 0, 0, 0}));
+    CHECK(withinRetryNoise({15, 2188, 0, 0, 0, 0, 0}));
+    CHECK(withinRetryNoise({30, 6744, 0, 0, 0, 0, 0}));
+    CHECK(withinRetryNoise({45, 9600, 0, 0, 0, 0, 0}));
+    CHECK(withinRetryNoise({45, 6564, 0, 0, 0, 0, 0}));
+    CHECK(withinRetryNoise({48, 11664, 0, 0, 0, 0, 0}));
+    CHECK(withinRetryNoise({48, 12288, 0, 0, 0, 0, 0}));
     CHECK(withinRetryNoise({-5, -4096, -1, -1, -4096, 0, 0}));
-    CHECK_FALSE(withinRetryNoise({3, 96, 0, 0, 0, 0, 0}));
-    CHECK_FALSE(withinRetryNoise({1, 1025, 0, 0, 0, 0, 0}));
+    CHECK_FALSE(withinRetryNoise({49, 96, 0, 0, 0, 0, 0}));
+    CHECK_FALSE(withinRetryNoise({1, 12289, 0, 0, 0, 0, 0}));
     CHECK_FALSE(withinRetryNoise({0, 0, 1, 0, 0, 0, 0}));
-    CHECK_FALSE(withinRetryNoise({0, 0, 0, 1, 4096, 0, 0}));
-    CHECK_FALSE(withinRetryNoise({0, 0, 0, 0, 4096, 0, 0}));
+    // Any number of regions may appear in the first pass: a mapping that does not appear again in
+    // the second pass was a one-time one, and one that does is charged by the second pass.
+    CHECK(withinRetryNoise({0, 0, 0, 1, 4096, 0, 0}));
+    CHECK(withinRetryNoise({0, 0, 0, 0, 4096, 0, 0}));
+    CHECK(withinRetryNoise({0, 0, 0, 200, 800 * 1024, 0, 0}));
+    CHECK_FALSE(withinRetryNoise({0, 0, 1, 1, 4096, 0, 0}));
     // Private bytes and the heap's committed size are not exact counters and never block a retry.
     CHECK(withinRetryNoise({0, 0, 0, 0, 0, 64 * 1024 * 1024, 64 * 1024 * 1024}));
 }
@@ -541,6 +797,57 @@ TEST_CASE("the gate fails a report whose mapped bytes grew with no new view, exc
                                               : "gate self-test: views +0 (+24 KiB), one failed CHECK expected";
     report.delta = {0, 0, 0, 0, 24 * 1024, 0, 0, 0};
     pvdkit::test::requireNoLeak(report);
+}
+
+// The property the retry-noise bound leans on: a growth that fits the first-pass bound but recurs
+// is charged by the second pass. One 32-byte block leaked per iteration over five iterations is
+// +5 blocks and a few hundred bytes - within {48 blocks, 12 KiB} - so the second pass decides,
+// finds the same five again and fails the gate on blocks and bytes (two CHECKs; none under ASan,
+// where the walk does not see malloc'd blocks and no second pass runs).
+TEST_CASE("a recurring growth within the first-pass noise is charged by the second pass, except under ASan" *
+          doctest::expected_failures(underAddressSanitizer() ? 0 : 2))
+{
+    std::vector<std::unique_ptr<std::byte[]>> retained;
+    retained.reserve(16);
+    const auto report = measureLeaks("gate self-test: 32-byte block per iteration, two failed CHECKs expected", 1, 5,
+                                     [&](const std::size_t) { retained.push_back(allocateBlock(32)); });
+    CHECK(report.secondPassRan == !underAddressSanitizer());
+    CHECK(report.firstPassWithinNoise == !underAddressSanitizer());
+    CHECK(report.firstPass.heapBlocks == expectedBlocks(5));
+    CHECK(report.secondPass.heapBlocks == expectedBlocks(5));
+    CHECK(report.delta.heapBlocks == expectedBlocks(5));
+    pvdkit::test::checkNoLeak(report);
+}
+
+// checkNoLeak is the checking half on its own (no report line), for a scenario that prints its
+// diagnostics between the line and the checks; heapGrew says when those diagnostics are due.
+TEST_CASE("checkNoLeak fails a report that grew in heap blocks alone, except under ASan" *
+          doctest::expected_failures(underAddressSanitizer() ? 0 : 1))
+{
+    LeakReport report;
+    report.scenario = underAddressSanitizer() ? "gate self-test: heap blocks +1, no failed CHECK expected"
+                                              : "gate self-test: heap blocks +1, one failed CHECK expected";
+    report.delta = {1, 0, 0, 0, 0, 0, 0, 0};
+    pvdkit::test::checkNoLeak(report);
+}
+
+TEST_CASE("heapGrew is the heap half of the gate's verdict: blocks or bytes beyond the allowance, never under ASan")
+{
+    using pvdkit::test::Allowance;
+    using pvdkit::test::heapGrew;
+    LeakReport report;
+    CHECK_FALSE(heapGrew(report));
+    report.delta = {1, 0, 0, 0, 0, 0, 0, 0};
+    CHECK(heapGrew(report) == !underAddressSanitizer());
+    CHECK_FALSE(heapGrew(report, Allowance{1, 0, 0}));
+    report.delta = {0, 1, 0, 0, 0, 0, 0, 0};
+    CHECK(heapGrew(report) == !underAddressSanitizer());
+    CHECK_FALSE(heapGrew(report, Allowance{0, 1, 0}));
+    report.delta = {-3, -4096, 1, 1, 4096, 1, 1, 1};
+    CHECK_FALSE(heapGrew(report)); // handles and views are the other half
+    report.delta = {20, 5120, 40, 0, 0, 0, 0, 0};
+    CHECK_FALSE(heapGrew(report, Allowance{20, 5120, 40}));
+    CHECK(heapGrew(report, Allowance{19, 5120, 40}) == !underAddressSanitizer());
 }
 
 TEST_CASE("the report line carries every number a reader needs")

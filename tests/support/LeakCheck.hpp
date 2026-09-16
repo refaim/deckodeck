@@ -24,7 +24,13 @@
 //    check - proven with an injected no-op UnmapViewOfFile before this counter existed. Image
 //    sections (MEM_IMAGE: the DLLs) and private memory (heap segments, stacks, ASan's shadow) are
 //    not counted, so the view count is stable after warm-up, under ASan too; the bytes are not
-//    under ASan (see below).
+//    under ASan (see below). Every region is recorded (base, size, the file behind it as
+//    GetMappedFileNameW names it - K32GetMappedFileNameW of kernel32 under PSAPI_VERSION 2, an
+//    import of the test executables only) so that a change is reported as the regions that
+//    appeared and vanished, by name: the CRT and the OS map system sections lazily (an NLS
+//    table on the first locale-aware call, the sorting tables on the first CompareString), once
+//    per process, and a warm-up that did not reach that first call leaves it to the measured
+//    pass - the name tells such a mapping from a FileMapping of the plugin's own.
 // 4. The commit charge (PrivateUsage) is the coarse cross-check for whatever is none of the above
 //    - thread stacks, VirtualAlloc - and coarse it is: measured on the AVIF plugin it wanders by
 //    up to +-9 MiB between two quiescent snapshots with the process heap's own committed size
@@ -48,6 +54,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -64,6 +71,22 @@ namespace pvdkit::test
         std::array<std::byte, 16> head{};
     };
 
+    /// One committed MEM_MAPPED region as the walk saw it: where, how big, and the file behind it
+    /// (GetMappedFileNameW: an NT device path such as \Device\HarddiskVolume3\Windows\System32\
+    /// locale.nls; empty for a pagefile-backed section), so a region that appears or vanishes
+    /// between two snapshots can be recognised in the log. The name is UTF-8 in a fixed buffer
+    /// (nothing may be allocated per record: the record buffers are reserved once, like the
+    /// blocks'); a longer name keeps its tail behind "...", which is where the file name is.
+    struct MappedRegion
+    {
+        std::uintptr_t base = 0;
+        std::uint64_t size = 0;
+        std::array<char, 200> name{}; // NUL-terminated
+    };
+
+    /// The mapped file's name as recorded; empty for a pagefile-backed section.
+    [[nodiscard]] std::string_view name(const MappedRegion &region) noexcept;
+
     /// What the process holds right now.
     struct ResourceUsage
     {
@@ -77,6 +100,8 @@ namespace pvdkit::test
         /// Every busy block, sorted by address, in one of two static buffers the accounting owns:
         /// valid until the snapshot after next (before and after of one measurement never share).
         std::span<const HeapBlock> blocks;
+        /// Every committed MEM_MAPPED region, sorted by base, with the same lifetime as `blocks`.
+        std::span<const MappedRegion> regions;
     };
 
     struct ResourceDelta
@@ -103,6 +128,13 @@ namespace pvdkit::test
     /// a "+1 block" into something a reader can recognise.
     [[nodiscard]] std::string describeNewBlocks(const ResourceUsage &after, const ResourceUsage &before);
 
+    /// The committed MEM_MAPPED regions of `after` that are not in `before` and the other way
+    /// round (by base and size), one line each: `  + 0x... <n> KiB <file>` for a region that
+    /// appeared, `  - 0x... <n> KiB <file>` for one that vanished, `(pagefile-backed)` in place of
+    /// the file when there is none; empty when the region set is the same. A region that grew in
+    /// place is one line of each. This is what turns a "views +0 (+2712 KiB)" into a file name.
+    [[nodiscard]] std::string describeRegionChanges(const ResourceUsage &after, const ResourceUsage &before);
+
     /// Whether this binary was built with -fsanitize=address (see the header comment).
     [[nodiscard]] bool underAddressSanitizer() noexcept;
 
@@ -114,19 +146,48 @@ namespace pvdkit::test
     }
 
     /// The growth a first measured pass may show and still be given a second, deciding pass. What
-    /// this is for: a critical section deleted right after its first contended acquisition
+    /// this is for: (1) a critical section deleted right after its first contended acquisition
     /// within a measured pass leaves ntdll's zeroed, free-listed RTL_CRITICAL_SECTION_DEBUG block
     /// (LeakCheck.cpp), which the recognition cannot claim once the section is gone - at most one
-    /// small block per such section, once, never again for the same section. (A joined thread
-    /// leaves nothing behind: 30 spawn/join cycles were measured at 0 lingering blocks.) Anything
-    /// larger - a cache that filled after the warm-up, a handle, a view - is growth the gate must
-    /// report, not retry away.
+    /// small block per such section, once, never again for the same section; (2) the per-thread
+    /// data of a worker thread the plugin itself started and joined (the presentation's row
+    /// bands for a picture of at least 256 Ki pixels, docs/ARCHITECTURE.md section 3.7), which
+    /// the CRT and the OS release on their own schedule, several passes after the thread exited.
+    /// Measured on the EXR plugin in Task 27 (Debug and coverage builds, both architectures; a
+    /// scratch host reading the debug-CRT block headers named the blocks): the vcruntime
+    /// per-thread data, a _CRT_BLOCK of 128 bytes from vcruntime's per_thread_data.cpp:128 (180
+    /// bytes under the debug header), the UCRT __acrt_ptd, a _CRT_BLOCK of 968 bytes from the
+    /// UCRT's per_thread_data.cpp:245 (1020 bytes), the CRT's small per-thread blocks (68 x 6,
+    /// 880) and the OS's per-thread FLS/TLS/activation-context blocks holding ntdll and
+    /// kernelbase pointers (80, 360, 912, 24, 24, 136, 136 or 728): 11 to 16 blocks, 3200 to
+    /// 3888 bytes on x64 (15 blocks, 2188 bytes on x86) per exited worker, appearing about once
+    /// in twenty passes of banded decodes under load, released as a whole several passes later
+    /// (a HeapCompact, a wait, a further thread or a pvdExit/pvdInit cycle do not release it
+    /// earlier); with the band workers disabled every scenario measures +0 in 3 of 3 runs. Why
+    /// three such sets: a decode splits the picture into min(clamp(maxThreads, 1, 4), height)
+    /// bands and starts one worker per band but the last (Pipeline::applyImage), so up to three
+    /// workers exit per decode and up to three sets can be outstanding at one snapshot. Two
+    /// were, on GitHub's 4-vCPU Windows runner in the coverage build (exr_leak_tests, "two
+    /// pages outstanding": first pass +30 blocks, +6744 bytes - two sets, block by block the
+    /// fingerprint above - second pass -32, everything released), and the earlier bound of 16
+    /// blocks and 4 KiB, calibrated for one set, let the first pass decide and fail. Forty-eight
+    /// blocks and 12 KiB cover three sets with a little room. What the bound still refuses:
+    /// anything larger in the first pass (a cache that filled after the warm-up, +1 block of
+    /// 64 KiB in the self-test; a real per-operation leak, which is at least N = 200 blocks in
+    /// the first pass, one per iteration) and any handle; and whatever the first pass showed,
+    /// the second pass decides, so a growth that recurs - a real leak however small, or this
+    /// residue left at the end of two consecutive passes (seen once in six x64 coverage runs:
+    /// first pass +15, second +16) - fails as the rule intends. Mapped regions are not bounded
+    /// here: a region that appeared in the first pass and does not appear again in the second
+    /// was mapped once (a system section the CRT or the OS maps on first use: an NLS table, the
+    /// sorting tables - a one-time mapping, not a leak), and a leaked view recurs, so the second
+    /// pass charges it again; either way the second pass decides and both passes list their
+    /// regions by name.
     struct RetryNoise
     {
-        std::int64_t heapBlocks = 2;
-        std::int64_t heapBytes = 1024;
+        std::int64_t heapBlocks = 48;
+        std::int64_t heapBytes = 12288;
         std::int64_t handles = 0;
-        std::int64_t mappedViews = 0;
     };
 
     inline constexpr RetryNoise kRetryNoise{};
@@ -135,7 +196,7 @@ namespace pvdkit::test
                                                   const RetryNoise &noise = kRetryNoise) noexcept
     {
         return delta.heapBlocks <= noise.heapBlocks && delta.heapBytes <= noise.heapBytes &&
-               delta.handles <= noise.handles && delta.mappedViews <= noise.mappedViews && delta.mappedBytes <= 0;
+               delta.handles <= noise.handles;
     }
 
     /// The outcome of one measured scenario.
@@ -154,6 +215,9 @@ namespace pvdkit::test
         std::string newBlocks;                 // describeNewBlocks of the deciding pass (when any block appeared)
         std::string firstPassNewBlocks;        // the same for the first pass, when a second one ran
         std::string secondPassNewBlocks;       // the same for the second pass, when it ran
+        std::string regionChanges;             // describeRegionChanges of the deciding pass
+        std::string firstPassRegionChanges;    // the same for the first pass, when a second one ran
+        std::string secondPassRegionChanges;   // the same for the second pass, when it ran
     };
 
     /// Runs `body(i)` for i in [0, warmUpIterations) as warm-up - lazy one-time allocations of the
@@ -162,8 +226,9 @@ namespace pvdkit::test
     /// second measured pass runs from a fresh snapshot and both are reported; the second one
     /// decides only when the first grew by no more than kRetryNoise (a leak recurs, a one-off
     /// allocation does not), otherwise the first pass stands and the gate fails on it - a cache
-    /// that fills after the warm-up is a finding, not noise. A body that cycles through fixtures
-    /// by `i` should warm up with one full cycle so every code path has run once.
+    /// that fills after the warm-up is a finding, not noise; mapped regions never hold the second
+    /// pass back (RetryNoise). A body that cycles through fixtures by `i` should warm up with one
+    /// full cycle so every code path has run once.
     template <class Body>
     [[nodiscard]] LeakReport measureLeaks(const std::string_view scenario, const std::size_t warmUpIterations,
                                           const std::size_t iterations, Body &&body)
@@ -180,9 +245,9 @@ namespace pvdkit::test
         }
         report.warmUp = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - warmUpStart);
 
-        // One measured pass: the delta and which blocks appeared (whatever the net delta: a block
-        // that appeared while others vanished is still worth a look).
-        const auto measure = [&](ResourceDelta &delta, std::string &appeared) {
+        // One measured pass: the delta, which blocks appeared (whatever the net delta: a block
+        // that appeared while others vanished is still worth a look) and which regions changed.
+        const auto measure = [&](ResourceDelta &delta, std::string &appeared, std::string &regions) {
             const auto before = snapshotResources();
             const auto start = Clock::now();
             for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
@@ -192,17 +257,20 @@ namespace pvdkit::test
             const auto after = snapshotResources();
             delta = after - before;
             appeared = describeNewBlocks(after, before);
+            regions = describeRegionChanges(after, before);
         };
-        measure(report.firstPass, report.firstPassNewBlocks);
+        measure(report.firstPass, report.firstPassNewBlocks, report.firstPassRegionChanges);
         report.delta = report.firstPass;
         report.newBlocks = report.firstPassNewBlocks;
+        report.regionChanges = report.firstPassRegionChanges;
         if (grows(report.firstPass)) {
             report.secondPassRan = true;
             report.firstPassWithinNoise = withinRetryNoise(report.firstPass);
-            measure(report.secondPass, report.secondPassNewBlocks);
+            measure(report.secondPass, report.secondPassNewBlocks, report.secondPassRegionChanges);
             if (report.firstPassWithinNoise) {
                 report.delta = report.secondPass;
                 report.newBlocks = report.secondPassNewBlocks;
+                report.regionChanges = report.secondPassRegionChanges;
             }
         }
         return report;
@@ -213,7 +281,27 @@ namespace pvdkit::test
     /// measured <n> x <ms>)`, followed by `[asan]` under ASan and, when a second pass ran, by both
     /// passes' exact deltas and which one decided.
     [[nodiscard]] std::string formatReport(const LeakReport &report);
+
+    /// The lists under that line, for every pass whose counters moved at all (so a net-negative
+    /// pass that still gained a block shows it): `[leak]   blocks that appeared in the <pass>:`
+    /// with describeNewBlocks when the heap counters moved, `[leak]   mapped regions that changed
+    /// in the <pass> (+ appeared, - vanished):` with describeRegionChanges when the view counters
+    /// did; empty when nothing moved.
+    [[nodiscard]] std::string formatReportLists(const LeakReport &report);
+
+    /// formatReport and formatReportLists on stdout.
     void printReport(const LeakReport &report);
+
+    /// The failed gate's follow-up, off the fast path (one snapshot pair per item, each waiting
+    /// for two agreeing readings): runs `body(i)` once for every i in [0, count) with a snapshot
+    /// around each and returns one line per item after which busy blocks stayed - `[leak]   after
+    /// <label(i)>: heap blocks +n, heap bytes +n, handles +n, cs-debug +n` followed by the retained
+    /// blocks as describeNewBlocks lists them - so a log names the culprit; or one line saying
+    /// that no item retained anything (the growth did not recur item by item: a one-time
+    /// allocation of the failed pass, not any item's). Call it after the aggregate check failed
+    /// on the heap counters, and not under ASan, where the walk sees no malloc'd block.
+    [[nodiscard]] std::string localiseHeapGrowth(std::size_t count, const std::function<void(std::size_t)> &body,
+                                                 const std::function<std::string(std::size_t)> &label);
 
     /// Private-bytes slack (see the header comment for the measured noise): wide enough never to
     /// trip on the commit charge's own drift, narrow enough that a leaked thread stack or
@@ -239,6 +327,15 @@ namespace pvdkit::test
     /// Prints the report first so the numbers are in the log either way. Uses doctest CHECKs.
     void requireNoLeak(const LeakReport &report, std::int64_t privateBytesTolerance = kPrivateBytesTolerance,
                        Allowance allowance = {});
+
+    /// The checking half of requireNoLeak alone, for a scenario that prints the report itself
+    /// (printReport) and something of its own - localiseHeapGrowth's lines - in between.
+    void checkNoLeak(const LeakReport &report, std::int64_t privateBytesTolerance = kPrivateBytesTolerance,
+                     Allowance allowance = {});
+
+    /// Whether the gate would fail `report` on the heap counters (`allowance` as for checkNoLeak):
+    /// when to spend on localiseHeapGrowth. Never under ASan (heap counters are not gated there).
+    [[nodiscard]] bool heapGrew(const LeakReport &report, Allowance allowance = {}) noexcept;
 
     /// The iteration count the leak scenarios use: PVDKIT_LEAK_ITERATIONS if set to a positive
     /// number, else `defaultIterations`. A soak run is `PVDKIT_LEAK_ITERATIONS=5000 ctest ...`.

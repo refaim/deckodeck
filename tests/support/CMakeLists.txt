@@ -10,6 +10,9 @@
 # - leak/: the host-like leak scenarios, compiled into every plugin's <id>_leak_tests by
 #   pvdkit_add_plugin_e2e_tests (cmake/pvdkit-plugin.cmake), which reads the source list from the
 #   PVDKIT_LEAK_SCENARIO_SOURCES property below.
+# - PresentationReference.hpp: the header-only scalar reference of the shared presentation's pixel
+#   order, included by core_tests (which adds this directory) and by avif_adapter_tests (which
+#   links pvdkit_leakcheck and so already has it).
 add_library(pvdkit_leakcheck STATIC LeakCheck.cpp LeakCheck.hpp HostileCorpus.cpp HostileCorpus.hpp)
 target_include_directories(pvdkit_leakcheck PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(pvdkit_leakcheck PUBLIC doctest::doctest pvdkit_options)

@@ -38,7 +38,7 @@ namespace pvdkit::core
             CodecPlugin plugin;
 
             explicit Harness(ImageMeta imageMeta = test::meta(), const DecoderOptions options = test::options())
-                : factory(factoryState, decoderState, imageMeta),
+                : factory(factoryState, decoderState, std::move(imageMeta)),
                   plugin(source, factory, describer, *outputTables, options, pluginInfo())
             {
             }
