@@ -51,11 +51,6 @@ namespace pvdkit::exr
             CHECK(classify(offRedY) == PrimariesMatch::Custom);
         }
 
-        TEST_CASE("the locally spelled coded sets are the shared colour module's")
-        {
-            CHECK(codedSetsAgreeWithTheSharedTable());
-        }
-
         TEST_CASE("every match maps to its H.273 code or to unspecified and carries a name")
         {
             CHECK(cicpPrimaries(PrimariesMatch::Rec709) == 1);

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <latch>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -555,7 +556,14 @@ namespace pvdkit::e2e
         // The firewall in the exports would swallow one, so the count is taken before it can: a
         // vectored handler sees every exception at the raise (0xE06D7363 is the MSVC C++ throw),
         // and an expected failure of a file - a chromaticities set the library would throw on,
-        // a hostile header, a corrupt chunk - must produce none (AGENTS.md rule 5).
+        // a hostile header, a corrupt chunk - must produce none (AGENTS.md rule 5). The handler
+        // is registered *last* (First = 0), behind the handlers the runtime installed before it:
+        // under AddressSanitizer the runtime commits its shadow memory on first touch through
+        // its own first-registered handler, and an instrumented handler that runs before it, on
+        // a thread whose stack shadow is still untouched (the DLL's band workers of a picture of
+        // at least 256 Ki pixels, BrightRingsNanInf.exr), faults again inside the fault and
+        // brings the process down. A C++ throw still reaches a last-registered vectored handler
+        // before any frame-based handler: the throw below proves it in every build.
         const auto plugin = loadInitializedPlugin();
         const auto &exports = plugin.exports();
         constexpr DWORD kCppException = 0xE06D7363;
@@ -567,8 +575,17 @@ namespace pvdkit::e2e
             }
             return EXCEPTION_CONTINUE_SEARCH;
         };
-        void *registration = AddVectoredExceptionHandler(1, handler);
+        void *registration = AddVectoredExceptionHandler(0, handler);
         REQUIRE(registration != nullptr);
+        bool caught = false;
+        try {
+            throw std::runtime_error{"counted by the vectored handler"};
+        } catch (const std::runtime_error &) {
+            caught = true;
+        }
+        REQUIRE(caught);
+        REQUIRE(raised == 1);
+        raised = 0;
         for (const auto mode : {OpenMode::Disk, OpenMode::Memory}) {
             for (const auto &expected : exr::tests::kAccepted) {
                 auto opened = openAndDecodeAll(exports, readFixture(expected.name), mode);

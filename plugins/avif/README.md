@@ -85,5 +85,6 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 
 ## Changes
 
+- 1.2.0 — HDR (PQ) images open several times faster; tone mapping is now applied before the conversion of the primaries, so HDR colours may differ slightly from 1.1.0.
 - 1.1.0 — transparency is now displayed, sources deeper than 8 bits are delivered as 16-bit BGRA, HDR PQ/HLG uses BT.2390 tone mapping, Rec.2020/P3 is converted to sRGB, EXIF orientation is handled by PictureView when irot/imir is absent, and HDR images decode several times faster.
 - 1.0.0 — initial release.

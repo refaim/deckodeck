@@ -391,6 +391,17 @@ namespace pvdkit::core
             reference.apply(std::span{expected});
             CHECK(std::vector<std::byte>(decoded->pixels.begin(), decoded->pixels.end()) == expected);
             CHECK(custom.freePage(decoded->pixels));
+
+            // A set no derivation can use does not force the presentation: the same sRGB signalling
+            // with an unusable set (a white with y = 0) stays identity, BGR24, no conversion.
+            imageMeta.chromaticities = colour::Primaries::Chromaticities{
+                {0.7347F, 0.2653F}, {0.0F, 1.0F}, {0.0001F, -0.0770F}, {0.32168F, 0.0F}};
+            FileSession unusable(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                 test::outputTables());
+            const auto plainAgain = unusable.decodePage(0, pvd::Progress{});
+            REQUIRE(plainAgain.has_value());
+            CHECK(plainAgain->bitsPerPixel == 24);
+            CHECK(unusable.freePage(plainAgain->pixels));
         }
 
         TEST_CASE("large display conversion is identical with one two or capped decoder thread counts")

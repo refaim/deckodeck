@@ -32,11 +32,11 @@ namespace pvdkit::exr
             Chromaticities chromaticities{};
         };
 
-        // The H.273 sets are spelled here as in the shared colour module's table (H.273 Table 2,
-        // the same numbers to the digit); the static_asserts below hold the two together.
-        constexpr Chromaticities kRec709{{0.640F, 0.330F}, {0.300F, 0.600F}, {0.150F, 0.060F}, {0.3127F, 0.3290F}};
-        constexpr Chromaticities kRec2020{{0.708F, 0.292F}, {0.170F, 0.797F}, {0.131F, 0.046F}, {0.3127F, 0.3290F}};
-        constexpr Chromaticities kP3D65{{0.680F, 0.320F}, {0.265F, 0.690F}, {0.150F, 0.060F}, {0.3127F, 0.3290F}};
+        // The H.273 sets are the shared colour module's own values (H.273 Table 2), read at
+        // compile time; there is no local copy to keep in step.
+        constexpr Chromaticities kRec709 = *core::colour::Primaries::chromaticities(1);
+        constexpr Chromaticities kRec2020 = *core::colour::Primaries::chromaticities(9);
+        constexpr Chromaticities kP3D65 = *core::colour::Primaries::chromaticities(12);
 
         constexpr std::array<KnownSet, 6> kKnownSets{
             KnownSet{PrimariesMatch::Rec709, 1, "Rec.709", "lin_rec709", kRec709},
@@ -46,18 +46,6 @@ namespace pvdkit::exr
             KnownSet{PrimariesMatch::AcesAp1, 2, "ACES AP1", "lin_ap1", kAcesAp1},
             KnownSet{PrimariesMatch::CieXyz, 2, "CIE XYZ", "", kCieXyz},
         };
-
-        using Flat = std::array<float, 8>;
-
-        Flat flat(const Chromaticities &c) noexcept
-        {
-            return {c.red.x, c.red.y, c.green.x, c.green.y, c.blue.x, c.blue.y, c.white.x, c.white.y};
-        }
-
-        Flat coded(const std::uint16_t code) noexcept
-        {
-            return flat(core::colour::Primaries::chromaticities(code).value_or(Chromaticities{}));
-        }
 
     } // namespace
 
@@ -99,14 +87,6 @@ namespace pvdkit::exr
             }
         }
         return std::nullopt;
-    }
-
-    bool codedSetsAgreeWithTheSharedTable() noexcept
-    {
-        const int differing = static_cast<int>(flat(kRec709) != coded(1)) +
-                              static_cast<int>(flat(kRec2020) != coded(9)) +
-                              static_cast<int>(flat(kP3D65) != coded(12));
-        return differing == 0;
     }
 
     ColourSignal resolveColour(const std::optional<Chromaticities> &attribute,

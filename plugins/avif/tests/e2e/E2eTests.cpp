@@ -187,7 +187,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.1.0");
+        CHECK(text(info.pVersion) == "1.2.0");
         const auto comments = text(info.pComments);
         CAPTURE(comments);
         CHECK(comments.find("libavif") != std::string::npos);
@@ -434,18 +434,24 @@ namespace pvdkit::e2e
             freeAndClose(exports, opened);
         };
 
+        // The pixels and hashes are those of the presentation order since Task 27 (the BT.2390
+        // EETF on max(R, G, B) in the source primaries, then the matrix): every pinned pixel was
+        // re-derived in double precision from libavif's own BGRA64 output of the fixture and
+        // agrees with the DLL within one code, and the adapter tests hold every pixel of both
+        // fixtures bit for bit against the scalar reference of that order.
         checkFixture("colors_hdr_rec2020.avif", "→ sRGB (BT.2390 tone map from PQ 470 nit)",
                      {{{0, 0}, {100, 100}, {199, 199}}},
-                     {{{0, 1'014, 65'535, 65'535}, {7'854, 53'351, 63'663, 65'535}, {65'535, 65'535, 65'535, 65'535}}},
-                     14'703'790'622'216'699'421ULL);
+                     {{{0, 1'606, 65'535, 65'535}, {8'474, 56'432, 65'535, 65'535}, {65'535, 65'535, 65'535, 65'535}}},
+                     9'446'473'485'593'613'650ULL);
         // The x86 hash differs because libavif's x86 YUV->RGB conversion hands the presentation a
-        // slightly different 16-bit input, not because the presentation differs: the x86 value was
-        // taken from the pre-Task-20 pipeline, and the quantizer is proven exact on both
-        // architectures (tests/core/colour/PipelineTests.cpp, the exhaustive diagnostic).
+        // slightly different 16-bit input, not because the presentation differs: the quantizer is
+        // proven exact on both architectures (tests/core/colour/PipelineTests.cpp, the exhaustive
+        // diagnostic) and the tabulated tone map agrees with the scalar reference on every pixel
+        // of this fixture on both (plugins/avif/tests/adapters/DecoderTests.cpp).
         checkFixture("cosmos1650_yuv444_10bpc_p3pq.avif", "→ sRGB (BT.2390 tone map from PQ 1000 nit)",
                      {{{0, 0}, {512, 214}, {1023, 427}}},
-                     {{{48'085, 35'561, 25'307, 65'535}, {2'682, 20'499, 42'409, 65'535}, {0, 50'080, 49'456, 65'535}}},
-                     sizeof(std::size_t) == 8 ? 5'389'512'495'027'945'087ULL : 15'569'853'467'021'997'067ULL);
+                     {{{48'408, 35'806, 25'488, 65'535}, {2'731, 20'686, 42'766, 65'535}, {0, 50'087, 49'464, 65'535}}},
+                     sizeof(std::size_t) == 8 ? 11'592'515'619'216'771'261ULL : 9'812'400'899'338'111'123ULL);
         exports.exit();
     }
 
@@ -713,7 +719,7 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "AVIF");
-        CHECK(text(info.pVersion) == "1.1.0");
+        CHECK(text(info.pVersion) == "1.2.0");
         CHECK(text(info.pComments).empty());
         exports.exit();
 

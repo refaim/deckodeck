@@ -1,6 +1,8 @@
 file(GLOB_RECURSE PVDKIT_CORE_TEST_SOURCES CONFIGURE_DEPENDS "*.cpp" "*.hpp")
 
 add_executable(core_tests ${PVDKIT_CORE_TEST_SOURCES} "${PROJECT_SOURCE_DIR}/tests/TestMain.cpp")
+# tests/support/PresentationReference.hpp: the scalar reference of the presentation's pixel order.
+target_include_directories(core_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 # pvdkit_pvd supplies pvd::Progress, which core::FileSession calls.
 target_link_libraries(core_tests PRIVATE pvdkit_core pvdkit_pvd doctest::doctest pvdkit_options)
 add_test(NAME core_tests COMMAND core_tests)
