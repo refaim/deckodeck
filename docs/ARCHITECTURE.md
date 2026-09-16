@@ -857,23 +857,30 @@ Decisions (Task 7, open point 1):
   corpus included: lazy one-time allocations of the loader, the CRT and the codec libraries are
   not leaks), snapshots, runs it N times, snapshots; a pass that shows growth is followed by a
   second measured pass from a fresh snapshot and both are printed, but the second one decides
-  only when the first grew by no more than the known noise (`kRetryNoise`: 16 blocks, 4 KiB, no
+  only when the first grew by no more than the known noise (`kRetryNoise`: 48 blocks, 12 KiB, no
   handle - the zeroed debug block ntdll keeps when a section is deleted right after its
   first contention within a pass, which the recognition can no longer claim, and the
-  per-thread data of an exited row-band worker of the plugin's own, which the CRT and the OS
+  per-thread data of the exited row-band workers of the plugin's own, which the CRT and the OS
   release several passes later: the vcruntime ptd (a `_CRT_BLOCK` of 128 bytes from
   `per_thread_data.cpp:128`, 180 bytes under the debug header), the UCRT `__acrt_ptd` (968 bytes,
   `per_thread_data.cpp:245`, 1020 bytes), the CRT's small per-thread blocks (68 × 6, 880) and the
   OS's per-thread FLS/TLS/activation-context blocks with ntdll and kernelbase pointers (80, 360,
   912, 24, 24, 136, 136 or 728) - 11 to 16 blocks, 3200 to 3888 bytes on x64, 15 blocks and
-  2188 bytes on x86, measured on the EXR plugin in Task 27 with a scratch host that read the
-  debug-CRT headers, about once in twenty passes of banded decodes under load, absent in 3 of 3
-  runs with the band workers disabled), otherwise the first pass stands and the gate fails: a
+  2188 bytes on x86 per worker, measured on the EXR plugin in Task 27 with a scratch host that
+  read the debug-CRT headers, about once in twenty passes of banded decodes under load, absent
+  in 3 of 3 runs with the band workers disabled. A decode starts up to three such workers
+  (`applyImage` splits a picture of at least 256 Ki pixels into at most four bands, §3.7), so
+  up to three sets can be outstanding at one snapshot; two were on GitHub's 4-vCPU Windows
+  runner in the coverage build (`exr_leak_tests`, "two pages outstanding": first pass +30
+  blocks, +6744 bytes, second pass -32 with everything released), and the earlier bound of 16
+  blocks and 4 KiB, calibrated for one set, let the first pass decide and fail; the bound holds
+  three sets, and a real per-operation leak is at least N = 200 blocks in the first pass, one
+  per iteration), otherwise the first pass stands and the gate fails: a
   cache that fills after the warm-up (+1 block of 64 KiB, injected in a scratch copy) is reported
   as a finding, not retried away. Whatever the first pass showed, a growth that recurs in the
-  second pass fails - a real leak (self-tested: one 32-byte block per iteration, within the
-  first-pass bound, charged by the second pass), and that residue when it is left at the end of
-  two consecutive passes (seen once in six x64 coverage runs: first pass +15, second +16). Mapped regions are not part of
+  second pass fails - a real leak however small (self-tested: one 32-byte block per iteration,
+  within the first-pass bound, charged by the second pass), and that residue when it is left at
+  the end of two consecutive passes (seen once in six x64 coverage runs: first pass +15, second +16). Mapped regions are not part of
   that bound: any number may appear in the first pass and the second still decides, because a
   region that appeared in the first pass and does not appear again in the second was mapped
   once - the lazily mapped system section above, not a leak - while a leaked view recurs and
