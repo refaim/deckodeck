@@ -160,24 +160,33 @@ namespace pvdkit::test
     /// UCRT's per_thread_data.cpp:245 (1020 bytes), the CRT's small per-thread blocks (68 x 6,
     /// 880) and the OS's per-thread FLS/TLS/activation-context blocks holding ntdll and
     /// kernelbase pointers (80, 360, 912, 24, 24, 136, 136 or 728): 11 to 16 blocks, 3200 to
-    /// 3888 bytes on x64 (15 blocks, 2188 bytes on x86), appearing about once in twenty passes
-    /// of banded decodes under load, released as a whole several passes later (a HeapCompact, a
-    /// wait, a further thread or a pvdExit/pvdInit cycle do not release it earlier); with the
-    /// band workers disabled every scenario measures +0 in 3 of 3 runs. Sixteen blocks and
-    /// 4 KiB cover that set with a little room. What the bound still refuses: anything larger
-    /// in the first pass (a cache that filled after the warm-up, +1 block of 64 KiB in the
-    /// self-test) and any handle; and whatever the first pass showed, the second pass decides,
-    /// so a growth that recurs - a real leak, or this residue left at the end of two consecutive
-    /// passes (seen once in six x64 coverage runs: first pass +15, second +16) - fails as the
-    /// rule intends. Mapped regions are not bounded here: a region that appeared in the first
-    /// pass and does not appear again in the second was mapped once (a system section the CRT
-    /// or the OS maps on first use: an NLS table, the sorting tables - a one-time mapping, not a
-    /// leak), and a leaked view recurs, so the second pass charges it again; either way the
-    /// second pass decides and both passes list their regions by name.
+    /// 3888 bytes on x64 (15 blocks, 2188 bytes on x86) per exited worker, appearing about once
+    /// in twenty passes of banded decodes under load, released as a whole several passes later
+    /// (a HeapCompact, a wait, a further thread or a pvdExit/pvdInit cycle do not release it
+    /// earlier); with the band workers disabled every scenario measures +0 in 3 of 3 runs. Why
+    /// three such sets: a decode splits the picture into min(clamp(maxThreads, 1, 4), height)
+    /// bands and starts one worker per band but the last (Pipeline::applyImage), so up to three
+    /// workers exit per decode and up to three sets can be outstanding at one snapshot. Two
+    /// were, on GitHub's 4-vCPU Windows runner in the coverage build (exr_leak_tests, "two
+    /// pages outstanding": first pass +30 blocks, +6744 bytes - two sets, block by block the
+    /// fingerprint above - second pass -32, everything released), and the earlier bound of 16
+    /// blocks and 4 KiB, calibrated for one set, let the first pass decide and fail. Forty-eight
+    /// blocks and 12 KiB cover three sets with a little room. What the bound still refuses:
+    /// anything larger in the first pass (a cache that filled after the warm-up, +1 block of
+    /// 64 KiB in the self-test; a real per-operation leak, which is at least N = 200 blocks in
+    /// the first pass, one per iteration) and any handle; and whatever the first pass showed,
+    /// the second pass decides, so a growth that recurs - a real leak however small, or this
+    /// residue left at the end of two consecutive passes (seen once in six x64 coverage runs:
+    /// first pass +15, second +16) - fails as the rule intends. Mapped regions are not bounded
+    /// here: a region that appeared in the first pass and does not appear again in the second
+    /// was mapped once (a system section the CRT or the OS maps on first use: an NLS table, the
+    /// sorting tables - a one-time mapping, not a leak), and a leaked view recurs, so the second
+    /// pass charges it again; either way the second pass decides and both passes list their
+    /// regions by name.
     struct RetryNoise
     {
-        std::int64_t heapBlocks = 16;
-        std::int64_t heapBytes = 4096;
+        std::int64_t heapBlocks = 48;
+        std::int64_t heapBytes = 12288;
         std::int64_t handles = 0;
     };
 
