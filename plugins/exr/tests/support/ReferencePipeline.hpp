@@ -4,7 +4,10 @@
 // double precision from the standards' equations: scene-linear values -> straight alpha -> nits
 // -> 16-bit PQ codes (what the adapter hands the core), then what the shared presentation makes
 // of those codes -> linear nits -> the file's primaries to BT.709 (RGB to XYZ, Bradford to D65,
-// XYZ to BT.709) -> BT.2390 EETF on maxRGB for a 100-nit display -> sRGB OETF -> 16-bit codes
+// XYZ to BT.709) and the BT.2390 EETF on maxRGB for a 100-nit display - before the matrix, in
+// the file's own primaries, when those are a coded set (Rec.709, Rec.2020, P3-D65 within the
+// plugin's 1e-3 tolerance: the table path), after it for every other set (CIE XYZ, ACES, custom:
+// the per-pixel path; docs/ARCHITECTURE.md section 3.7, Task 27) -> sRGB OETF -> 16-bit codes
 // (what the host receives). The adapter tests compare the PQ codes, the e2e tests the host codes.
 
 #include <algorithm>
@@ -203,17 +206,42 @@ namespace pvdkit::exr::tests
         return linear <= 0.0031308 ? 12.92 * linear : 1.055 * std::pow(linear, 1.0 / 2.4) - 0.055;
     }
 
+    /// Whether the plugin resolves a chromaticity set to an H.273 code (Colour.cpp: Rec.709,
+    /// Rec.2020 or P3-D65 within 1e-3 per coordinate), which sends the session down the table
+    /// path with the tone map before the matrix.
+    inline bool isCodedSet(const std::array<double, 8> &chromaticities)
+    {
+        constexpr std::array<std::array<double, 8>, 3> coded{{
+            {0.640, 0.330, 0.300, 0.600, 0.150, 0.060, 0.3127, 0.3290},
+            {0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290},
+            {0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3127, 0.3290},
+        }};
+        // (`near` is a Windows macro, hence `matches`.)
+        for (const auto &set : coded) {
+            bool matches = true;
+            for (std::size_t index = 0; index < set.size(); ++index) {
+                matches = matches && std::abs(chromaticities[index] - set[index]) <= 1.0e-3;
+            }
+            if (matches) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// The host pixel the shared presentation is expected to make of the adapter's PQ codes for
     /// one sample: through the real 16-bit codes so the quantisation the plugin performs is part
     /// of the reference, with the fixture's primaries and the tone-mapping peak the generator
-    /// computed.
+    /// computed. The EETF is applied before the matrix, in the file's primaries, when they are a
+    /// coded set, and after the conversion to BT.709 otherwise.
     inline Rgba16 expectedHostPixel(const ReferenceSample &sample, const ReferenceFixture &fixture)
     {
         const auto codes = expectedPqCodes(sample, fixture);
         const std::array<double, 3> nits{pqDecode(codes.r / 65'535.0), pqDecode(codes.g / 65'535.0),
                                          pqDecode(codes.b / 65'535.0)};
-        const auto bt709 = applyMatrix(toBt709(fixture.chromaticities), nits);
-        const auto mapped = toneMap(bt709, fixture.peakNits);
+        const auto matrix = toBt709(fixture.chromaticities);
+        const auto mapped = isCodedSet(fixture.chromaticities) ? applyMatrix(matrix, toneMap(nits, fixture.peakNits))
+                                                               : toneMap(applyMatrix(matrix, nits), fixture.peakNits);
         return Rgba16{code16(srgbOetf(std::clamp(mapped[2], 0.0, 1.0))),
                       code16(srgbOetf(std::clamp(mapped[1], 0.0, 1.0))),
                       code16(srgbOetf(std::clamp(mapped[0], 0.0, 1.0))), codes.a};

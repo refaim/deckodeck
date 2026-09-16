@@ -15,7 +15,10 @@ and forwards `IPlugin`.
 Options: `maxThreads = max(1, hardware_concurrency())`, `strict = false`,
 `maxPixels = 16384 × 16384`, `maxDimension = 32768`.
 The shared presentation pass reuses that thread budget but caps itself at four disjoint row bands;
-images smaller than 256 Ki pixels remain single-threaded.
+images smaller than 256 Ki pixels remain single-threaded. A session's presentation tables (the
+PQ transfer LUT and, for PQ over the coded primaries every AVIF carries, the BT.2390 gain table)
+are built on the calling thread at `pvdFileOpen`: ≈ 9 ms on x64, ≈ 21 ms on x86 (ARCHITECTURE
+§3.7).
 `deepOutput = true`: sources deeper than 8 bits are delivered as BGRA64 by default. An 8-bit source
 also uses BGRA64 when HDR or wide-gamut signalling requires shared colour presentation; identity
 8-bit SDR remains BGR24 when opaque or BGRA32 with alpha.
@@ -81,11 +84,27 @@ or primaries codes use the safe sRGB/BT.709 fallback and that fallback is writte
   65535 when absent. No allocation inside the adapter; `detail::checkDestination` refuses a
   destination too small for `height` rows of `pitchBytes` as `Internal`.
 - Grid images, progressive files, 10/12-bit sources, image sequences: handled by libavif. The
-  adapter emits full-range RGB; shared `core::colour::Presentation` then decodes PQ/HLG, converts
-  Rec.2020/P3 primaries, applies BT.2390 tone mapping, and encodes display-referred sRGB. Identity
-  8-bit SDR files bypass it and retain BGR24/BGRA32 and their previous bytes. Presentation-required
-  images at any source depth, and all sources deeper than 8 bits, use BGRA64. ICC profiles are not
-  applied: PictureView ignores them and deckodeck does not have a CMS yet.
+  adapter emits full-range RGB; shared `core::colour::Presentation` then decodes PQ/HLG, applies
+  BT.2390 tone mapping (for PQ before the Rec.2020/P3 → sRGB matrix, in the file's own primaries,
+  from a gain table indexed by the pixel's largest code; for HLG after it, per pixel - ARCHITECTURE
+  §3.7, Task 27), converts the primaries, and encodes display-referred sRGB. Identity 8-bit SDR
+  files bypass it and retain BGR24/BGRA32 and their previous bytes. Presentation-required images
+  at any source depth, and all sources deeper than 8 bits, use BGRA64. ICC profiles are not
+  applied: PictureView ignores them and deckodeck does not have a CMS yet. Cost of the
+  presentation on `cosmos1650_yuv444_10bpc_p3pq.avif` (1024 × 428, P3/PQ; `avif_e2e_tests`, Release,
+  through the DLL, per file = `pvdFileOpen` + `pvdPageDecode` + `pvdPageFree` + `pvdFileClose`):
+
+  | build | `pvdPageDecode` mean | per file, mean of 5 |
+  |---|---|---|
+  | x64, Tasks 16-26 (tone map after the matrix, per pixel) | 24.7 ms | 35.4 ms |
+  | x64, Task 27 (gain table, block passes) | 4.7 ms | 23.4 ms |
+  | x86, Tasks 16-26 | 37.4 ms | 52.4 ms |
+  | x86, Task 27 | 5.7 ms | 36.3 ms |
+
+  The presentation itself (`core_tests`, the skipped timing rows, this fixture's size): 174 -> 14
+  ns per pixel on one x64 core, 46.6 -> 4.9 with four bands (x86: 281 -> 17, 74 -> 5.8). What is
+  left of the per-file time is libavif's decode and the session's tables at open (the PQ LUT and
+  the gain table on the calling thread, ≈ 9 ms on x64 / 21 ms on x86).
 - Transformative properties: the adapter only reports `clap` / `irot` / `imir`; the shared
   `core::Transform` applies them **clap → irot → imir** (AVIF spec §"Transformative properties";
   cross-check the comment on `transformFlags` in the installed `avif/avif.h`). In their absence,

@@ -433,23 +433,79 @@ Decisions (Task 7, open point 1):
   values are absolute tristimulus and pass through unadapted, so an XYZ file of a D65-white
   picture presents as its Rec.709 twin (Task 26 fix round). This is how a `Presentation` built
   with `ImageMeta::chromaticities` converts ACES, XYZ or custom primaries; with usable explicit
-  chromaticities `needed()` is always true and the coded primaries are ignored. `ToneMap` applies the BT.2390 Hermite-knee EETF
-  to maxRGB so one ratio scales all three channels and preserves hue. `Presentation` caches a
-  65,536-entry input-transfer LUT for its session (it depends on the CICP transfer code), applies
-  HLG's 1000-nit/1.2-gamma OOTF where needed, converts the primaries, tone-maps PQ/HLG to the
-  100-nit/0.005-nit SDR reference display, applies the exact sRGB OETF, clamps, rounds, and
-  preserves alpha. The sRGB output step is `SrgbOutputTables::quantize`: 65,535 exact decision
-  thresholds (the first float the OETF-plus-`lround` path maps to each code, found by walking
-  `nextafter` from the inverse OETF of the decision boundary) narrowed by a 65,536-bucket index
-  built in one merge pass over the sorted thresholds; no OETF value is ever interpolated, and the
-  result is proven equal to the former per-pixel `pow` path over every float in [0, 1] on both
-  architectures (`tests/core/colour/PipelineTests.cpp`, the skipped exhaustive diagnostic). Those
-  tables depend on no `Cicp`, so the composition root builds one `SrgbOutputTables` per plugin
-  instance (in `pvdInit`, ≈ 5 ms on x64 / 15 ms on x86 in Release) and every `Presentation` of that
-  plugin borrows it by `const&` through `CodecPlugin` and `FileSession` (§7) instead of building
-  384 KiB per session; `Presentation::outputTables()` and `FileSession::outputTables()` expose the
-  borrowed instance so the tests can pin the sharing. PQ uses `masteringPeakNits` clamped to 10,000
-  nits or 1,000 nits when absent/invalid; HLG always uses its 1,000-nit reference display.
+  chromaticities `needed()` is always true and the coded primaries are ignored (a set that is not
+  usable is ignored by `needed()` too, so a session over sRGB signalling plus an unusable set
+  builds no presentation at all). `ToneMap` applies the BT.2390 Hermite-knee EETF to maxRGB so
+  one ratio scales all three channels and preserves hue. `Presentation` caches a 65,536-entry
+  input-transfer LUT for its session (it depends on the CICP transfer code), applies HLG's
+  1000-nit/1.2-gamma OOTF where needed, tone-maps PQ/HLG to the 100-nit/0.005-nit SDR reference
+  display, converts the primaries, applies the exact sRGB OETF, clamps, rounds, and preserves
+  alpha. **Where the tone map runs** (Task 27) depends on the session: for PQ over any *coded*
+  primaries set (an H.273 code, known or unknown, identity included - every one of them a
+  display-like RGB container - and no usable explicit chromaticities: every AVIF HDR file, every
+  EXR whose chromaticities the plugin resolves to a code) the EETF runs *before* the primaries matrix, in
+  the source container, and is read from a 65,536-entry **gain table indexed by the maximum
+  channel code**: the transfer LUT is monotone non-decreasing, so the largest of the three LUT
+  values is the LUT at the largest code, and `gain[c] = mapNits(lut[c]) / lut[c]` is the very
+  float expression `ToneMap::applyMaxRgb` evaluates per pixel with that driving value - the
+  pixel multiplies its three LUT values by it exactly as `applyMaxRgb` would, so the table path
+  is bit-identical to the per-pixel evaluation in that order, with no interpolation (a maximum
+  code of 0 is the no-light case, mapped to the display black constant like `applyMaxRgb` does;
+  `gain[0]` is never read). Tone mapping before the gamut conversion is the order libplacebo and
+  the BT.2390 reference chain (BT.2100 RGB in, maxRGB of that signal) use; the output differs
+  slightly from the order of Tasks 16-26 (saturated wide-gamut colours come out brighter and may
+  clip per channel in the quantiser instead of being pulled down by their converted maximum).
+  For HLG (its OOTF scales by the pixel's own luminance, so no table by code exists) and for PQ
+  over usable *explicit* chromaticities (EXR's CIE XYZ, ACES AP0/AP1, custom sets) the EETF runs
+  per pixel *after* the conversion to BT.709, exactly as before: the maxRGB of a container whose
+  channels are not display-like is not a brightness measure (for a D65 grey in XYZ, Z = 1.09 Y;
+  for a saturated red, X = 0.41 R), and tone-mapping there made an XYZ file present unlike its
+  Rec.709 twin (measured: mean 1013 codes on the synthetic ramp pair), which `plugins/exr` pins
+  the other way. The scalar reference of both orders lives in
+  `tests/support/PresentationReference.hpp`; `PipelineTests` holds the table path to it bit for
+  bit on 65,536-code sweeps in every channel position and on whole random images, the AVIF
+  adapter tests on every pixel of both HDR fixtures, and `Presentation::toneMapGains()` exposes
+  which path a session takes (65,536 gains or empty). Between two coded containers the order
+  still matters, because a display-like container's maximum is not container-independent either
+  (a pure sRGB red is 0.63 in Rec.2020 and 0.82 in P3, so the wider container compresses it
+  less). Measured on a synthetic 1000-nit scene inside the sRGB gamut (a hue sweep at
+  saturations 0.15-1.0) encoded once as Rec.2020 PQ and once as P3-D65 PQ: the two twins present
+  with a mean difference of 353 codes of 65,535 (0.54 % of the range), a worst pixel of 6205
+  codes (9.5 %) and 16.4 % of the pixels differing by more than 1000 codes in some channel; with
+  the tone map after the matrix (Tasks 16-26) the same pair differed by a mean of 1.3 codes,
+  worst 59, none beyond 1000. Against 1.1.0's output the change is, on real content, cosmos
+  (`cosmos1650_yuv444_10bpc_p3pq.avif`, P3/PQ): mean 225 codes (0.34 %), 12.9 % of the pixels
+  beyond 1000 codes, never darker; on the saturated synthetic patches of `colors_hdr_rec2020.avif`
+  (Rec.2020/PQ, 470 nit): mean 780 codes (1.19 %), worst 5681, 42.7 % beyond 1000 codes, saturated
+  reds clipped at 65535 with green raised. The gain table costs 65,536 EETF evaluations (four
+  `pow` each), built with the transfer LUT on the calling thread in the constructor: ≈ 9 ms on
+  x64 and ≈ 21 ms on x86 for a PQ session in Release (≈ 0.6 / 2.3 ms for a LUT-only session),
+  paid once per `pvdFileOpen` of such a file, and 512 KiB per live session instead of 256 KiB. A
+  session starts no thread at construction (a first attempt that split the build into code bands
+  on `std::thread` workers left per-thread heap structures behind in the DLL that the leak gate
+  charged to the "N sessions at once" scenario, deterministically, in the coverage build); the
+  band workers of `applyImage` are the only threads a session ever starts, for pictures of at
+  least 256 Ki pixels, exactly as in 1.1.0. SDR, wide-gamut-only, HLG and explicit-chromaticity
+  sessions do not build the gain table. Per pixel the row is
+  converted in blocks of 64 through three passes over structure-of-arrays stack buffers - decode
+  (LUT, OOTF, the gain), the matrix (a call-free, branch-free loop clang vectorises at width 4),
+  the scalar path's EETF plus the quantiser - which took the P3/PQ presentation from 174 to
+  14 ns per pixel on one x64 core. The sRGB output step is `SrgbOutputTables::quantize`: 65,535
+  exact decision thresholds (the first float the OETF-plus-`lround` path maps to each code, found
+  by walking `nextafter` from the inverse OETF of the decision boundary) narrowed by a
+  65,536-bucket index built in one merge pass over the sorted thresholds, and counted over a fixed
+  window of 16 comparisons from the bucket's first threshold (no bucket holds more than 13: the
+  densest region is the linear segment at 12.92 × 65535 / 65536 per bucket; the array is padded
+  with +∞) - a loop with no data-dependent trip count, which the compiler turns into four packed
+  compares and a popcount; no OETF value is ever interpolated, and the result is proven equal to
+  the former per-pixel `pow` path over every float in [0, 1] on both architectures
+  (`tests/core/colour/PipelineTests.cpp`, the skipped exhaustive diagnostic). Those tables depend
+  on no `Cicp`, so the composition root builds one `SrgbOutputTables` per plugin instance (in
+  `pvdInit`, ≈ 5 ms on x64 / 15 ms on x86 in Release) and every `Presentation` of that plugin
+  borrows it by `const&` through `CodecPlugin` and `FileSession` (§7) instead of building 384 KiB
+  per session; `Presentation::outputTables()` and `FileSession::outputTables()` expose the
+  borrowed instance so the tests can pin the sharing. PQ uses `masteringPeakNits` clamped to
+  10,000 nits or 1,000 nits when absent/invalid; HLG always uses its 1,000-nit reference display.
   Identity is primaries 1 or 2 plus transfer 1, 2, 6, 13, 14 or 15. It is short-circuited so the
   existing SDR byte stream is unchanged; conversion is selected for any other primaries or
   transfer 4, 5, 8, 16 or 18. Unknown codes never reject a viewer input and are named as fallbacks
@@ -801,12 +857,23 @@ Decisions (Task 7, open point 1):
   corpus included: lazy one-time allocations of the loader, the CRT and the codec libraries are
   not leaks), snapshots, runs it N times, snapshots; a pass that shows growth is followed by a
   second measured pass from a fresh snapshot and both are printed, but the second one decides
-  only when the first grew by no more than the known noise (`kRetryNoise`: 2 blocks, 1 KiB, no
+  only when the first grew by no more than the known noise (`kRetryNoise`: 16 blocks, 4 KiB, no
   handle - the zeroed debug block ntdll keeps when a section is deleted right after its
-  first contention within a pass, which the recognition can no longer claim; a joined thread
-  itself leaves nothing: 30 spawn/join cycles measured at 0 blocks), otherwise the first pass
-  stands and the gate fails: a cache that fills after the warm-up (+1 block of 64 KiB, injected
-  in a scratch copy) is reported as a finding, not retried away. Mapped regions are not part of
+  first contention within a pass, which the recognition can no longer claim, and the
+  per-thread data of an exited row-band worker of the plugin's own, which the CRT and the OS
+  release several passes later: the vcruntime ptd (a `_CRT_BLOCK` of 128 bytes from
+  `per_thread_data.cpp:128`, 180 bytes under the debug header), the UCRT `__acrt_ptd` (968 bytes,
+  `per_thread_data.cpp:245`, 1020 bytes), the CRT's small per-thread blocks (68 × 6, 880) and the
+  OS's per-thread FLS/TLS/activation-context blocks with ntdll and kernelbase pointers (80, 360,
+  912, 24, 24, 136, 136 or 728) - 11 to 16 blocks, 3200 to 3888 bytes on x64, 15 blocks and
+  2188 bytes on x86, measured on the EXR plugin in Task 27 with a scratch host that read the
+  debug-CRT headers, about once in twenty passes of banded decodes under load, absent in 3 of 3
+  runs with the band workers disabled), otherwise the first pass stands and the gate fails: a
+  cache that fills after the warm-up (+1 block of 64 KiB, injected in a scratch copy) is reported
+  as a finding, not retried away. Whatever the first pass showed, a growth that recurs in the
+  second pass fails - a real leak (self-tested: one 32-byte block per iteration, within the
+  first-pass bound, charged by the second pass), and that residue when it is left at the end of
+  two consecutive passes (seen once in six x64 coverage runs: first pass +15, second +16). Mapped regions are not part of
   that bound: any number may appear in the first pass and the second still decides, because a
   region that appeared in the first pass and does not appear again in the second was mapped
   once - the lazily mapped system section above, not a leak - while a leaked view recurs and

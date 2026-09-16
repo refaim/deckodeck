@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -30,17 +31,64 @@ namespace pvdkit::core::colour
       public:
         SrgbOutputTables();
 
+        /// Inline (defined below the class): it runs three times per pixel.
         [[nodiscard]] std::uint16_t quantize(float linear) const noexcept;
 
       private:
         // A coarse table over [0, 1) narrows each threshold search to one bucket; a power of two so
         // that bucket boundaries and the bucket index of an input are computed exactly.
         static constexpr std::size_t kBucketCount = 65'536;
+        // No bucket holds more than kWindow thresholds (the densest region is the sRGB linear
+        // segment, 12.92 x 65535 / 65536 = 12.92 per bucket; the widest bucket built holds 13),
+        // so a fixed window of kWindow comparisons from the bucket's first threshold counts every
+        // threshold at or below the input - a loop with no data-dependent trip count, which the
+        // compiler vectorises. The array is padded with +infinity so the window never reads past
+        // the last threshold. The exhaustive diagnostic in PipelineTests (every float in [0, 1])
+        // is the proof that the window is wide enough.
+        static constexpr std::size_t kWindow = 16;
 
-        std::array<float, 65'535> thresholds_{};
+        std::array<float, 65'535 + kWindow> thresholds_{};
         std::array<std::uint16_t, kBucketCount + 1> buckets_{};
     };
 
+    inline std::uint16_t SrgbOutputTables::quantize(const float linear) const noexcept
+    {
+        // The negated comparison also sends NaN to code 0, the exact path's answer on this CRT.
+        if (!(linear > 0.0F)) {
+            return 0;
+        }
+        if (linear >= 1.0F) {
+            return std::numeric_limits<std::uint16_t>::max();
+        }
+
+        // The code is the number of thresholds at or below the input: those before the bucket
+        // (buckets_[bucket]) plus those in the bucket, counted over the fixed window (every
+        // threshold beyond the bucket is above its upper boundary and so above the input). The
+        // bucket only narrows the exact threshold count; no OETF value is interpolated.
+        const auto bucket = static_cast<std::size_t>(linear * static_cast<float>(kBucketCount));
+        const std::size_t first = buckets_[bucket];
+        std::size_t count = first;
+        for (std::size_t index = 0; index < kWindow; ++index) {
+            count += thresholds_[first + index] <= linear ? 1U : 0U;
+        }
+        return static_cast<std::uint16_t>(count);
+    }
+
+    /// The per-session presentation: 16-bit BGRA codes of a CICP-described source to 16-bit sRGB.
+    /// Per pixel: the transfer LUT (linear light, absolute nits for PQ), the HLG OOTF, the
+    /// BT.2390 EETF on max(R, G, B), the primaries matrix, the exact sRGB quantiser - the EETF in
+    /// one of two places (docs/ARCHITECTURE.md section 3.7):
+    /// - PQ over any coded primaries set (an H.273 code, known or not, identity included - every
+    ///   one a display-like RGB container - and no usable explicit chromaticities): *before* the
+    ///   matrix, in the source container, as a 65,536-entry gain table indexed by the maximum
+    ///   channel code. The LUT is monotone non-decreasing, so the largest of the three LUT values
+    ///   is the LUT at the largest code, and the gain of that value is a function of the code
+    ///   alone - the same float arithmetic as evaluating the curve per pixel, no interpolation.
+    /// - HLG (its OOTF scales by the pixel's own luminance) and PQ over usable explicit
+    ///   chromaticities (CIE XYZ, ACES AP0/AP1, custom sets: containers whose largest channel is
+    ///   not a brightness measure): *after* the conversion to BT.709, evaluated per pixel, as in
+    ///   Tasks 16-26, so that a picture presents alike whichever such container holds it.
+    /// The tables are built on the calling thread; a session starts no thread at construction.
     class Presentation
     {
       public:
@@ -60,7 +108,8 @@ namespace pvdkit::core::colour
         Presentation &operator=(Presentation &&) = delete;
 
         [[nodiscard]] static bool needed(const Cicp &cicp) noexcept;
-        /// Explicit chromaticities always need presentation: they are, by definition, not sRGB.
+        /// Usable explicit chromaticities always need presentation: they are, by definition, not
+        /// sRGB. A set that is not usable is ignored here as in the constructor.
         [[nodiscard]] static bool needed(const Cicp &cicp,
                                          const std::optional<Primaries::Chromaticities> &chromaticities) noexcept;
         /// Converts one tightly packed BGRA64 row in place. Alpha is copied through unchanged.
@@ -75,9 +124,14 @@ namespace pvdkit::core::colour
                         unsigned maxThreads) const;
         [[nodiscard]] float sourcePeakNits() const noexcept;
         [[nodiscard]] const SrgbOutputTables &outputTables() const noexcept;
+        /// The BT.2390 gain by maximum channel code: 65,536 entries for a PQ session over coded
+        /// primaries (the table path), empty for every other (SDR, wide-gamut-only and HLG
+        /// sessions and PQ over explicit chromaticities never build it). Exposed so the tests can
+        /// pin which path a session takes and what the table holds.
+        [[nodiscard]] std::span<const float> toneMapGains() const noexcept;
 
       private:
-        using TransferLut = std::array<float, 65'536>;
+        using Table = std::array<float, 65'536>;
 
         struct Usable
         {
@@ -87,18 +141,25 @@ namespace pvdkit::core::colour
                      const std::optional<Primaries::Chromaticities> &chromaticities,
                      const SrgbOutputTables &outputTables, Usable);
 
-        [[nodiscard]] std::array<std::uint16_t, 3> convert(std::uint16_t blue, std::uint16_t green,
-                                                           std::uint16_t red) const noexcept;
+        /// Converts `pixelCount` pixels read through `load(pixel, channel)` (channel 0 = blue,
+        /// 1 = green, 2 = red; a 16-bit code) and written through `store(pixel, channel, code)`, in
+        /// blocks of a few dozen pixels and three passes over structure-of-arrays stack buffers:
+        /// decode (LUT, OOTF, the table path's gain), the matrix (a call-free, branch-free loop the
+        /// compiler vectorises), the scalar path's EETF and the quantiser.
+        template <class Load, class Store>
+        void convertPixels(std::size_t pixelCount, const Load &load, const Store &store) const noexcept;
 
         bool active_;
         bool hlg_;
-        bool hdr_;
+        /// HLG and PQ over explicit chromaticities: the EETF runs per pixel after the matrix.
+        bool toneMapAfterMatrix_;
         float sourcePeakNits_;
         Primaries::Matrix3 primaries_;
         Primaries::Rgb sourceLuminance_;
         ToneMap::Eetf toneMap_;
         const SrgbOutputTables &outputTables_;
-        std::unique_ptr<TransferLut> transferLut_;
+        std::unique_ptr<Table> transferLut_;
+        std::unique_ptr<Table> toneGain_;
     };
 
 } // namespace pvdkit::core::colour

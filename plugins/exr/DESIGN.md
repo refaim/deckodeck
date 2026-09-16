@@ -161,8 +161,10 @@ first row.
 The scene-linear values go through the *shared* presentation, not a private one. The decoder turns
 every pixel into **16-bit PQ codes of absolute nits** (BGRA64, `PqCodeTables`, below) and reports
 `cicp = {primaries code, 16 (PQ), 0, full range}` with the tone-mapping peak in
-`masteringPeakNits`; `core::colour::Presentation` then does PQ → linear → primaries → BT.2390 →
-exact sRGB → 16-bit, the same path AVIF HDR takes, with its zscale-validated maths. In detail:
+`masteringPeakNits`; `core::colour::Presentation` then does PQ → linear → BT.2390 → primaries →
+exact sRGB → 16-bit for the coded sets and PQ → linear → primaries → BT.2390 → exact sRGB →
+16-bit for explicit chromaticities (item 1 below), the same paths AVIF HDR takes, with its
+zscale-validated maths. In detail:
 
 1. **Primaries.** The `chromaticities` attribute (Rec.709/D65 when absent) is first checked with
    `Primaries::isUsable`: every coordinate finite, the white's y positive, the primaries not
@@ -191,7 +193,22 @@ exact sRGB → 16-bit, the same path AVIF HDR takes, with its zscale-validated m
    rather than RGB). The 3.4 `colorInteropID` attribute is read for the info line and is the
    fallback when `chromaticities` is absent (`lin_rec709`, `lin_rec2020`, `lin_p3d65`, `lin_ap0`,
    `lin_ap1`; any other id is only reported). The luminance weights for the peak (below) are the
-   Y row of the file's own RGB → XYZ.
+   Y row of the file's own RGB → XYZ. **Which path the presentation takes** follows from this
+   split (ARCHITECTURE §3.7, Task 27): a file resolved to a code (Rec.709, Rec.2020, P3-D65)
+   gets the BT.2390 tone map *before* the primaries matrix, in its own container, read from a
+   65,536-entry gain table by the pixel's largest code - the fast path, exact to the bit against
+   the per-pixel curve, 148.7 -> 14.1 ns per pixel on one x64 core (10.5×) and 39.6 -> 5.0 with
+   four row bands (7.9×); a file with explicit chromaticities (CIE XYZ,
+   ACES AP0/AP1, custom) keeps the tone map *after* the conversion to BT.709, per pixel, at
+   ≈ 150 ns per pixel on one x64 core (Task 26: 174; the quantiser and block-pass work of Task 27
+   reach that path too). The reason is what the maxRGB EETF measures: in a display-like RGB container the
+   largest channel is a brightness measure, in XYZ or AP0 it is not (for a D65 grey in XYZ,
+   Z = 1.09 Y; for a saturated red, X = 0.41 R), and tone-mapping there would make the XYZ twin
+   present unlike its Rec.709 original (measured: mean 1013 codes on the synthetic ramp pair,
+   42 % of the pixels beyond 1000 codes, against the 9 codes the e2e case pins). The test-side
+   double-precision reference (`tests/support/ReferencePipeline.hpp`, `isCodedSet`) applies the
+   same split with the same 1e-3 tolerance, and the e2e reference-pixel case holds every fixture
+   of both kinds within 8 codes.
 2. **Exposure.** EXR is scene-linear with no brightness of its own: 1.0 maps to `whiteLuminance`
    nits when the attribute is present, finite and positive, otherwise to **100 nit** (the sRGB view
    convention: 0.18 → 18 nit). NaN, negative and -inf samples are 0; +inf is the PQ peak.
@@ -332,15 +349,23 @@ view and the mean of the five others; Release, one process, nothing else running
 
 | build | ZIP, 26.4 MB | of which open / decode | PIZ, 24.3 MB | of which open / decode |
 |---|---|---|---|---|
-| x64 | ≈ 650 ms | ≈ 245-250 / ≈ 395 ms | ≈ 680 ms | ≈ 270-280 / ≈ 395 ms |
-| x86 | ≈ 930 ms | ≈ 300 / ≈ 625 ms | ≈ 1025 ms | ≈ 385 / ≈ 630 ms |
+| x64, Task 26 | ≈ 650 ms | ≈ 245-250 / ≈ 395 ms | ≈ 680 ms | ≈ 270-280 / ≈ 395 ms |
+| x64, Task 27 | ≈ 305-315 ms | ≈ 250-255 / ≈ 50-55 ms | ≈ 335 ms | ≈ 280 / ≈ 50 ms |
+| x86, Task 26 | ≈ 930 ms | ≈ 300 / ≈ 625 ms | ≈ 1025 ms | ≈ 385 / ≈ 630 ms |
+| x86, Task 27 | ≈ 375 ms | ≈ 315 / ≈ 55 ms | ≈ 460 ms | ≈ 400 / ≈ 55 ms |
 
 "open" is the plugin's own work (the Core's decompression, ≈ 100 ms for ZIP and ≈ 130 ms for
-PIZ, plus the PQ encoding and the histogram of 8.3 Mpx); "decode" is the shared presentation's
-PQ → BT.2390 → sRGB conversion in `core::colour::Presentation::applyImage` (up to four row
-bands), the same cost an AVIF HDR picture of that size pays, and the larger half. The run-to-run
-spread is the machine's; the numbers are a scale, not a benchmark. The release DLL is 1,110,016
-bytes on x64 and 1,002,496 bytes on x86.
+PIZ, plus the PQ encoding and the histogram of 8.3 Mpx, plus the session's presentation tables on
+the calling thread: ≈ 9 ms on x64, ≈ 21 ms on x86 since Task 27, which is the growth of "open");
+"decode" is the shared presentation's PQ → BT.2390 → sRGB conversion in
+`core::colour::Presentation::applyImage` (up to four row bands), the same cost an AVIF HDR picture
+of that size pays - the larger half until Task 27 moved the tone map into a gain table read by
+the pixel's largest code for files over coded primaries (this file is Rec.709; §4), which took
+that pass from ≈ 47 to ≈ 6 ns per pixel. A file over explicit chromaticities (XYZ, ACES,
+custom) tone-maps per pixel at ≈ 150 ns per pixel on one core (Task 26: 174), ≈ 41 with four
+bands (46.6). The run-to-run spread is the machine's; the numbers are a
+scale, not a benchmark. The release DLL is 1,112,576 bytes on x64 and 1,005,056 bytes on x86
+(Task 26: 1,110,016 and 1,002,496).
 
 ## 9. Out of scope (documented, not implemented)
 

@@ -36,9 +36,11 @@ target_link_libraries(exr_core PUBLIC pvdkit_core pvdkit_options)
 # chunk decoding); from the C++ library only four Imf::RgbaYca free functions (the chroma
 # reconstruction of luminance-chroma files: reconstructChromaHoriz/Vert, YCAtoRGBA,
 # fixSaturation - arithmetic over half rows that throws nothing; computeYw, which throws on a
-# degenerate chromaticities set, is not used, the weights come from the shared colour module over
-# a validated set) - the linker pulls ImfRgbaYca.obj and nothing else of OpenEXR-3_4.lib, so the
-# DLL carries no Iex exception machinery and no IlmThread pool (plugins/exr/DESIGN.md, "Library").
+# degenerate chromaticities set, is not used: the reconstruction weights are exr::luminanceWeights,
+# computeYw's arithmetic spelled out over a set the core has validated (LuminanceChroma.cpp), and
+# the histogram weights come from the shared Primaries::luminanceCoefficients - DESIGN.md 1 and 5)
+# - the linker pulls ImfRgbaYca.obj and nothing else of OpenEXR-3_4.lib, so the DLL carries no
+# Iex exception machinery and no IlmThread pool (plugins/exr/DESIGN.md, "Library").
 # Imath's half-to-float lookup table is not used either (IMATH_HALF_NO_LOOKUP_TABLE, and the
 # ports/imath overlay builds Imath and OpenEXR without it): the object defining the table,
 # half.cpp.obj, drags in <iostream> locale initialisers and thus the CRT's thread_safe_statics.obj,

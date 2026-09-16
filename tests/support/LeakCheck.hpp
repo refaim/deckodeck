@@ -146,21 +146,38 @@ namespace pvdkit::test
     }
 
     /// The growth a first measured pass may show and still be given a second, deciding pass. What
-    /// this is for: a critical section deleted right after its first contended acquisition
+    /// this is for: (1) a critical section deleted right after its first contended acquisition
     /// within a measured pass leaves ntdll's zeroed, free-listed RTL_CRITICAL_SECTION_DEBUG block
     /// (LeakCheck.cpp), which the recognition cannot claim once the section is gone - at most one
-    /// small block per such section, once, never again for the same section. (A joined thread
-    /// leaves nothing behind: 30 spawn/join cycles were measured at 0 lingering blocks.) Anything
-    /// larger - a cache that filled after the warm-up, a handle - is growth the gate must report,
-    /// not retry away. Mapped regions are not bounded here: a region that appeared in the first
-    /// pass and does not appear again in the second was mapped once (a system section the CRT or
-    /// the OS maps on first use: an NLS table, the sorting tables - a one-time mapping, not a
+    /// small block per such section, once, never again for the same section; (2) the per-thread
+    /// data of a worker thread the plugin itself started and joined (the presentation's row
+    /// bands for a picture of at least 256 Ki pixels, docs/ARCHITECTURE.md section 3.7), which
+    /// the CRT and the OS release on their own schedule, several passes after the thread exited.
+    /// Measured on the EXR plugin in Task 27 (Debug and coverage builds, both architectures; a
+    /// scratch host reading the debug-CRT block headers named the blocks): the vcruntime
+    /// per-thread data, a _CRT_BLOCK of 128 bytes from vcruntime's per_thread_data.cpp:128 (180
+    /// bytes under the debug header), the UCRT __acrt_ptd, a _CRT_BLOCK of 968 bytes from the
+    /// UCRT's per_thread_data.cpp:245 (1020 bytes), the CRT's small per-thread blocks (68 x 6,
+    /// 880) and the OS's per-thread FLS/TLS/activation-context blocks holding ntdll and
+    /// kernelbase pointers (80, 360, 912, 24, 24, 136, 136 or 728): 11 to 16 blocks, 3200 to
+    /// 3888 bytes on x64 (15 blocks, 2188 bytes on x86), appearing about once in twenty passes
+    /// of banded decodes under load, released as a whole several passes later (a HeapCompact, a
+    /// wait, a further thread or a pvdExit/pvdInit cycle do not release it earlier); with the
+    /// band workers disabled every scenario measures +0 in 3 of 3 runs. Sixteen blocks and
+    /// 4 KiB cover that set with a little room. What the bound still refuses: anything larger
+    /// in the first pass (a cache that filled after the warm-up, +1 block of 64 KiB in the
+    /// self-test) and any handle; and whatever the first pass showed, the second pass decides,
+    /// so a growth that recurs - a real leak, or this residue left at the end of two consecutive
+    /// passes (seen once in six x64 coverage runs: first pass +15, second +16) - fails as the
+    /// rule intends. Mapped regions are not bounded here: a region that appeared in the first
+    /// pass and does not appear again in the second was mapped once (a system section the CRT
+    /// or the OS maps on first use: an NLS table, the sorting tables - a one-time mapping, not a
     /// leak), and a leaked view recurs, so the second pass charges it again; either way the
     /// second pass decides and both passes list their regions by name.
     struct RetryNoise
     {
-        std::int64_t heapBlocks = 2;
-        std::int64_t heapBytes = 1024;
+        std::int64_t heapBlocks = 16;
+        std::int64_t heapBytes = 4096;
         std::int64_t handles = 0;
     };
 

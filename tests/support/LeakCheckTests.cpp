@@ -458,7 +458,8 @@ TEST_CASE("measureLeaks charges the measured iterations only and reports the cou
         CHECK(report.delta.heapBlocks == expectedBlocks(5));
         if (!underAddressSanitizer()) {
             CHECK(report.delta.heapBytes >= 5 * 2048);
-            // Five blocks is beyond noise: the first pass decides, the second is reported.
+            // Five blocks are within the block noise but 5 x 2048 bytes are beyond the byte noise:
+            // the first pass decides, the second is reported.
             CHECK(report.secondPassRan);
             CHECK_FALSE(report.firstPassWithinNoise);
             CHECK(report.firstPass.heapBlocks == 5);
@@ -734,14 +735,19 @@ TEST_CASE("localiseHeapGrowth names the item after which blocks stayed, with the
                    "allocation of the failed pass, not any item's)\n");
 }
 
-TEST_CASE("the retry noise bound is two small blocks and no handle; views are the second pass's to decide")
+TEST_CASE("the retry noise bound is sixteen small blocks and no handle; views are the second pass's to decide")
 {
     using pvdkit::test::withinRetryNoise;
     CHECK(withinRetryNoise({0, 0, 0, 0, 0, 0, 0}));
     CHECK(withinRetryNoise({2, 1024, 0, 0, 0, 0, 0}));
+    // The per-thread bookkeeping a plugin's band workers leave behind once (LeakCheck.hpp): 15
+    // blocks of 3200 bytes on x64, 15 of 2188 on x86, and the bound has a little room above it.
+    CHECK(withinRetryNoise({15, 3200, 0, 0, 0, 0, 0}));
+    CHECK(withinRetryNoise({15, 2188, 0, 0, 0, 0, 0}));
+    CHECK(withinRetryNoise({16, 4096, 0, 0, 0, 0, 0}));
     CHECK(withinRetryNoise({-5, -4096, -1, -1, -4096, 0, 0}));
-    CHECK_FALSE(withinRetryNoise({3, 96, 0, 0, 0, 0, 0}));
-    CHECK_FALSE(withinRetryNoise({1, 1025, 0, 0, 0, 0, 0}));
+    CHECK_FALSE(withinRetryNoise({17, 96, 0, 0, 0, 0, 0}));
+    CHECK_FALSE(withinRetryNoise({1, 4097, 0, 0, 0, 0, 0}));
     CHECK_FALSE(withinRetryNoise({0, 0, 1, 0, 0, 0, 0}));
     // Any number of regions may appear in the first pass: a mapping that does not appear again in
     // the second pass was a one-time one, and one that does is charged by the second pass.
@@ -785,6 +791,26 @@ TEST_CASE("the gate fails a report whose mapped bytes grew with no new view, exc
                                               : "gate self-test: views +0 (+24 KiB), one failed CHECK expected";
     report.delta = {0, 0, 0, 0, 24 * 1024, 0, 0, 0};
     pvdkit::test::requireNoLeak(report);
+}
+
+// The property the retry-noise bound leans on: a growth that fits the first-pass bound but recurs
+// is charged by the second pass. One 32-byte block leaked per iteration over five iterations is
+// +5 blocks and a few hundred bytes - within {16 blocks, 4 KiB} - so the second pass decides,
+// finds the same five again and fails the gate on blocks and bytes (two CHECKs; none under ASan,
+// where the walk does not see malloc'd blocks and no second pass runs).
+TEST_CASE("a recurring growth within the first-pass noise is charged by the second pass, except under ASan" *
+          doctest::expected_failures(underAddressSanitizer() ? 0 : 2))
+{
+    std::vector<std::unique_ptr<std::byte[]>> retained;
+    retained.reserve(16);
+    const auto report = measureLeaks("gate self-test: 32-byte block per iteration, two failed CHECKs expected", 1, 5,
+                                     [&](const std::size_t) { retained.push_back(allocateBlock(32)); });
+    CHECK(report.secondPassRan == !underAddressSanitizer());
+    CHECK(report.firstPassWithinNoise == !underAddressSanitizer());
+    CHECK(report.firstPass.heapBlocks == expectedBlocks(5));
+    CHECK(report.secondPass.heapBlocks == expectedBlocks(5));
+    CHECK(report.delta.heapBlocks == expectedBlocks(5));
+    pvdkit::test::checkNoLeak(report);
 }
 
 // checkNoLeak is the checking half on its own (no report line), for a scenario that prints its

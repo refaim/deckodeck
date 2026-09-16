@@ -20,9 +20,11 @@
 #include <avif/avif.h>
 #include <doctest/doctest.h>
 
+#include "PresentationReference.hpp"
 #include "adapters/avif/Decoder.hpp"
 #include "core/Error.hpp"
 #include "core/IDecoder.hpp"
+#include "core/colour/Pipeline.hpp"
 #include "pvd/Types.hpp"
 
 namespace
@@ -426,6 +428,47 @@ TEST_CASE("CICP signalling is preserved for P3/PQ, Rec.2020 and identity sources
     REQUIRE(rgb.has_value());
     CHECK((*rgb)->meta().cicp.matrix == 0);
     CHECK((*rgb)->meta().cicp.fullRange);
+}
+
+TEST_CASE("the shared presentation of every HDR fixture agrees with the scalar reference on every pixel")
+{
+    // The table-driven presentation (core/colour/Pipeline: the BT.2390 gain read by the maximum
+    // channel code) against the scalar reference of the same order (tests/support/
+    // PresentationReference.hpp, the EETF evaluated per pixel) over libavif's own BGRA64 output of
+    // the two HDR fixtures, every pixel, on this architecture's YUV-to-RGB input.
+    const auto tables = std::make_unique<const pvdkit::core::colour::SrgbOutputTables>(); // 384 KiB: not on the stack
+    pvdkit::avif::DecoderFactory factory;
+    for (const auto name : {"cosmos1650_yuv444_10bpc_p3pq.avif", "colors_hdr_rec2020.avif"}) {
+        CAPTURE(name);
+        const auto bytes = readFixture(name);
+        auto decoder = factory.create(bytes, kOptions);
+        REQUIRE(decoder.has_value());
+        const auto &meta = (*decoder)->meta();
+        REQUIRE(pvdkit::core::colour::Presentation::needed(meta.cicp, meta.chromaticities));
+        const std::uint32_t pitch = meta.width * 8;
+        std::vector<std::byte> source(static_cast<std::size_t>(pitch) * meta.height);
+        REQUIRE((*decoder)->decodeFrame(0, PixelFormat::Bgra64, source, pitch).has_value());
+
+        const pvdkit::core::colour::Presentation presentation{meta.cicp, meta.masteringPeakNits, meta.chromaticities,
+                                                              *tables};
+        const pvdkit::tests::PresentationReference reference{meta.cicp, meta.masteringPeakNits, meta.chromaticities,
+                                                             *tables};
+        auto converted = source;
+        presentation.applyImage(converted, pitch, meta.height, kOptions.maxThreads);
+
+        std::size_t differing = 0;
+        for (std::uint32_t y = 0; y < meta.height; ++y) {
+            for (std::uint32_t x = 0; x < meta.width; ++x) {
+                const auto input = pixelAt16<4>(source, pitch, x, y);
+                const auto output = pixelAt16<4>(converted, pitch, x, y);
+                const auto expected = reference.convert(input[0], input[1], input[2]);
+                const bool same = output[0] == expected[0] && output[1] == expected[1] && output[2] == expected[2] &&
+                                  output[3] == input[3];
+                differing += same ? 0U : 1U;
+            }
+        }
+        CHECK(differing == 0);
+    }
 }
 
 TEST_CASE("a real imir property is reported as a mirror axis by the parser")

@@ -8,23 +8,20 @@ namespace pvdkit::core::colour::Primaries
     namespace
     {
 
-        constexpr Chromaticity kD65{0.3127F, 0.3290F};
-        constexpr Chromaticity kIlluminantC{0.3100F, 0.3160F};
-        constexpr Chromaticity kDciWhite{0.3140F, 0.3510F};
+        // The H.273 Table 2 chromaticities themselves live in the header (Primaries::detail), so
+        // that Primaries::chromaticities is constexpr; the matrices below are derived from them.
+        using detail::kBt2020;
+        using detail::kBt470Bg;
+        using detail::kBt470M;
+        using detail::kBt709;
+        using detail::kD65;
+        using detail::kEbu3213;
+        using detail::kP3D65;
+        using detail::kP3Dci;
+        using detail::kSmpteC;
         // Illuminant E, the equal-energy white of the CIE XYZ and CIE RGB encodings.
         constexpr Chromaticity kEqualEnergy{1.0F / 3.0F, 1.0F / 3.0F};
         constexpr float kWhiteTolerance = 1.0e-3F;
-
-        // H.273 Table 2 chromaticities. These were cross-checked against zimg's
-        // colorspace_param.h; matrices below are derived from them, never pasted.
-        constexpr Chromaticities kBt709{{0.640F, 0.330F}, {0.300F, 0.600F}, {0.150F, 0.060F}, kD65};
-        constexpr Chromaticities kBt470M{{0.670F, 0.330F}, {0.210F, 0.710F}, {0.140F, 0.080F}, kIlluminantC};
-        constexpr Chromaticities kBt470Bg{{0.640F, 0.330F}, {0.290F, 0.600F}, {0.150F, 0.060F}, kD65};
-        constexpr Chromaticities kSmpteC{{0.630F, 0.340F}, {0.310F, 0.595F}, {0.155F, 0.070F}, kD65};
-        constexpr Chromaticities kBt2020{{0.708F, 0.292F}, {0.170F, 0.797F}, {0.131F, 0.046F}, kD65};
-        constexpr Chromaticities kP3Dci{{0.680F, 0.320F}, {0.265F, 0.690F}, {0.150F, 0.060F}, kDciWhite};
-        constexpr Chromaticities kP3D65{{0.680F, 0.320F}, {0.265F, 0.690F}, {0.150F, 0.060F}, kD65};
-        constexpr Chromaticities kEbu3213{{0.630F, 0.340F}, {0.295F, 0.605F}, {0.155F, 0.077F}, kD65};
 
         constexpr Matrix3 kIdentity{{{{1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}}}};
         constexpr Matrix3 kBradford{
@@ -240,11 +237,6 @@ namespace pvdkit::core::colour::Primaries
         return conversionColumns(chromaticities);
     }
 
-    Rgb apply(const Matrix3 &matrix, const Rgb &colour) noexcept
-    {
-        return multiply(matrix, colour);
-    }
-
     Rgb luminanceCoefficients(const std::uint16_t primaries) noexcept
     {
         switch (primaries) {
@@ -293,31 +285,6 @@ namespace pvdkit::core::colour::Primaries
         // The product includes RGB -> XYZ (an infinity in it cannot cancel: the XYZ -> BT.709 factor
         // has no zero entry), whose Y row is the luminance coefficients.
         return isFinite(conversionColumns(set));
-    }
-
-    std::optional<Chromaticities> chromaticities(const std::uint16_t primaries) noexcept
-    {
-        switch (primaries) {
-        case 1:
-            return kBt709;
-        case 4:
-            return kBt470M;
-        case 5:
-            return kBt470Bg;
-        case 6:
-        case 7:
-            return kSmpteC;
-        case 9:
-            return kBt2020;
-        case 11:
-            return kP3Dci;
-        case 12:
-            return kP3D65;
-        case 22:
-            return kEbu3213;
-        default:
-            return std::nullopt;
-        }
     }
 
     bool isKnown(const std::uint16_t primaries) noexcept

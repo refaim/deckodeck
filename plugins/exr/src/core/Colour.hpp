@@ -42,10 +42,6 @@ namespace pvdkit::exr
     /// `lin_rec2020`, `lin_p3d65`, `lin_ap0`, `lin_ap1`); nullopt for any other id.
     [[nodiscard]] std::optional<core::colour::Primaries::Chromaticities> interopChromaticities(
         std::string_view colorInteropID) noexcept;
-    /// The coded sets this module matches against are spelled locally (a constexpr table); this
-    /// says they are the shared colour module's H.273 values to the digit (a test pins it).
-    [[nodiscard]] bool codedSetsAgreeWithTheSharedTable() noexcept;
-
     /// What the decoder hands the shared presentation: the CICP primaries code and, for sets the
     /// code cannot express, the explicit chromaticities.
     struct ColourSignal
