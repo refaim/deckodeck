@@ -253,9 +253,9 @@ namespace pvdkit::rpgmvp
         return {};
     }
 
-    Decoder::Decoder(Key, const std::span<const std::byte> file, const core::ImageMeta meta,
+    Decoder::Decoder(Key, const std::span<const std::byte> file, core::ImageMeta meta,
                      const core::DecoderOptions options) noexcept
-        : file_(file), meta_(meta), options_(options)
+        : file_(file), meta_(std::move(meta)), options_(options)
     {
     }
 

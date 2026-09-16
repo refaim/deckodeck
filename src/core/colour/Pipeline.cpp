@@ -151,11 +151,28 @@ namespace pvdkit::core::colour
 
     Presentation::Presentation(const Cicp &cicp, const std::optional<float> masteringPeakNits,
                                const SrgbOutputTables &outputTables)
-        : active_(needed(cicp)), hlg_(cicp.transfer == 18), hdr_(Transfer::isHdr(cicp.transfer)),
+        : Presentation(cicp, masteringPeakNits, std::nullopt, outputTables)
+    {
+    }
+
+    Presentation::Presentation(const Cicp &cicp, const std::optional<float> masteringPeakNits,
+                               const std::optional<Primaries::Chromaticities> &chromaticities,
+                               const SrgbOutputTables &outputTables)
+        : Presentation(cicp, masteringPeakNits,
+                       chromaticities && Primaries::isUsable(*chromaticities) ? chromaticities : std::nullopt,
+                       outputTables, Usable{})
+    {
+    }
+
+    Presentation::Presentation(const Cicp &cicp, const std::optional<float> masteringPeakNits,
+                               const std::optional<Primaries::Chromaticities> &chromaticities,
+                               const SrgbOutputTables &outputTables, Usable)
+        : active_(needed(cicp, chromaticities)), hlg_(cicp.transfer == 18), hdr_(Transfer::isHdr(cicp.transfer)),
           sourcePeakNits_(colour::sourcePeakNits(cicp.transfer, masteringPeakNits)),
-          primaries_(Primaries::toSrgb(cicp.primaries)),
-          sourceLuminance_(Primaries::luminanceCoefficients(cicp.primaries)), toneMap_(sourcePeakNits_),
-          outputTables_(outputTables)
+          primaries_(chromaticities ? Primaries::toSrgb(*chromaticities) : Primaries::toSrgb(cicp.primaries)),
+          sourceLuminance_(chromaticities ? Primaries::luminanceCoefficients(*chromaticities)
+                                          : Primaries::luminanceCoefficients(cicp.primaries)),
+          toneMap_(sourcePeakNits_), outputTables_(outputTables)
     {
         if (!active_) {
             return;
@@ -172,6 +189,11 @@ namespace pvdkit::core::colour
         const bool transferConversion =
             cicp.transfer == 4 || cicp.transfer == 5 || cicp.transfer == 8 || Transfer::isHdr(cicp.transfer);
         return !Primaries::isIdentity(cicp.primaries) || transferConversion;
+    }
+
+    bool Presentation::needed(const Cicp &cicp, const std::optional<Primaries::Chromaticities> &chromaticities) noexcept
+    {
+        return chromaticities.has_value() || needed(cicp);
     }
 
     void Presentation::apply(const std::span<std::uint16_t> bgraRow) const noexcept

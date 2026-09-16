@@ -5,8 +5,10 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 
 #include "core/Error.hpp"
+#include "core/colour/Primaries.hpp"
 #include "pvd/Types.hpp"
 
 namespace pvdkit::core
@@ -70,6 +72,16 @@ namespace pvdkit::core
         /// HDR mastering/content peak in cd/m2 when the container exposes one.
         std::optional<float> masteringPeakNits{};
         std::uint8_t exifOrientation = 0; ///< 0 = absent/ignored; 1..8 use the EXIF orientation values.
+        /// Explicit xy primaries and white when the container signals a colour space that has no
+        /// H.273 code (OpenEXR `chromaticities`, ACES AP0/AP1): `cicp.primaries` then says 2 and the
+        /// presentation derives its matrix from these values at run time.
+        std::optional<colour::Primaries::Chromaticities> chromaticities{};
+        /// Container facts the adapter resolved that no shared field expresses, for the plugin's
+        /// describer: the compression scheme's name (OpenEXR "PIZ", "ZIP"; empty = the plugin's own
+        /// constant word) and a source summary (OpenEXR "half RGBA, tiled 64x64, ..."; empty = nothing
+        /// to add). Formats whose shared fields say it all (AVIF, RPGMVP) leave both empty.
+        std::string compression{};
+        std::string sourceDetail{};
     };
 
     /// Holds the display duration of one decoded frame.

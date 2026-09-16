@@ -261,7 +261,7 @@ namespace pvdkit::avif
     }
 
     Decoder::Decoder(Key, DecoderHandle decoder, core::ImageMeta meta, const int maxThreads) noexcept
-        : decoder_(std::move(decoder)), meta_(meta), maxThreads_(maxThreads)
+        : decoder_(std::move(decoder)), meta_(std::move(meta)), maxThreads_(maxThreads)
     {
     }
 
@@ -333,7 +333,7 @@ namespace pvdkit::avif
 
                 return imageMeta(*decoder).transform([&](core::ImageMeta meta) {
                     return std::unique_ptr<core::IDecoder>{
-                        std::make_unique<Decoder>(Decoder::Key{}, std::move(decoder), meta, maxThreads)};
+                        std::make_unique<Decoder>(Decoder::Key{}, std::move(decoder), std::move(meta), maxThreads)};
                 });
             });
     }

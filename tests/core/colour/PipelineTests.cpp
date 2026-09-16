@@ -434,6 +434,65 @@ namespace pvdkit::core::colour
             CHECK(black == std::array<std::uint16_t, 4>{42, 42, 42, 12'345});
         }
 
+        TEST_CASE("explicit chromaticities select the run-time primaries matrix and make presentation needed")
+        {
+            // ACES AP1 (ACEScg) is not an H.273 code: the container reports primaries 2 plus the
+            // chromaticities, and the presentation must convert through the run-time matrix
+            // exactly as a Presentation over the coded set would through its table.
+            constexpr Primaries::Chromaticities ap1{
+                {0.713F, 0.293F}, {0.165F, 0.830F}, {0.128F, 0.044F}, {0.32168F, 0.33767F}};
+            constexpr Primaries::Chromaticities bt2020{
+                {0.708F, 0.292F}, {0.170F, 0.797F}, {0.131F, 0.046F}, {0.3127F, 0.3290F}};
+            constexpr Cicp unspecifiedSrgb{2, 13, 0, true};
+            constexpr Cicp unspecifiedLinear{2, 8, 0, true};
+            CHECK_FALSE(Presentation::needed(unspecifiedSrgb, std::nullopt));
+            CHECK(Presentation::needed(unspecifiedSrgb, ap1));
+            CHECK(Presentation::needed(unspecifiedLinear, std::nullopt));
+            CHECK(Presentation::needed(Cicp{2, 16, 0, true}, std::nullopt));
+
+            // Linear AP1 codes (32768, 16384, 8192)/65535 through the AP1-to-sRGB matrix, then the
+            // sRGB OETF (the LUT input is the 16-bit code, not an exact 0.5/0.25/0.125).
+            std::array<std::uint16_t, 4> row{8'192, 16'384, 32'768, 60'000};
+            const Presentation presentation{unspecifiedLinear, std::nullopt, ap1, testTables()};
+            presentation.apply(row);
+            const auto expected = [](const float linear) {
+                return static_cast<std::uint16_t>(
+                    std::lround(std::clamp(Transfer::linearToSrgb(linear), 0.0F, 1.0F) * 65'535.0F));
+            };
+            const auto converted = Primaries::apply(
+                Primaries::toSrgb(ap1), {32'768.0F / 65'535.0F, 16'384.0F / 65'535.0F, 8'192.0F / 65'535.0F});
+            CHECK(row[0] == expected(converted[2]));
+            CHECK(row[1] == expected(converted[1]));
+            CHECK(row[2] == expected(converted[0]));
+            CHECK(row[3] == 60'000);
+
+            // Chromaticities equal to a coded set convert byte-identically to that code.
+            std::array<std::uint16_t, 4> viaCode{8'192, 16'384, 32'768, 1};
+            std::array<std::uint16_t, 4> viaChromaticities = viaCode;
+            const Presentation coded{Cicp{9, 16, 9, true}, 1'000.0F, testTables()};
+            const Presentation explicitSet{Cicp{2, 16, 0, true}, 1'000.0F, bt2020, testTables()};
+            coded.apply(viaCode);
+            explicitSet.apply(viaChromaticities);
+            CHECK(viaCode == viaChromaticities);
+
+            // With explicit chromaticities the coded primaries are ignored, so the identity code
+            // still converts through the explicit set.
+            std::array<std::uint16_t, 4> identityCode{8'192, 16'384, 32'768, 1};
+            const Presentation ignoredCode{Cicp{1, 16, 0, true}, 1'000.0F, bt2020, testTables()};
+            ignoredCode.apply(identityCode);
+            CHECK(identityCode == viaCode);
+
+            // A set no derivation can use (a white with y = 0) is ignored in favour of the coded
+            // primaries: a container validates before handing over, the presentation never divides.
+            constexpr Primaries::Chromaticities unusable{
+                {0.708F, 0.292F}, {0.170F, 0.797F}, {0.131F, 0.046F}, {0.3127F, 0.0F}};
+            CHECK_FALSE(Primaries::isUsable(unusable));
+            std::array<std::uint16_t, 4> viaUnusable{8'192, 16'384, 32'768, 1};
+            const Presentation ignoredSet{Cicp{9, 16, 9, true}, 1'000.0F, unusable, testTables()};
+            ignoredSet.apply(viaUnusable);
+            CHECK(viaUnusable == viaCode);
+        }
+
         TEST_CASE("invalid and unavailable PQ mastering peaks use the 1000-nit fallback")
         {
             CHECK(Presentation{Cicp{9, 16, 9, false}, std::nullopt, testTables()}.sourcePeakNits() == 1'000.0F);

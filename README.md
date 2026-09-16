@@ -2,9 +2,10 @@
 
 Decoder plugins for PictureView 3, the picture viewer plugin for Far Manager 3 (by Pavel
 Skakov). Today: `AVIF.pvd` — AVIF photos from phones and the web, animation as pages, 10-bit,
-12-bit and HDR; and `RPGMVP.pvd` — RPG Maker MV/MZ encrypted PNG (`.rpgmvp`/`.png_`), no key
-needed. Built for x64 and x86 Far; each plugin is one self-contained `.pvd` — no runtime, no
-codecs, only Windows.
+12-bit and HDR; `EXR.pvd` — OpenEXR renders and HDR pictures shown as a colour-managed viewer
+would, tone-mapped to sRGB at 16 bits; and `RPGMVP.pvd` — RPG Maker MV/MZ encrypted PNG
+(`.rpgmvp`/`.png_`), no key needed. Built for x64 and x86 Far; each plugin is one self-contained
+`.pvd` — no runtime, no codecs, only Windows.
 
 ## Download
 

@@ -19,7 +19,7 @@ pvdkit/
   src/core/           shared: Error, Narrow, PixelBuffer, Transform, IDecoder, IFileSource,
                       IImageDescriber, CodecPlugin, FileSession                → pvdkit_core
   src/adapters/win/   shared: FileMapping, FileSource, Utf8                    → pvdkit_win
-  plugins/<id>/       one directory per plugin (today: avif → AVIF.pvd, rpgmvp → RPGMVP.pvd)
+  plugins/<id>/       one directory per plugin (today: avif → AVIF.pvd, exr → EXR.pvd, rpgmvp → RPGMVP.pvd)
     CMakeLists.txt    identity (name, version, priority), libraries, composition, packaging
     src/core/         plugin decisions without the codec library (e.g. the describer)  → <id>_core
     src/adapters/     the codec adapter(s)                                     → <id>_adapter
@@ -326,6 +326,10 @@ struct ImageMeta {                    // every scalar has a default: an empty Im
   bool interlaced = false;              // source is stored progressively (PNG Adam7; informational only)
   std::optional<float> masteringPeakNits; // HDR mastering/content peak in cd/m2, when supplied
   std::uint8_t exifOrientation = 0;      // 0 = absent/ignored; 1..8 are EXIF orientation values
+  std::optional<colour::Primaries::Chromaticities> chromaticities; // explicit xy primaries + white when
+                                         // the colour space has no H.273 code (cicp.primaries then says 2)
+  std::string compression, sourceDetail; // container facts the shared fields cannot express, for the
+                                         // plugin's describer; empty where the shared fields say it all
 };
 struct FrameTiming { std::uint32_t durationMs; };
 struct DecoderOptions {
@@ -384,6 +388,19 @@ Decisions (Task 7, open point 1):
   `Yuv400`. The shared colour-presentation module reads primaries and transfer; matrix and range
   remain informational because the codec adapter has already produced full-range RGB. A plugin's
   describer is free to print the signalling and presentation decision.
+- `chromaticities` (Task 26) carries a colour space that H.273 cannot number — OpenEXR's
+  `chromaticities` attribute when it matches no coded set, ACES AP0/AP1, CIE XYZ — as explicit xy
+  primaries and white; `cicp.primaries` then says 2 and `Presentation` derives the matrix from
+  the values at run time (`Primaries::toSrgb(const Chromaticities&)`, §3.7). A plugin validates
+  the set with `Primaries::isUsable` before handing it over (finite, white y > 0, primaries not
+  collinear, finite matrices) and falls back to its coded default otherwise; the presentation
+  ignores a set that fails the check as well. `compression` and
+  `sourceDetail` (Task 26) let a plugin whose container facts the shared fields cannot express
+  (an EXR's compression scheme, its tiling, parts and windows) hand the describer what it read;
+  the adapter fills them from the plugin's own core formatting functions and AVIF/RPGMVP leave
+  them empty. A float-valued source (EXR) delivers its pixels to the core as 16-bit PQ codes of
+  absolute nits with `cicp.transfer = 16` and its tone-mapping peak in `masteringPeakNits`, so the
+  one presentation path serves AVIF HDR and EXR alike (`plugins/exr/DESIGN.md` §4).
 - The host-facing words (`formatName`, `compression`, `comments`) are produced by the plugin's
   `IImageDescriber`; `CodecPlugin` derives `pageCount` and `animated` from `ImageMeta` and
   assembles `ImageInfo`. An interface rather than a callback because everything else injected into
@@ -405,7 +422,18 @@ Decisions (Task 7, open point 1):
   `Transfer` implements the H.273 sRGB, BT.1886, gamma 2.2/2.8, linear, PQ and HLG functions;
   code 2 and unknown transfers fall back to sRGB. `Primaries` derives the H.273 RGB-to-BT.709
   matrices at compile time from chromaticities, using Bradford adaptation where the white is not
-  D65; code 2 and unknown primaries are identity. `ToneMap` applies the BT.2390 Hermite-knee EETF
+  D65; code 2 and unknown primaries are identity. A second derivation runs at run time for
+  explicit chromaticities (`Primaries::Chromaticities`, `toSrgb(const Chromaticities&)`,
+  `luminanceCoefficients(const Chromaticities&)`, `isUsable`, `chromaticities(code)` exposing the
+  coded sets): the column form of RGB to XYZ (each primary's (x, y, 1-x-y) scaled to the white at
+  Y = 1, as `Imf::RGBtoXYZ` derives it), which divides by no primary's y and so accepts the CIE XYZ
+  set with two primaries at y = 0; the compile-time tables keep their original arithmetic to the
+  bit (every plugin's pinned output hashes depend on them). The white is Bradford-adapted to D65
+  unless it is the equal-energy white E (within 1e-3), which declares no viewing illuminant: those
+  values are absolute tristimulus and pass through unadapted, so an XYZ file of a D65-white
+  picture presents as its Rec.709 twin (Task 26 fix round). This is how a `Presentation` built
+  with `ImageMeta::chromaticities` converts ACES, XYZ or custom primaries; with usable explicit
+  chromaticities `needed()` is always true and the coded primaries are ignored. `ToneMap` applies the BT.2390 Hermite-knee EETF
   to maxRGB so one ratio scales all three channels and preserves hue. `Presentation` caches a
   65,536-entry input-transfer LUT for its session (it depends on the CICP transfer code), applies
   HLG's 1000-nit/1.2-gamma OOTF where needed, converts the primaries, tone-maps PQ/HLG to the
@@ -547,7 +575,13 @@ Decisions (Task 7, open point 1):
   so every port gets the same toolchain (and libyuv its SIMD paths, vcpkg#28446). The chainload
   toolchain sets only compilers, linker, resource compiler and `CMAKE_MSVC_RUNTIME_LIBRARY`; the
   overlay port `ports/libavif` (registered through `VCPKG_OVERLAY_PORTS`) carries the clang-cl
-  fix for libavif's static-library merge, see `plugins/avif/DESIGN.md`. Changing a toolchain file
+  fix for libavif's static-library merge, see `plugins/avif/DESIGN.md`; `ports/openexr` and
+  `ports/openjph` carry clang-cl SIMD-intrinsic patches and `ports/imath` switches the half
+  lookup table off (its defining object would drag the CRT's thread-safe-statics object into a
+  plugin DLL, §7), see `plugins/exr/DESIGN.md`. Both
+  triplets pass `-DCMAKE_POLICY_DEFAULT_CMP0091=NEW` to every port so that ports declaring a
+  CMake policy level below 3.15 (OpenEXR, Imath, libdeflate, OpenJPH) honour the static CRT the
+  toolchain selects instead of falling back to `/MD`. Changing a toolchain file
   changes every port's ABI hash, i.e. rebuilds the ports once.
 - Targets. Shared: `pvdkit_options` (INTERFACE flags), `pvdkit_core`, `pvdkit_pvd`,
   `pvdkit_win` (all static). Per plugin, from `cmake/pvdkit-plugin.cmake`:
@@ -669,13 +703,20 @@ Decisions (Task 7, open point 1):
   `HeapAlloc` of every module is served by ASan's allocator and freed memory is quarantined, so
   the leak scenarios check handles and the mapped-view count only there (§5) and print the rest.
   What is and is not instrumented: our code (`src/**`, `plugins/*/src/**`, the tests) is; the vcpkg ports -
-  libavif, dav1d, libyuv - are not (they are built by vcpkg without `-fsanitize=address`), so
+  libavif, dav1d, libyuv, OpenEXR, Imath, libdeflate, OpenJPH - are not (they are built by
+  vcpkg without `-fsanitize=address`), so
   inside them only ASan's interceptors see anything (`malloc`/`free`/`memcpy`/... arguments, a
   use after free of a block, an overflow that reaches a redzone through an intercepted call),
   not an out-of-bounds read by dav1d's own instructions. The hostile-corpus claim under this
   preset is therefore about our code on hostile input plus the host-side check that every byte
   of every handed-out page is readable; a bug confined to a port's own instructions is caught by
-  the port's upstream fuzzing, not here.
+  the port's upstream fuzzing, not here. One consequence of the split: the MSVC STL marks every
+  object that includes `<string>` or `<vector>` with `detect_mismatch("annotate_string")` /
+  `("annotate_vector")` - 1 under ASan (its container annotations are on), 0 otherwise - and
+  lld-link refuses to mix the two. The C ports never carried the mark; OpenEXR's C++ objects do,
+  as 0, so the preset compiles our code with `_DISABLE_STL_ANNOTATION` (the STL's own switch,
+  `__msvc_sanitizer_annotate_container.hpp`) and forgoes the intra-container overflow class
+  (writing past a string's or vector's size within its capacity); every other class is unchanged.
 
 ## 5. Tests
 
@@ -790,12 +831,19 @@ Decisions (Task 7, open point 1):
   mentions would remove it. The instrumented builds run the same N and are deliberately not
   trimmed (a smaller N there would test less of exactly the build the gate is instrumented for):
   ~30-42 s under `coverage`, ~30 s under `asan` before Task 24, ≈ 54 / 59 s after (x64, loaded).
+  `exr_leak_tests` (Task 26) costs more again - measured by its review on an unloaded machine:
+  188 s in Debug x64, 42 s in Release x64, 82 s in Release x86 (≈ 580 s under `coverage-x86`,
+  ≈ 235 s under `asan`) - because the EXR decoder decodes the whole picture at open (the
+  tone-mapping peak needs every pixel, `plugins/exr/DESIGN.md` §4) and the scenarios open every one
+  of its 77 fixtures × N = 200 times; the same test-time-only character as the AVIF figure, and
+  the same remedy would not apply (the cost is the decode, not `pvdInit`).
 - `tests/guard`: walks `src/` and every `plugins/*/src/` and fails on forbidden tokens: `new `,
   `new(`, `delete `, `malloc`, `calloc`, `realloc`, `free(`, `shared_ptr`, `weak_ptr`,
   `reinterpret_cast` outside adapters/pvd, `#include <windows.h>` outside `src/adapters/**`,
   `plugins/*/src/adapters/**`, `src/pvd/Exports.cpp` and `src/pvd/PvdApi.hpp` (the same set
-  AGENTS.md rule 4 names), codec headers (`avif/avif.h`, `dav1d/dav1d.h`; extend the list with
-  each plugin's library) outside those adapters and `Exports.cpp`, `catch (`
+  AGENTS.md rule 4 names), codec headers (`avif/avif.h`, `dav1d/dav1d.h`, `spng.h`,
+  `OpenEXR/*.h`, `Imath/*.h`, `libdeflate.h`, `openjph/*.h`; extend the list with each plugin's
+  library) outside those adapters and `Exports.cpp`, `catch (`
   outside `Firewall.hpp`, `LCOV_EXCL`, `__builtin_unreachable`, `[[assume`, and (Task 24, AGENTS.md
   rule 13) the synchronisation family behind the `api-ms-win-core-synch-l1-2-0.dll` import of
   MSVC ≥ 14.50 (§7 says which members were observed and which are forbidden by extension):
