@@ -1,0 +1,22 @@
+--- a/src/lib/OpenEXRCore/internal_structs.h
++++ b/src/lib/OpenEXRCore/internal_structs.h
+@@ -62,7 +62,7 @@ atomic_load (
+     uintptr_t volatile* object)
+ {
+ #        if UINTPTR_MAX == 0xFFFFFFFF
+-    return (uintptr_t) InterlockedOr (object, 0);
++    return (uintptr_t) InterlockedOr ((volatile LONG*) object, 0);
+ #        else
+     return (uintptr_t) InterlockedOr64 (object, 0);
+ #        endif
+@@ -73,8 +73,8 @@ atomic_compare_exchange_strong (
+     uintptr_t volatile* object, uintptr_t* expected, uintptr_t desired)
+ {
+ #        if UINTPTR_MAX == 0xFFFFFFFF
+-    uintptr_t prev =
+-        (uintptr_t) InterlockedCompareExchange (object, desired, *expected);
++    uintptr_t prev = (uintptr_t) InterlockedCompareExchange (
++        (volatile LONG*) object, (LONG) desired, (LONG) *expected);
+ #        else
+     uintptr_t prev =
+         (uintptr_t) InterlockedCompareExchange64 (object, desired, *expected);

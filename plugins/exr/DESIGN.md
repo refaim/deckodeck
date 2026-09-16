@@ -16,7 +16,9 @@ dithering and 10-bit output keep the precision.
 
 OpenEXR 3.4.13 from vcpkg (port `openexr`; dependencies `imath` 3.2.2, `libdeflate` 1.25,
 `openjph` 0.30.1 for HTJ2K), static, both architectures. Three overlay ports were needed, each a
-copy of the stock port plus one build change with its reason in `portfile.cmake`:
+copy of the stock port plus a build change with its reason in `portfile.cmake` (`openexr` carries
+two patches: the SSE4.1 one below and `clang-cl-x86-interlocked.patch` for the x86 build under
+clang-cl 20 and newer, explained next to its `PATCHES` entry):
 
 - `ports/openjph`: `ojph_block_decoder_ssse3.cpp` uses SSSE3 intrinsics without a compile flag under
   MSVC (cl.exe accepts them regardless; there is no `/arch:SSSE3`), which clang-cl refuses. The patch
