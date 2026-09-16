@@ -12,3 +12,11 @@ set(VCPKG_ENV_PASSTHROUGH_UNTRACKED PVDKIT_LLVM_DIR)
 # vcvars64.bat on its own when no VS environment is present (mesonbuild/utils/vsenv.py), which is
 # correct for x64. The x86 triplet must load vcvars explicitly because meson's self-activation
 # always picks the 64-bit environment. Turning this on for x64 would only invalidate the cache.
+
+# The chainload toolchain selects the static CRT through CMAKE_MSVC_RUNTIME_LIBRARY, which a
+# port's CMake honours only under policy CMP0091 (CMake 3.15). Ports whose cmake_minimum_required
+# is older (OpenEXR, Imath, libdeflate, OpenJPH declare 3.10-3.14) silently fall back to CMake's
+# default /MD flags, and the plugin would then import the dynamic CRT. Setting the policy default
+# on every port's configure line makes the toolchain's choice apply everywhere (the libspng
+# overlay port carries the same option; the two agree).
+set(VCPKG_CMAKE_CONFIGURE_OPTIONS -DCMAKE_POLICY_DEFAULT_CMP0091=NEW)

@@ -355,6 +355,44 @@ namespace pvdkit::core
             CHECK(hdr.freePage(decoded->pixels));
         }
 
+        TEST_CASE("explicit chromaticities in the meta select colour presentation through the run-time matrix")
+        {
+            // Unspecified primaries with the sRGB transfer alone is identity (no presentation, BGR24 for
+            // an 8-bit source); the same signalling plus explicit chromaticities must present through
+            // the matrix derived from them, exactly like a Presentation built over the same values.
+            DecoderState state;
+            auto imageMeta = test::meta(3, 2, false, 8);
+            imageMeta.cicp = Cicp{2, 13, 0, true};
+            {
+                FileSession plain(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                                  test::outputTables());
+                const auto decoded = plain.decodePage(0, pvd::Progress{});
+                REQUIRE(decoded.has_value());
+                CHECK(decoded->bitsPerPixel == 24);
+                CHECK(plain.freePage(decoded->pixels));
+            }
+
+            imageMeta.chromaticities = colour::Primaries::Chromaticities{
+                {0.7347F, 0.2653F}, {0.0F, 1.0F}, {0.0001F, -0.0770F}, {0.32168F, 0.33767F}};
+            FileSession custom(nullptr, decoder(imageMeta, state), test::imageInfo(imageMeta), test::options(),
+                               test::outputTables());
+            const auto decoded = custom.decodePage(0, pvd::Progress{});
+            REQUIRE(decoded.has_value());
+            CHECK(decoded->bitsPerPixel == 64);
+
+            std::vector<std::byte> expected(decoded->pixels.size());
+            {
+                DecoderState referenceState;
+                auto referenceDecoder = decoder(imageMeta, referenceState);
+                REQUIRE(referenceDecoder->decodeFrame(0, pvd::PixelFormat::Bgra64, expected, 24).has_value());
+            }
+            const colour::Presentation reference{imageMeta.cicp, imageMeta.masteringPeakNits, imageMeta.chromaticities,
+                                                 test::outputTables()};
+            reference.apply(std::span{expected});
+            CHECK(std::vector<std::byte>(decoded->pixels.begin(), decoded->pixels.end()) == expected);
+            CHECK(custom.freePage(decoded->pixels));
+        }
+
         TEST_CASE("large display conversion is identical with one two or capped decoder thread counts")
         {
             constexpr std::uint32_t kWidth = 512;

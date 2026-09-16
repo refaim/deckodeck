@@ -15,3 +15,7 @@ set(VCPKG_ENV_PASSTHROUGH_UNTRACKED PVDKIT_LLVM_DIR)
 # VSINSTALLDIR that stops meson's own activation. The compilers are still clang-cl/lld-link from
 # the chainload above; vcvars only supplies the library environment.
 set(VCPKG_LOAD_VCVARS_ENV ON)
+
+# Same as the x64 triplet: ports with a pre-3.15 policy level need CMP0091 NEW to honour the
+# static CRT the chainload toolchain selects.
+set(VCPKG_CMAKE_CONFIGURE_OPTIONS -DCMAKE_POLICY_DEFAULT_CMP0091=NEW)

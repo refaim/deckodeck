@@ -43,8 +43,9 @@ namespace pvdkit::core
           options_(options), outputTables_(outputTables)
     {
         const auto &meta = decoder_->meta();
-        if (colour::Presentation::needed(meta.cicp)) {
-            presentation_ = std::make_unique<colour::Presentation>(meta.cicp, meta.masteringPeakNits, outputTables_);
+        if (colour::Presentation::needed(meta.cicp, meta.chromaticities)) {
+            presentation_ = std::make_unique<colour::Presentation>(meta.cicp, meta.masteringPeakNits,
+                                                                   meta.chromaticities, outputTables_);
         }
     }
 

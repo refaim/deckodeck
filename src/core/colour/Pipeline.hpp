@@ -47,6 +47,12 @@ namespace pvdkit::core::colour
         /// `outputTables` is borrowed for the lifetime of this object; the caller keeps it alive
         /// (the composition root owns it and outlives every session, ARCHITECTURE section 2).
         Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits, const SrgbOutputTables &outputTables);
+        /// The same over explicit chromaticities (`ImageMeta::chromaticities`): when set and usable
+        /// (`Primaries::isUsable`) they replace the coded primaries and the matrix is derived from
+        /// them at run time; a set that is not usable is ignored (the coded primaries stand).
+        Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits,
+                     const std::optional<Primaries::Chromaticities> &chromaticities,
+                     const SrgbOutputTables &outputTables);
 
         Presentation(const Presentation &) = delete;
         Presentation &operator=(const Presentation &) = delete;
@@ -54,6 +60,9 @@ namespace pvdkit::core::colour
         Presentation &operator=(Presentation &&) = delete;
 
         [[nodiscard]] static bool needed(const Cicp &cicp) noexcept;
+        /// Explicit chromaticities always need presentation: they are, by definition, not sRGB.
+        [[nodiscard]] static bool needed(const Cicp &cicp,
+                                         const std::optional<Primaries::Chromaticities> &chromaticities) noexcept;
         /// Converts one tightly packed BGRA64 row in place. Alpha is copied through unchanged.
         void apply(std::span<std::uint16_t> bgraRow) const noexcept;
         /// Byte-span bridge for PixelBuffer, whose storage is byte-owned by the shared core.
@@ -69,6 +78,14 @@ namespace pvdkit::core::colour
 
       private:
         using TransferLut = std::array<float, 65'536>;
+
+        struct Usable
+        {
+        };
+        /// The members' initialisation, over chromaticities already checked (or absent).
+        Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits,
+                     const std::optional<Primaries::Chromaticities> &chromaticities,
+                     const SrgbOutputTables &outputTables, Usable);
 
         [[nodiscard]] std::array<std::uint16_t, 3> convert(std::uint16_t blue, std::uint16_t green,
                                                            std::uint16_t red) const noexcept;

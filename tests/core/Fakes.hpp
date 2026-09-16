@@ -87,7 +87,7 @@ namespace pvdkit::core::test
     class FakeDecoder final : public IDecoder
     {
       public:
-        FakeDecoder(ImageMeta meta, DecoderState &state) : meta_(meta), state_(state)
+        FakeDecoder(ImageMeta meta, DecoderState &state) : meta_(std::move(meta)), state_(state)
         {
         }
         ~FakeDecoder() override
@@ -229,7 +229,7 @@ namespace pvdkit::core::test
     {
       public:
         FakeDecoderFactory(FactoryState &factoryState, DecoderState &decoderState, ImageMeta meta)
-            : factoryState_(factoryState), decoderState_(decoderState), meta_(meta)
+            : factoryState_(factoryState), decoderState_(decoderState), meta_(std::move(meta))
         {
         }
 

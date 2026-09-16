@@ -16,7 +16,8 @@ SDK original; never edit it). The author's reference decoders (`third_party/pvd/
 `pvdIJL.cpp`, `pvdDjVu.cpp`) and the PictureView distribution readme/help
 (`third_party/pvd/dist-docs/`) document how the host calls the exports and which priorities the
 built-in decoders use; read them before touching the pvd layer. Plugins today: `plugins/avif` →
-`AVIF.pvd` (libavif + dav1d + libyuv), `plugins/rpgmvp` → `RPGMVP.pvd` (libspng + zlib).
+`AVIF.pvd` (libavif + dav1d + libyuv), `plugins/exr` → `EXR.pvd` (OpenEXRCore + Imath +
+libdeflate + OpenJPH), `plugins/rpgmvp` → `RPGMVP.pvd` (libspng + zlib).
 
 Every plugin ships x64 and x86, links its codec libraries statically, and imports `KERNEL32.dll`
 only. No WIC, no GDI+, no system codecs.
@@ -24,7 +25,7 @@ only. No WIC, no GDI+, no system codecs.
 ## Non-negotiable rules
 
 1. **Language.** C++23 only (`/clang:-std=c++23`, guarded by `static_assert(__cplusplus >= 202302L)`).
-   No C translation units of our own. Third-party C (libavif, dav1d, libyuv, ...) is consumed as
+   No C translation units of our own. Third-party C (libavif, dav1d, libyuv, OpenEXRCore, ...) is consumed as
    static libraries, behind adapters, and is never modified.
 2. **Ownership.** `std::unique_ptr` only. Forbidden anywhere under `src/` and `plugins/*/src/`:
    `new`, `delete`, `malloc`, `calloc`, `realloc`, `free`, `shared_ptr`, `weak_ptr`, owning raw
@@ -129,6 +130,8 @@ src/adapters/   win/ (FileMapping, FileSource, Utf8)
 plugins/<id>/   one plugin: CMakeLists.txt (identity + targets), src/core/, src/adapters/<lib>/,
                 src/DefaultPlugin.cpp (composition root), tests/{core,adapters,e2e}/, fixtures/,
                 scripts/, package/{readme_en.txt,readme_ru.txt,ChangeLog}, README.md, DESIGN.md
+                (avif: libavif adapter; exr: OpenEXRCore adapter + tests/support/ with the
+                generated reference pixels; rpgmvp: libspng adapter)
 tests/pvd/      shim, firewall, context handle, Progress, Exports with fakes (doctest)
 tests/core/     core logic with fake decoder / file source / describer (doctest)
 tests/adapters/ the win adapter on real files

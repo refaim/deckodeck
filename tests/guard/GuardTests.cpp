@@ -318,9 +318,12 @@ namespace
             .reinterpretCast = std::regex{R"(\breinterpret_cast\b)"},
             .windowsHeader = std::regex{R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*windows[.]h[ \t]*[>"])"},
             // The codec libraries the plugins wrap: foreign headers that only
-            // an adapter may include. Extend the alternation when a plugin brings a new library.
+            // an adapter may include. Extend the alternation when a plugin brings a new library
+            // (OpenEXR's C and C++ headers, Imath, libdeflate and OpenJPH came with EXR.pvd; the
+            // include text is lowercased before matching, hence the lowercase directories).
             .codecHeader =
-                std::regex{R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*(avif/avif|dav1d/dav1d|spng)[.]h[ \t]*[>"])"},
+                std::regex{
+                    R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*((avif/avif|dav1d/dav1d|spng|libdeflate)[.]h|(openexr|imath|openjph)/[a-z0-9_]+[.]h)[ \t]*[>"])"},
             // Captures the whole header path after `pvd/` (nested directories included, `.h` or `.hpp`)
             // so callers can check it against an allowlist, rather than hard-coding the forbidden names
             // in the pattern itself.
@@ -856,6 +859,15 @@ namespace
         }
         CHECK_FALSE(scan("project/src/core/Sample.cpp", "#include <spng.h>").empty());
         CHECK(scan("project/plugins/rpgmvp/src/adapters/spng/Sample.cpp", "#include <spng.h>").empty());
+        for (const auto include :
+             {std::string_view{"#include <OpenEXR/openexr.h>"}, std::string_view{"#include <OpenEXR/ImfRgbaYca.h>"},
+              std::string_view{"#include <Imath/ImathVec.h>"}, std::string_view{"#include <libdeflate.h>"},
+              std::string_view{"#include <openjph/ojph_version.h>"}}) {
+            CAPTURE(include);
+            CHECK_FALSE(scan("project/plugins/exr/src/core/Sample.cpp", include).empty());
+            CHECK_FALSE(scan("project/plugins/exr/src/DefaultPlugin.cpp", include).empty());
+            CHECK(scan("project/plugins/exr/src/adapters/exr/Sample.cpp", include).empty());
+        }
     }
 
     TEST_CASE("core may include only the shared pvd boundary contracts, in the shared and the plugin tree")

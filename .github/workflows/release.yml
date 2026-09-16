@@ -1,4 +1,4 @@
-# A release of one plugin: push the tag <id>/vX.Y.Z (avif/v1.2.0, rpgmvp/v1.2.0) on a commit
+# A release of one plugin: push the tag <id>/vX.Y.Z (avif/v1.2.0, exr/v1.0.0, rpgmvp/v1.2.0) on a commit
 # whose plugins/<id>/CMakeLists.txt declares that VERSION and whose ChangeLog opens with it.
 # The workflow verifies the tag (scripts/release-tag.ps1), builds both architectures with the CI
 # build jobs, packs the plugin with scripts/pack.ps1, creates the GitHub Release with the first
@@ -14,6 +14,7 @@ on:
   push:
     tags:
       - 'avif/v*'
+      - 'exr/v*'
       - 'rpgmvp/v*'
 
 concurrency:

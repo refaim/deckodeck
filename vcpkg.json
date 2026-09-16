@@ -7,6 +7,7 @@
   ],
   "default-features": [
     "avif",
+    "exr",
     "rpgmvp"
   ],
   "features": {
@@ -19,6 +20,12 @@
             "dav1d"
           ]
         }
+      ]
+    },
+    "exr": {
+      "description": "EXR.pvd: OpenEXR (pulls Imath, libdeflate and OpenJPH)",
+      "dependencies": [
+        "openexr"
       ]
     },
     "rpgmvp": {

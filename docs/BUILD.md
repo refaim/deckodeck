@@ -1,13 +1,13 @@
 # deckodeck — build
 
-**deckodeck** (repository: <https://github.com/refaim/deckodeck>) is a pair of decoder plugins for
-PictureView 3, the image viewer plugin for Far Manager 3 by Pavel Skakov: `AVIF.pvd` and
-`RPGMVP.pvd`, built for both the x64 and the x86 (32-bit) Far Manager. Both implement
+**deckodeck** (repository: <https://github.com/refaim/deckodeck>) is a set of decoder plugins for
+PictureView 3, the image viewer plugin for Far Manager 3 by Pavel Skakov: `AVIF.pvd`, `EXR.pvd`
+and `RPGMVP.pvd`, built for both the x64 and the x86 (32-bit) Far Manager. All implement
 PictureView's PVD decoder interface v1 (`third_party/pvd/PictureViewPlugin.h`) over shared
 libraries, and every plugin is a single statically linked `<NAME>.pvd` that imports `KERNEL32.dll`
 and nothing else, so it needs no runtime, no WIC codec and no GDI+. New releases are published as
 GitHub Releases on the repository above and announced in the PictureView forum thread; that is
-this project's release channel. The shared libraries underneath both plugins (`src/`, the
+this project's release channel. The shared libraries underneath the plugins (`src/`, the
 `pvdkit_core`/`pvdkit_pvd`/`pvdkit_win` targets, the `pvdkit::` C++ namespace, the
 `PVDKIT_BUILD_SUFFIX` environment variable, `cmake/pvdkit-*.cmake`, and the coverage script's
 `pvdkit-<id>-*.profraw` profile filenames) keep their original name, **pvdkit**, throughout this
@@ -18,6 +18,9 @@ Plugins:
 
 - `plugins/avif` — `AVIF.pvd`, AVIF decoder over libavif 1.4.2 + dav1d 1.5.3 + libyuv. See
   `plugins/avif/README.md` for what it supports and how to install it.
+- `plugins/exr` — `EXR.pvd`, OpenEXR decoder over OpenEXR 3.4.13 (its C core) + Imath 3.2.2 +
+  libdeflate 1.25 + OpenJPH 0.30.1, presenting scene-linear pictures as tone-mapped sRGB. See
+  `plugins/exr/README.md` for what it supports and how to install it.
 - `plugins/rpgmvp` — `RPGMVP.pvd`, decoder for RPG Maker MV/MZ encrypted PNG images
   (`.rpgmvp`/`.png_`) over libspng + zlib. See `plugins/rpgmvp/README.md` for what it supports and
   how to install it.
@@ -35,8 +38,10 @@ either Program Files root (`Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin`, 
 order), then `clang-cl` on PATH; vcpkg is `VCPKG_ROOT` or the reference machine's install.
 `triplets/x64-windows-static-clang.cmake` and `triplets/x86-windows-static-clang.cmake` build
 every dependency with the same toolchain and the static CRT; `ports/` holds overlay ports (today
-`libavif`, patched for clang-cl's static-library merge). Each plugin's libraries are a vcpkg
-manifest feature named after the plugin (`vcpkg.json`).
+`libavif`, patched for clang-cl's static-library merge; `libspng`, `openexr`, `openjph` and
+`imath`, each with one build change documented in its `portfile.cmake`). Each plugin's libraries are a vcpkg
+manifest feature named after the plugin (`vcpkg.json`). Generating the EXR fixtures
+(`plugins/exr/scripts/make-synthetic-fixtures.ps1`) needs `uv` on PATH; building does not.
 
 ```powershell
 cmake --preset release
@@ -147,7 +152,7 @@ whole suite under it, the leak scenarios and their hostile corpus included; any 
 the run. It is x64 only, and it is a memory-error gate, not a leak gate: LeakSanitizer does not
 exist in clang 19's Windows runtime (`detect_leaks is not supported on this platform`), so leaks
 are the level-1 job of `<id>_leak_tests` in every preset. Only our own code is instrumented: the
-vcpkg ports (libavif, dav1d, libyuv) are built without ASan, so inside them only the interceptors
+vcpkg ports (libavif, dav1d, libyuv, OpenEXR, ...) are built without ASan, so inside them only the interceptors
 (`malloc`, `free`, `memcpy`, ...) see anything - the hostile-corpus claim under this preset is
 about our code on hostile input and the host-side read of every byte of every page handed out,
 not about a port's own instructions. `scripts/package.ps1` runs it from scratch before zipping.
@@ -192,7 +197,7 @@ workflow declares `permissions: contents: read`; only the `release` job holds `c
   -BinSkimDir ...`); `coverage` (`scripts/coverage.ps1 -Preset coverage`, fails below 100 %). No
   ASan job: that preset stays a local gate (`scripts/package.ps1`). One run per ref at a time;
   every job has a timeout.
-- `.github/workflows/release.yml` runs on the tags `avif/vX.Y.Z` and `rpgmvp/vX.Y.Z`: `verify`
+- `.github/workflows/release.yml` runs on the tags `avif/vX.Y.Z`, `exr/vX.Y.Z` and `rpgmvp/vX.Y.Z`: `verify`
   (`scripts/release-tag.ps1`: the tag names a plugin directory, `plugins/<id>/CMakeLists.txt`
   declares exactly that `VERSION`, and `plugins/<id>/package/ChangeLog` opens with
   `<NAME> <version>`), the two build jobs from `build.yml`, then `release`: `scripts/pack.ps1

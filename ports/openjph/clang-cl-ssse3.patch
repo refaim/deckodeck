@@ -1,0 +1,15 @@
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -90,6 +90,12 @@
+         set_source_files_properties(transform/ojph_transform_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX")
+         set_source_files_properties(transform/ojph_transform_avx2.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX2")
+         set_source_files_properties(transform/ojph_transform_avx512.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX512")
++        if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
++          # MSVC has no /arch level for SSSE3 and accepts the intrinsics regardless; clang-cl
++          # refuses to inline _mm_shuffle_epi8/_mm_abs_epi8 into a function compiled without the
++          # ssse3 target feature. The kernel is dispatched at run time, so this stays per file.
++          set_source_files_properties(coding/ojph_block_decoder_ssse3.cpp PROPERTIES COMPILE_FLAGS "/clang:-mssse3")
++        endif()
+       else()
+         set_source_files_properties(codestream/ojph_codestream_sse.cpp PROPERTIES COMPILE_FLAGS -msse)
+         set_source_files_properties(codestream/ojph_codestream_sse2.cpp PROPERTIES COMPILE_FLAGS -msse2)
