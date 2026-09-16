@@ -551,14 +551,25 @@ namespace pvdkit::leak
         for (const auto &fixture : accepted) {
             sources.push_back({std::filesystem::path{fixture.file.utf8Path}.filename().string(), fixture.file.bytes});
         }
+        // The corpus is generated once, here, from the fixed seed, and materialised before any
+        // pass: every mutant's bytes sit in `hostile` (and on disk under the same name), and the
+        // passes below index that vector by i. No generator is consulted during a pass, so the
+        // warm-up, the first measured pass and the second all open the identical files in the
+        // identical order - a one-time allocation of the first parse of any mutant lands in the
+        // warm-up, never in a measured pass.
         const test::HostileCorpus generated{sources, kMutants, kCorpusSeed};
         std::vector<FixtureFile> hostile;
+        std::vector<std::string> labels; // what to call hostile[i] in the log: name, origin, mutation
         hostile.reserve(corpus().rejected.size() + generated.files().size());
+        labels.reserve(corpus().rejected.size() + generated.files().size());
         for (const auto &fixture : corpus().rejected) {
             hostile.push_back(fixture.file);
+            labels.push_back(std::filesystem::path{fixture.file.utf8Path}.filename().string() + " (rejected fixture)");
         }
         for (const auto &mutant : generated.files()) {
             hostile.push_back({mutant.utf8Path, mutant.bytes});
+            labels.push_back(std::filesystem::path{mutant.utf8Path}.filename().string() + " (" + mutant.origin + ": " +
+                             mutant.mutation + ")");
         }
 
         const auto plugin = e2e::loadInitializedPlugin();
@@ -567,10 +578,7 @@ namespace pvdkit::leak
         std::size_t refused = 0;
         std::size_t pagesDecoded = 0;
         std::size_t pagesRefused = 0;
-        // One full pass over the corpus as warm-up, like every other cycling scenario: each mutant
-        // takes its own path through the parser, and a path first taken in the measured pass would
-        // charge its lazy one-time allocations to the plugin.
-        const auto report = measureLeaks("hostile corpus", hostile.size(), hostile.size(), [&](const std::size_t i) {
+        const auto visit = [&](const std::size_t i) {
             const auto &file = hostile[i];
             CAPTURE(file.utf8Path);
             for (const auto mode : {OpenMode::Disk, OpenMode::Memory}) {
@@ -594,12 +602,29 @@ namespace pvdkit::leak
                 }
                 exports.fileClose(image->context);
             }
-        });
+        };
+        // One full pass over the corpus as warm-up, like every other cycling scenario: each mutant
+        // takes its own path through the parser, and a path first taken in the measured pass would
+        // charge its lazy one-time allocations to the plugin.
+        const auto report = measureLeaks("hostile corpus", hostile.size(), hostile.size(), visit);
         std::printf("[leak] hostile corpus: %zu files (%zu rejected fixtures + %zu mutants) x 2 modes: %zu opens "
                     "refused, %zu accepted; %zu pages decoded, %zu page decodes refused (incl. warm-up)\n",
                     hostile.size(), corpus().rejected.size(), generated.files().size(), refused, opened, pagesDecoded,
                     pagesRefused);
-        requireNoLeak(report);
+        test::printReport(report);
+        if (test::heapGrew(report)) {
+            // The aggregate failed on the heap: the same files once more, one at a time with a
+            // snapshot pair around each, name the file after which blocks stayed (seed and
+            // mutation in the label reproduce it) - or say that none did, which makes the growth
+            // a one-time allocation of the failed pass rather than any file's. Off the fast path.
+            std::printf("[leak] hostile corpus: the heap grew; the same %zu files one at a time (corpus seed %u):\n",
+                        hostile.size(), kCorpusSeed);
+            std::fputs(
+                test::localiseHeapGrowth(hostile.size(), visit, [&](const std::size_t i) { return labels[i]; }).c_str(),
+                stdout);
+            static_cast<void>(std::fflush(stdout));
+        }
+        test::checkNoLeak(report);
         exports.exit();
     }
 

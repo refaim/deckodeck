@@ -15,8 +15,10 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <tuple>
 #include <vector>
@@ -52,20 +54,28 @@ namespace pvdkit::test
             DWORD error = ERROR_SUCCESS;
         };
 
-        // The block records live in two buffers reserved once, up front, and never grown: nothing
-        // may allocate while the heap is locked and walked, and a buffer allocated per snapshot
-        // would itself be one more busy block in the "after" walk than in the "before" one. The
-        // two snapshots of one measurement alternate between the buffers, so the "before" records
-        // stay intact while the "after" walk fills the other. More blocks than fit are counted but
-        // not recorded (the description then says so).
+        // The block and region records live in two buffers reserved once, up front, and never
+        // grown: nothing may allocate while the heap is locked and walked, and a buffer allocated
+        // per snapshot would itself be one more busy block in the "after" walk than in the
+        // "before" one. The two snapshots of one measurement alternate between the buffers, so
+        // the "before" records stay intact while the "after" walk fills the other. More blocks or
+        // regions than fit are counted but not recorded (the description then says so).
         constexpr std::size_t kMaxRecordedBlocks = std::size_t{1} << 17;
+        constexpr std::size_t kMaxRecordedRegions = std::size_t{1} << 12;
 
-        std::vector<HeapBlock> &recordBuffer()
+        struct RecordBuffer
         {
-            static std::array<std::vector<HeapBlock>, 2> buffers = [] {
-                std::array<std::vector<HeapBlock>, 2> reserved;
+            std::vector<HeapBlock> blocks;
+            std::vector<MappedRegion> regions;
+        };
+
+        RecordBuffer &recordBuffer()
+        {
+            static std::array<RecordBuffer, 2> buffers = [] {
+                std::array<RecordBuffer, 2> reserved;
                 for (auto &buffer : reserved) {
-                    buffer.reserve(kMaxRecordedBlocks);
+                    buffer.blocks.reserve(kMaxRecordedBlocks);
+                    buffer.regions.reserve(kMaxRecordedRegions);
                 }
                 return reserved;
             }();
@@ -124,9 +134,42 @@ namespace pvdkit::test
             std::uint64_t bytes = 0;
         };
 
-        MappedCensus walkMappedViews()
+        // The file behind a view, as UTF-8 in the record's fixed buffer: GetMappedFileNameW (an NT
+        // device path) fails for a pagefile-backed section, which leaves the name empty. A name
+        // longer than the buffer keeps its tail behind "...": the file name is at the end.
+        constexpr std::size_t kNameCapacity = 1024; // wide characters GetMappedFileNameW may write
+
+        void recordName(void *base, MappedRegion &record)
+        {
+            std::array<wchar_t, kNameCapacity> wide{};
+            const DWORD length =
+                GetMappedFileNameW(GetCurrentProcess(), base, wide.data(), static_cast<DWORD>(wide.size()));
+            record.name.fill('\0');
+            if (length == 0) {
+                return;
+            }
+            std::array<char, 4 * kNameCapacity> utf8{}; // UTF-8 is at most four bytes per UTF-16 unit
+            const int converted = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(length), utf8.data(),
+                                                      static_cast<int>(utf8.size()), nullptr, nullptr);
+            if (converted <= 0) {
+                return;
+            }
+            const std::string_view text{utf8.data(), static_cast<std::size_t>(converted)};
+            constexpr std::string_view kEllipsis = "...";
+            const std::size_t capacity = record.name.size() - 1; // the terminator
+            if (text.size() <= capacity) {
+                std::copy_n(text.data(), text.size(), record.name.data());
+                return;
+            }
+            const auto tail = text.substr(text.size() - (capacity - kEllipsis.size()));
+            std::copy_n(kEllipsis.data(), kEllipsis.size(), record.name.data());
+            std::copy_n(tail.data(), tail.size(), record.name.data() + kEllipsis.size());
+        }
+
+        MappedCensus walkMappedViews(std::vector<MappedRegion> &records)
         {
             MappedCensus census;
+            records.clear();
             SYSTEM_INFO system{};
             GetSystemInfo(&system);
             const auto *address = static_cast<const std::byte *>(system.lpMinimumApplicationAddress);
@@ -136,6 +179,13 @@ namespace pvdkit::test
                 if (region.State == MEM_COMMIT && region.Type == MEM_MAPPED) {
                     ++census.views;
                     census.bytes += region.RegionSize;
+                    if (records.size() < records.capacity()) {
+                        MappedRegion record;
+                        record.base = reinterpret_cast<std::uintptr_t>(region.BaseAddress);
+                        record.size = region.RegionSize;
+                        recordName(region.BaseAddress, record);
+                        records.push_back(record);
+                    }
                 }
                 address = static_cast<const std::byte *>(region.BaseAddress) + region.RegionSize;
             }
@@ -152,22 +202,23 @@ namespace pvdkit::test
             return withSign(bytes / 1024) + " KiB";
         }
 
-        ResourceUsage readResources(std::vector<HeapBlock> &records)
+        ResourceUsage readResources(RecordBuffer &records)
         {
-            const auto census = walkProcessHeap(records);
+            const auto census = walkProcessHeap(records.blocks);
             const DWORD heapWalkError = census.error;
             CAPTURE(heapWalkError);
             REQUIRE(census.error == ERROR_SUCCESS);
             // The listing merges the two snapshots by address; the walk hands out the heap's
             // segments in address order but VirtualAlloc'd blocks (above 512 KiB, e.g. the two
             // record buffers themselves) last, so sort - outside the heap lock, no allocation.
-            std::sort(records.begin(), records.end(),
+            std::sort(records.blocks.begin(), records.blocks.end(),
                       [](const HeapBlock &a, const HeapBlock &b) { return a.address < b.address; });
 
             DWORD handles = 0;
             REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &handles) != FALSE);
 
-            const auto mapped = walkMappedViews();
+            // VirtualQuery walks upwards, so the region records are already sorted by base.
+            const auto mapped = walkMappedViews(records.regions);
 
             PROCESS_MEMORY_COUNTERS_EX counters{};
             counters.cb = sizeof(counters);
@@ -182,7 +233,8 @@ namespace pvdkit::test
             usage.mappedBytes = mapped.bytes;
             usage.privateBytes = counters.PrivateUsage;
             usage.heapCommitted = census.committed;
-            usage.blocks = records;
+            usage.blocks = records.blocks;
+            usage.regions = records.regions;
             return usage;
         }
 
@@ -295,6 +347,32 @@ namespace pvdkit::test
             }
         }
 
+        // Calls `visit(region)` for every region present in `only` and not in `other` (by base
+        // and size). Both lists are sorted by base (VirtualQuery walks upwards), so this is one
+        // merge pass; called both ways round for what appeared and what vanished.
+        template <class Visit>
+        void forEachRegionOnlyIn(const ResourceUsage &only, const ResourceUsage &other, Visit &&visit)
+        {
+            auto candidate = other.regions.begin();
+            for (const auto &region : only.regions) {
+                while (candidate != other.regions.end() && candidate->base < region.base) {
+                    ++candidate;
+                }
+                if (candidate != other.regions.end() && candidate->base == region.base &&
+                    candidate->size == region.size) {
+                    continue;
+                }
+                visit(region);
+            }
+        }
+
+        std::string describeRegion(const char sign, const MappedRegion &region)
+        {
+            const auto file = name(region);
+            return std::string{"  "} + sign + " " + hexAddress(region.base) + " " + std::to_string(region.size / 1024) +
+                   " KiB " + (file.empty() ? std::string{"(pagefile-backed)"} : std::string{file}) + "\n";
+        }
+
         std::string describeDelta(const ResourceDelta &delta)
         {
             return "heap blocks " + withSign(delta.heapBlocks) + ", heap bytes " + withSign(delta.heapBytes) +
@@ -303,6 +381,11 @@ namespace pvdkit::test
         }
 
     } // namespace
+
+    std::string_view name(const MappedRegion &region) noexcept
+    {
+        return std::string_view{region.name.data()};
+    }
 
     ResourceUsage snapshotResources()
     {
@@ -377,6 +460,17 @@ namespace pvdkit::test
         return text;
     }
 
+    std::string describeRegionChanges(const ResourceUsage &after, const ResourceUsage &before)
+    {
+        std::string text;
+        forEachRegionOnlyIn(after, before, [&](const MappedRegion &region) { text += describeRegion('+', region); });
+        forEachRegionOnlyIn(before, after, [&](const MappedRegion &region) { text += describeRegion('-', region); });
+        if (after.mappedViews > after.regions.size() || before.mappedViews > before.regions.size()) {
+            text += "  (more mapped regions than the record buffers hold; the list above is partial)\n";
+        }
+        return text;
+    }
+
     bool underAddressSanitizer() noexcept
     {
         return PVDKIT_TEST_UNDER_ASAN != 0;
@@ -399,30 +493,43 @@ namespace pvdkit::test
         return line;
     }
 
-    void printReport(const LeakReport &report)
+    std::string formatReportLists(const LeakReport &report)
     {
-        // stdout rather than doctest's MESSAGE: one plain line per scenario that ctest keeps in its
-        // log and a reader can grep, with none of doctest's file:line decoration. The blocks that
-        // appeared are listed for every pass whose heap counters moved at all, so a net-negative
-        // pass that still gained a block shows it.
-        std::puts(formatReport(report).c_str());
-        const auto list = [](const char *pass, const ResourceDelta &delta, const std::string &blocks) {
+        // The blocks that appeared are listed for every pass whose heap counters moved at all, so
+        // a net-negative pass that still gained a block shows it; the regions likewise for every
+        // pass whose view counters moved (a region that grew in place is one vanished and one
+        // appeared, with the view count flat).
+        std::string text;
+        const auto list = [&](const char *pass, const ResourceDelta &delta, const std::string &blocks,
+                              const std::string &regions) {
             if (!blocks.empty() && (delta.heapBlocks != 0 || delta.heapBytes != 0)) {
-                std::printf("[leak]   blocks that appeared in the %s:\n%s", pass, blocks.c_str());
+                text += std::string{"[leak]   blocks that appeared in the "} + pass + ":\n" + blocks;
+            }
+            if (!regions.empty() && (delta.mappedViews != 0 || delta.mappedBytes != 0)) {
+                text += std::string{"[leak]   mapped regions that changed in the "} + pass +
+                        " (+ appeared, - vanished):\n" + regions;
             }
         };
         if (report.secondPassRan) {
-            list("first pass", report.firstPass, report.firstPassNewBlocks);
-            list("second pass", report.secondPass, report.secondPassNewBlocks);
+            list("first pass", report.firstPass, report.firstPassNewBlocks, report.firstPassRegionChanges);
+            list("second pass", report.secondPass, report.secondPassNewBlocks, report.secondPassRegionChanges);
         } else {
-            list("measured pass", report.delta, report.newBlocks);
+            list("measured pass", report.delta, report.newBlocks, report.regionChanges);
         }
+        return text;
+    }
+
+    void printReport(const LeakReport &report)
+    {
+        // stdout rather than doctest's MESSAGE: one plain line per scenario that ctest keeps in its
+        // log and a reader can grep, with none of doctest's file:line decoration.
+        std::puts(formatReport(report).c_str());
+        std::fputs(formatReportLists(report).c_str(), stdout);
         static_cast<void>(std::fflush(stdout));
     }
 
-    void requireNoLeak(const LeakReport &report, const std::int64_t privateBytesTolerance, const Allowance allowance)
+    void checkNoLeak(const LeakReport &report, const std::int64_t privateBytesTolerance, const Allowance allowance)
     {
-        printReport(report);
         const auto line = formatReport(report);
         CAPTURE(line);
         CHECK(report.delta.handles <= allowance.handles);
@@ -436,6 +543,43 @@ namespace pvdkit::test
         CHECK(report.delta.heapBlocks <= allowance.heapBlocks);
         CHECK(report.delta.heapBytes <= allowance.heapBytes);
         CHECK(report.delta.privateBytes <= privateBytesTolerance);
+    }
+
+    void requireNoLeak(const LeakReport &report, const std::int64_t privateBytesTolerance, const Allowance allowance)
+    {
+        printReport(report);
+        checkNoLeak(report, privateBytesTolerance, allowance);
+    }
+
+    bool heapGrew(const LeakReport &report, const Allowance allowance) noexcept
+    {
+        return !underAddressSanitizer() &&
+               (report.delta.heapBlocks > allowance.heapBlocks || report.delta.heapBytes > allowance.heapBytes);
+    }
+
+    std::string localiseHeapGrowth(const std::size_t count, const std::function<void(std::size_t)> &body,
+                                   const std::function<std::string(std::size_t)> &label)
+    {
+        std::string text;
+        for (std::size_t item = 0; item < count; ++item) {
+            const auto before = snapshotResources();
+            body(item);
+            const auto after = snapshotResources();
+            const auto delta = after - before;
+            if (delta.heapBlocks <= 0 && delta.heapBytes <= 0) {
+                continue;
+            }
+            // The label and the lines are built after the "after" snapshot: nothing of the
+            // diagnostic's own is inside a snapshot pair.
+            text += "[leak]   after " + label(item) + ": heap blocks " + withSign(delta.heapBlocks) + ", heap bytes " +
+                    withSign(delta.heapBytes) + ", handles " + withSign(delta.handles) + ", cs-debug " +
+                    withSign(delta.csDebugBlocks) + "\n" + describeNewBlocks(after, before);
+        }
+        if (text.empty()) {
+            text = "[leak]   no item retained a block: the growth did not recur one item at a time (a one-time "
+                   "allocation of the failed pass, not any item's)\n";
+        }
+        return text;
     }
 
     std::size_t leakIterations(const std::size_t defaultIterations)

@@ -38,8 +38,9 @@ either Program Files root (`Microsoft Visual Studio\*\*\VC\Tools\Llvm\x64\bin`, 
 order), then `clang-cl` on PATH; vcpkg is `VCPKG_ROOT` or the reference machine's install.
 `triplets/x64-windows-static-clang.cmake` and `triplets/x86-windows-static-clang.cmake` build
 every dependency with the same toolchain and the static CRT; `ports/` holds overlay ports (today
-`libavif`, patched for clang-cl's static-library merge; `libspng`, `openexr`, `openjph` and
-`imath`, each with one build change documented in its `portfile.cmake`). Each plugin's libraries are a vcpkg
+`libavif`, patched for clang-cl's static-library merge; `libspng`, `openjph` and `imath`, each
+with one build change, and `openexr` with two patches, every change documented in its
+`portfile.cmake`). Each plugin's libraries are a vcpkg
 manifest feature named after the plugin (`vcpkg.json`). Generating the EXR fixtures
 (`plugins/exr/scripts/make-synthetic-fixtures.ps1`) needs `uv` on PATH; building does not.
 

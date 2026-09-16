@@ -763,7 +763,22 @@ Decisions (Task 7, open point 1):
   +200, +800 KiB); image sections and private memory are not counted, so the view count is stable
   under ASan too, while the bytes are not (ASan's runtime grows its own `MEM_MAPPED` regions in
   place: views +0, +24 KiB measured), so under ASan the gate checks handles and the view count
-  only and prints the rest; and, as the coarse cross-check the task asked for, the commit charge
+  only and prints the rest. Every region is recorded (base, size, and the file behind it as
+  `GetMappedFileNameW` names it - `K32GetMappedFileNameW` of kernel32 under `PSAPI_VERSION 2`,
+  like `GetProcessMemoryInfo`; an import of the test executables only, no plugin DLL links the
+  accounting) in the same pre-reserved buffers as the blocks, and a change in the view counters
+  is reported as the set difference - the regions that appeared and the ones that vanished,
+  each with its name, a region that grew in place being one of each - because the CRT and the
+  OS map system sections lazily, once per process (measured on this machine: the first
+  `setlocale` maps the code page's `C_1252.NLS`, 68 KiB; the first `CompareStringEx` the
+  sorting table `SortDefault.nls`, 3296 KiB, whose section handle kernelbase keeps as well; the
+  first `system_category().message()` `KernelBase.dll.mui`, 1288 KiB), and a warm-up that did
+  not reach that first call leaves it to the measured pass: `views +0 (+2712 KiB)` on the CI
+  runner's newer UCRT (Task 26: Windows Server 2025, Visual Studio 2026, MSVC 14.51;
+  `makePlugin` created and destroyed 200 times after a warm-up of 1, heap and handles flat, the
+  second pass flat) was such a one-time change of the region set - with the count flat, a
+  region that grew in place or one replaced by a larger one - and the name tells it from a
+  `FileMapping` of the plugin's own; and, as the coarse cross-check the task asked for, the commit charge
   (`GetProcessMemoryInfo`, `PrivateUsage`; it wanders by up to +-9 MiB on its own and not with the
   iteration count, so it is gated at 32 MiB and printed next to the heap's committed size). One
   process-heap block is Windows' own and is recognised rather than charged: ntdll allocates a
@@ -787,16 +802,38 @@ Decisions (Task 7, open point 1):
   not leaks), snapshots, runs it N times, snapshots; a pass that shows growth is followed by a
   second measured pass from a fresh snapshot and both are printed, but the second one decides
   only when the first grew by no more than the known noise (`kRetryNoise`: 2 blocks, 1 KiB, no
-  handle, no view - the zeroed debug block ntdll keeps when a section is deleted right after its
+  handle - the zeroed debug block ntdll keeps when a section is deleted right after its
   first contention within a pass, which the recognition can no longer claim; a joined thread
   itself leaves nothing: 30 spawn/join cycles measured at 0 blocks), otherwise the first pass
   stands and the gate fails: a cache that fills after the warm-up (+1 block of 64 KiB, injected
-  in a scratch copy) is reported as a finding, not retried away. `requireNoLeak` demands no
+  in a scratch copy) is reported as a finding, not retried away. Mapped regions are not part of
+  that bound: any number may appear in the first pass and the second still decides, because a
+  region that appeared in the first pass and does not appear again in the second was mapped
+  once - the lazily mapped system section above, not a leak - while a leaked view recurs and
+  the second pass charges it again (self-tested both ways: one view mapped once after the
+  warm-up passes with the region named in the first pass's list, a view per iteration is
+  charged by the second pass; a region committed further in place - `SEC_RESERVE` plus
+  `VirtualAlloc` - is the same one-time case with the view count flat; the first
+  `CompareStringEx` forced inside the measured pass lists `SortDefault.nls` by name, and the
+  handle kernelbase keeps with it is what the first pass then decides on - a kept OS handle
+  cannot be told from a leaked one, and a plugin whose warm-up reaches the call never sees
+  it). `requireNoLeak` demands no
   growth in blocks, bytes, handles, views and view bytes (a negative delta is a release of
   something warm-up allocated, never a leak) and prints one `[leak] <scenario>: heap blocks +n,
   heap bytes +n, handles +n, views +n (+n KiB), cs-debug +n, private +n KiB (...) (warm-up w x
-  ms, measured N x ms)` line, with both passes appended when a second one ran. N = 200
-  host-level operations per scenario
+  ms, measured N x ms)` line, with both passes appended when a second one ran, then the lists:
+  the blocks that appeared in every pass whose heap counters moved, the regions that appeared
+  (`+`) and vanished (`-`) with their file names in every pass whose view counters moved
+  (`printReport` + `checkNoLeak`, for a scenario that prints something of its own in between).
+  The hostile corpus does: when the aggregate fails on the heap counters (`heapGrew`), it runs
+  the same files once more, one at a time with a snapshot pair around each
+  (`localiseHeapGrowth`), and prints the files after which busy blocks stayed - name, origin
+  and mutation, with the retained blocks' sizes and first bytes - so a CI log names the
+  culprit, or says that no file retained anything, which makes the growth a one-time
+  allocation of the failed pass and not any file's (the corpus is generated once from its seed
+  and materialised before the warm-up, so every pass, the re-run included, opens the identical
+  files in the identical order). The re-run costs one pass plus 2 x 212 snapshots and runs
+  only on a failure. N = 200 host-level operations per scenario
   (`PVDKIT_LEAK_ITERATIONS` overrides). Scenarios: disk and memory
   round trips with `pvdInit`/`pvdExit` inside the loop; close without free; decode aborted at
   callback step 0, 1 and 2; every rejection path (each rejected fixture in both modes, empty and

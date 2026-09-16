@@ -1,7 +1,7 @@
 {
   "name": "openexr",
   "version": "3.4.13",
-  "port-version": 1,
+  "port-version": 2,
   "description": "OpenEXR is a high dynamic-range (HDR) image file format developed by Industrial Light & Magic for use in computer imaging applications",
   "homepage": "https://www.openexr.com/",
   "license": "BSD-3-Clause",
