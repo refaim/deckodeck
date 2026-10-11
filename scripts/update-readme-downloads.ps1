@@ -46,8 +46,8 @@ $block = $text.Substring($blockStart, $endIndex - $blockStart)
 $row = "| $Name.pvd | $Version | [$Tag]($RepositoryUrl/releases/tag/$Tag) |"
 # The whole row up to (not including) its line ending, LF or CRLF alike (in .NET, `$` under
 # (?m) sits before "\n" only, so a trailing "\r" is excluded explicitly instead); the version
-# cell is captured to compare releases.
-$rowPattern = "(?m)^\| $([regex]::Escape($Name))\.pvd \| (?<version>[0-9]+\.[0-9]+\.[0-9]+) \|[^\r\n]*"
+# cell is captured to compare releases; cells after the release link are kept verbatim.
+$rowPattern = "(?m)^\| $([regex]::Escape($Name))\.pvd \| (?<version>[0-9]+\.[0-9]+\.[0-9]+) \|[^|\r\n]*\|(?<details>[^\r\n]*)"
 $existing = [regex]::Match($block, $rowPattern)
 if ($existing.Success) {
   $listed = [version]$existing.Groups["version"].Value
@@ -56,6 +56,7 @@ if ($existing.Success) {
     Write-Output "unchanged"
     return
   }
+  $row += $existing.Groups["details"].Value
   # A MatchEvaluator inserts the row literally ($ and \ in a replacement string would be special).
   $updatedBlock = [regex]::Replace($block, $rowPattern, [Text.RegularExpressions.MatchEvaluator]{ $row })
 } else {
