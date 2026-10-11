@@ -1,24 +1,19 @@
 # deckodeck
 
 Decoder plugins for PictureView 3, the picture viewer plugin for Far Manager 3 (by Pavel
-Skakov). Today: `AVIF.pvd` — AVIF photos from phones and the web, animation as pages, 10-bit,
-12-bit and HDR; `EXR.pvd` — OpenEXR renders and HDR pictures shown as a colour-managed viewer
-would, tone-mapped to sRGB at 16 bits; and `RPGMVP.pvd` — RPG Maker MV/MZ encrypted PNG
-(`.rpgmvp`/`.png_`), no key needed. Built for x64 and x86 Far; each plugin is one self-contained
-`.pvd` — no runtime, no codecs, only Windows.
+Skakov). Built for x64 and x86 Far; each plugin is one self-contained `.pvd` — no runtime,
+no codecs, only Windows.
 
 ## Download
 
 Each release has a zip per architecture, x64 for 64-bit Far and x86 for 32-bit.
 
-<!-- The rows are seeded for the 1.1.0 releases; each link resolves once its tag (avif/v1.1.0,
-     rpgmvp/v1.1.0) has been pushed and the release workflow has published it. -->
 <!-- downloads:begin -->
-| Plugin | Latest version | Release |
-| --- | --- | --- |
-| AVIF.pvd | 1.2.0 | [avif/v1.2.0](https://github.com/refaim/deckodeck/releases/tag/avif/v1.2.0) |
-| RPGMVP.pvd | 1.2.0 | [rpgmvp/v1.2.0](https://github.com/refaim/deckodeck/releases/tag/rpgmvp/v1.2.0) |
-| EXR.pvd | 1.0.0 | [exr/v1.0.0](https://github.com/refaim/deckodeck/releases/tag/exr/v1.0.0) |
+| Plugin | Latest version | Release | Description |
+| --- | --- | --- | --- |
+| AVIF.pvd | 1.2.0 | [avif/v1.2.0](https://github.com/refaim/deckodeck/releases/tag/avif/v1.2.0) | Photos, HDR and animation |
+| EXR.pvd | 1.0.0 | [exr/v1.0.0](https://github.com/refaim/deckodeck/releases/tag/exr/v1.0.0) | HDR renders, layers and views |
+| RPGMVP.pvd | 1.2.0 | [rpgmvp/v1.2.0](https://github.com/refaim/deckodeck/releases/tag/rpgmvp/v1.2.0) | Encrypted RPG Maker MV/MZ PNG |
 <!-- downloads:end -->
 
 ## Install
