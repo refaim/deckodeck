@@ -56,47 +56,63 @@ namespace pvdkit::pvd
     BOOL Shim::fileOpen(const char *fileName, const INT64 fileSize, const BYTE *head, const UINT32 headSize,
                         pvdInfoImage *output, void **context) noexcept
     {
-        return guarded(
-            [&] {
-                if (fileName == nullptr) {
-                    return BOOL{0};
-                }
-                if (output == nullptr) {
-                    return BOOL{0};
-                }
-                if (context == nullptr) {
-                    return BOOL{0};
-                }
-                *context = nullptr;
-                if (head == nullptr && headSize != 0) {
-                    return BOOL{0};
-                }
-                if (fileSize < 0) {
-                    return BOOL{0};
-                }
+        return guarded([&] { return openFile(fileName, nullptr, fileSize, head, headSize, output, context, false); },
+                       BOOL{0});
+    }
 
-                const auto bytes = std::span<const std::byte>{reinterpret_cast<const std::byte *>(head),
-                                                              static_cast<std::size_t>(headSize)};
-                auto opened =
-                    plugin_.open(OpenRequest{std::string_view{fileName}, static_cast<std::uint64_t>(fileSize), bytes});
-                if (!opened) {
-                    return BOOL{0};
-                }
-                auto session = std::move(*opened);
-                if (!session) {
-                    return BOOL{0};
-                }
+    BOOL Shim::fileOpenW(const wchar_t *fileName, const INT64 fileSize, const BYTE *head, const UINT32 headSize,
+                         pvdInfoImage *output, void **context) noexcept
+    {
+        return guarded([&] { return openFile(nullptr, fileName, fileSize, head, headSize, output, context, true); },
+                       BOOL{0});
+    }
 
-                const auto &info = session->imageInfo();
-                output->nPages = info.pageCount;
-                output->Flags = info.animated ? UINT32{PVD_IIF_ANIMATED} : UINT32{0};
-                output->pFormatName = info.formatName.c_str();
-                output->pCompression = info.compression.c_str();
-                output->pComments = info.comments.c_str();
-                *context = toHost(std::move(session));
-                return BOOL{1};
-            },
-            BOOL{0});
+    BOOL Shim::openFile(const char *utf8FileName, const wchar_t *wideFileName, const INT64 fileSize, const BYTE *head,
+                        const UINT32 headSize, pvdInfoImage *output, void **context, const bool nativeRgb)
+    {
+        if (utf8FileName == nullptr && wideFileName == nullptr) {
+            return BOOL{0};
+        }
+        if (output == nullptr) {
+            return BOOL{0};
+        }
+        if (context == nullptr) {
+            return BOOL{0};
+        }
+        *context = nullptr;
+        if (head == nullptr && headSize != 0) {
+            return BOOL{0};
+        }
+        if (fileSize < 0) {
+            return BOOL{0};
+        }
+
+        const auto bytes =
+            std::span<const std::byte>{reinterpret_cast<const std::byte *>(head), static_cast<std::size_t>(headSize)};
+        OpenRequest request{{}, static_cast<std::uint64_t>(fileSize), bytes};
+        request.nativeRgb = nativeRgb;
+        if (wideFileName != nullptr) {
+            request.wideFileName = std::wstring_view{wideFileName};
+        } else {
+            request.utf8FileName = std::string_view{utf8FileName};
+        }
+        auto opened = plugin_.open(request);
+        if (!opened) {
+            return BOOL{0};
+        }
+        auto session = std::move(*opened);
+        if (!session) {
+            return BOOL{0};
+        }
+
+        const auto &info = session->imageInfo();
+        output->nPages = info.pageCount;
+        output->Flags = info.animated ? UINT32{PVD_IIF_ANIMATED} : UINT32{0};
+        output->pFormatName = info.formatName.c_str();
+        output->pCompression = info.compression.c_str();
+        output->pComments = info.comments.c_str();
+        *context = toHost(std::move(session));
+        return BOOL{1};
     }
 
     BOOL Shim::pageInfo(void *context, const UINT32 page, pvdInfoPage *output) noexcept

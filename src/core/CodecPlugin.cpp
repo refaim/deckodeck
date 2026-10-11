@@ -10,9 +10,9 @@ namespace pvdkit::core
 {
 
     CodecPlugin::CodecPlugin(IFileSource &fileSource, IDecoderFactory &decoderFactory, const IImageDescriber &describer,
-                             const colour::SrgbOutputTables &outputTables, const DecoderOptions &options,
+                             const colour::ColourTables &tables, const DecoderOptions &options,
                              pvd::PluginInfo pluginInfo)
-        : fileSource_(fileSource), decoderFactory_(decoderFactory), describer_(describer), outputTables_(outputTables),
+        : fileSource_(fileSource), decoderFactory_(decoderFactory), describer_(describer), tables_(tables),
           options_(options), pluginInfo_(std::move(pluginInfo))
     {
     }
@@ -31,7 +31,8 @@ namespace pvdkit::core
         std::unique_ptr<IFileData> fileData;
         std::span<const std::byte> bytes = request.head;
         if (request.fileSize != 0) {
-            auto opened = fileSource_.open(request.utf8FileName);
+            auto opened =
+                request.wideFileName ? fileSource_.open(*request.wideFileName) : fileSource_.open(request.utf8FileName);
             if (!opened) {
                 return std::unexpected(opened.error());
             }
@@ -39,7 +40,9 @@ namespace pvdkit::core
             bytes = fileData->bytes();
         }
 
-        auto decoder = decoderFactory_.create(bytes, options_);
+        auto sessionOptions = options_;
+        sessionOptions.nativeRgbOutput = options_.nativeRgbOutput && request.nativeRgb;
+        auto decoder = decoderFactory_.create(bytes, sessionOptions);
         if (!decoder) {
             return std::unexpected(decoder.error());
         }
@@ -49,7 +52,7 @@ namespace pvdkit::core
         pvd::ImageInfo imageInfo{meta.frameCount, meta.animated, std::move(description.formatName),
                                  std::move(description.compression), std::move(description.comments)};
         std::unique_ptr<pvd::IFileSession> session = std::make_unique<FileSession>(
-            std::move(fileData), std::move(*decoder), std::move(imageInfo), options_, outputTables_);
+            std::move(fileData), std::move(*decoder), std::move(imageInfo), sessionOptions, tables_);
         return session;
     }
 

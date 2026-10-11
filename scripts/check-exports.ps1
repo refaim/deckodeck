@@ -4,12 +4,12 @@ param(
   [string]$Path
 )
 
-# The export table of every plugin DLL must be exactly the eight PVD entry points under their bare
+# The export table of every plugin DLL must be exactly the nine PVD entry points under their bare
 # names: no leading underscore and no @N (the __stdcall decoration x86 gives the symbols), and
 # nothing else. 0PictureView.dll resolves them with GetProcAddress by these names.
 $ErrorActionPreference = "Stop"
 
-$expected = @("pvdExit", "pvdFileClose", "pvdFileOpen", "pvdInit", "pvdPageDecode", "pvdPageFree",
+$expected = @("pvdExit", "pvdFileClose", "pvdFileOpen", "pvdFileOpenW", "pvdInit", "pvdPageDecode", "pvdPageFree",
               "pvdPageInfo", "pvdPluginInfo")
 
 $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
@@ -38,4 +38,4 @@ if (($names -join ",") -cne ($expected -join ",")) {
   exit 1
 }
 
-Write-Output "Export policy passed: the eight PVD entry points are exported under their bare names."
+Write-Output "Export policy passed: the nine PVD entry points are exported under their bare names."

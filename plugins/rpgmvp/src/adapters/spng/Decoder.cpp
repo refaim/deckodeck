@@ -227,20 +227,25 @@ namespace pvdkit::rpgmvp
     core::Result<void> checkDestination(const core::ImageMeta &meta, const pvd::PixelFormat format,
                                         const std::size_t destinationSize, const std::uint32_t pitchBytes)
     {
-        if (format == pvd::PixelFormat::Bgra64) {
+        if (format == pvd::PixelFormat::Rgb48) {
+            if (meta.hasAlpha) {
+                return std::unexpected(
+                    core::Error{core::ErrorCode::Internal, "caller pixel format contradicts metadata"});
+            }
+        } else if (format == pvd::PixelFormat::Bgra64 || format == pvd::PixelFormat::Rgba64) {
             if (meta.depth <= 8) {
                 return std::unexpected(core::Error{core::ErrorCode::UnsupportedFeature,
-                                                   "BGRA64 output requires a source deeper than 8 bits per sample"});
+                                                   "16-bit output requires a source deeper than 8 bits per sample"});
             }
         } else {
-            const pvd::PixelFormat expected = meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24;
-            if (format != expected) {
+            const auto legacy = meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24;
+            const auto native = meta.hasAlpha ? pvd::PixelFormat::Rgba32 : pvd::PixelFormat::Rgb24;
+            if (format != legacy && format != native) {
                 return std::unexpected(
                     core::Error{core::ErrorCode::Internal, "caller pixel format contradicts metadata"});
             }
         }
-        const std::uint32_t bytesPerPixel =
-            format == pvd::PixelFormat::Bgra64 ? 8U : (format == pvd::PixelFormat::Bgra32 ? 4U : 3U);
+        const auto bytesPerPixel = pvd::pixelLayout(format).bytesPerPixel;
         const std::uint64_t expectedPitch = static_cast<std::uint64_t>(meta.width) * bytesPerPixel;
         if (pitchBytes != expectedPitch) {
             return std::unexpected(
@@ -280,24 +285,52 @@ namespace pvdkit::rpgmvp
         }
         return checkDestination(meta_, format, destination.size(), pitchBytes).and_then([&] {
             return makeContext(file_, options_).and_then([&](const auto &bundle) {
-                const int spngFormat = format == pvd::PixelFormat::Bgra64
-                                           ? SPNG_FMT_RGBA16
-                                           : (meta_.hasAlpha ? SPNG_FMT_RGBA8 : SPNG_FMT_RGB8);
+                const auto layout = pvd::pixelLayout(format);
+                const int spngFormat =
+                    format == pvd::PixelFormat::Rgb48 && meta_.depth > 8
+                        ? SPNG_FMT_PNG
+                        : (layout.bytesPerPixel == 8U ? SPNG_FMT_RGBA16
+                                                      : (meta_.hasAlpha ? SPNG_FMT_RGBA8 : SPNG_FMT_RGB8));
                 std::size_t decodedSize = 0;
                 const int sizeResult = spng_decoded_image_size(bundle->context.get(), spngFormat, &decodedSize);
                 return detail::decodeResult(sizeResult).and_then([&] {
                     const int result = spng_decode_image(bundle->context.get(), destination.data(), decodedSize,
                                                          spngFormat, SPNG_DECODE_TRNS);
                     return detail::decodeResult(result).transform([&] {
-                        // SPNG_FMT_RGBA16 returns host-endian samples (spng.h explicitly reserves
-                        // big-endian for SPNG_FMT_RAW). Windows hosts are little-endian, so swapping
-                        // the two-byte R and B units preserves each sample's byte order.
-                        const std::size_t channelBytes = format == pvd::PixelFormat::Bgra64 ? 2U : 1U;
-                        const std::size_t bytesPerPixel =
-                            format == pvd::PixelFormat::Bgra64 ? 8U : (meta_.hasAlpha ? 4U : 3U);
-                        for (std::size_t offset = 0; offset < decodedSize; offset += bytesPerPixel) {
-                            for (std::size_t byte = 0; byte < channelBytes; ++byte) {
-                                std::swap(destination[offset + byte], destination[offset + 2U * channelBytes + byte]);
+                        if (format == pvd::PixelFormat::Rgb48) {
+                            if (meta_.depth <= 8) {
+                                // Decode RGB8 into the beginning of the final 6N buffer, then
+                                // expand backwards. Repeating each byte scales 0..255 to 0..65535.
+                                for (std::size_t sample = decodedSize; sample != 0; --sample) {
+                                    const auto value = destination[sample - 1U];
+                                    const auto offset = (sample - 1U) * 2U;
+                                    destination[offset] = value;
+                                    destination[offset + 1U] = value;
+                                }
+                            } else if (meta_.chroma == core::ChromaFormat::Yuv400) {
+                                // SPNG_FMT_PNG keeps gray16 as one host-endian sample. Load both
+                                // bytes before overwriting and replicate backwards in the 6N page.
+                                for (std::size_t pixel = decodedSize / 2U; pixel != 0; --pixel) {
+                                    const auto source = (pixel - 1U) * 2U;
+                                    const auto low = destination[source];
+                                    const auto high = destination[source + 1U];
+                                    const auto target = (pixel - 1U) * 6U;
+                                    for (std::size_t channel = 0; channel < 3U; ++channel) {
+                                        destination[target + channel * 2U] = low;
+                                        destination[target + channel * 2U + 1U] = high;
+                                    }
+                                }
+                            }
+                        } else if (!layout.rgb) {
+                            // libspng already supplies RGB/RGBA in host-endian sample order. Only
+                            // legacy BGR/BGRA callers need the R/B units exchanged; keeping each
+                            // 16-bit unit intact preserves Windows' little-endian byte order.
+                            const std::size_t channelBytes = layout.bytesPerPixel == 8U ? 2U : 1U;
+                            for (std::size_t offset = 0; offset < decodedSize; offset += layout.bytesPerPixel) {
+                                for (std::size_t byte = 0; byte < channelBytes; ++byte) {
+                                    std::swap(destination[offset + byte],
+                                              destination[offset + 2U * channelBytes + byte]);
+                                }
                             }
                         }
                     });

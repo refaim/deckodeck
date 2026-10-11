@@ -10,9 +10,11 @@ What it does:
 
 - Still images and image sequences (`avis`): every frame is a page with its display time.
 - 8, 10 and 12-bit sources, 4:4:4 / 4:2:2 / 4:2:0 / 4:0:0, grid images, progressive files.
-- Identity 8-bit SDR sources are handed over as BGR24 when opaque or straight BGRA32 with alpha.
-  Any HDR or wide-gamut source needing sRGB presentation, at any source depth, and every source
-  deeper than 8 bits is handed over as BGRA64.
+- Current PictureView receives identity 8-bit SDR as RGB24 when opaque or straight RGBA32 with
+  alpha. Any HDR or wide-gamut source needing sRGB presentation, at any source depth, and every
+  source deeper than 8 bits uses RGB48 when opaque or RGBA64 with alpha. Opaque 16-bit output
+  needs 6 bytes per pixel instead of 8. Older hosts using the narrow opening entry point retain
+  BGR24/BGRA32/BGRA64 compatibility. RGB format codes are 25/33/49/65, with 3/4/6/8 bytes per pixel.
 - HDR (PQ/HLG) and wide-gamut (Rec.2020/P3) images are converted to display-referred sRGB; HDR
   uses BT.2390 tone mapping.
 - `clap`, `irot` and `imir` transformative properties, applied in that order.
@@ -53,7 +55,7 @@ with the plugin, static distribution documents, dependency licenses and package 
   animations, decode into a caller buffer, buffer too small, truncated file, non-AVIF, strict vs
   lenient), the static link of libavif with the dav1d decoder, and the composed production plugin
   (identity, disk vs memory mode, lenient decoding, rejections).
-- `avif_e2e_tests` - loads the built `AVIF.pvd` with `LoadLibraryW`, resolves the eight exports
+- `avif_e2e_tests` - loads the built `AVIF.pvd` with `LoadLibraryW`, resolves the nine exports
   and drives them like the host, and reads the VERSIONINFO resource back: every fixture from disk
   and from memory, exact pixel checks on the synthetic fixtures, animation timing, rotation,
   callback abort, rejection of non-AVIF input, behaviour after `pvdExit`, and four threads
@@ -71,7 +73,9 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 
 ## Known limitations
 
-- ICC profiles are not applied: PictureView ignores them and deckodeck does not have a CMS yet.
+- ICC profiles are not applied: the examined PictureView 2021.4.19 and 2026.09.30 x64 builds
+  ignore PVD ICC transport, and deckodeck does not have a CMS yet. See the
+  [2026.09.30 host analysis](../../docs/host/pictureview-2026-09-30-abi.md).
 - EXIF orientation is honoured when the file has no `irot`/`imir`; those AVIF transforms take
   precedence by spec.
 - Gain maps, layered (`a1lx`) selection and progressive preview rendering are not supported.
@@ -85,6 +89,9 @@ commit and SHA-256 list in `scripts/libavif-fixtures.sha256`).
 
 ## Changes
 
-- 1.2.0 — HDR (PQ) images open several times faster; tone mapping is now applied before the conversion of the primaries, so HDR colours may differ slightly from 1.1.0.
+- 1.2.0 — unpublished candidate: direct UTF-16 paths and native RGB24/RGBA32/RGB48/RGBA64
+  through the wide entry point, with legacy BGR/BGRA output preserved. Identical colour tables
+  are reused with bounded storage. HDR (PQ) images open several times faster; tone mapping is
+  applied before the conversion of the primaries, so HDR colours may differ slightly from 1.1.0.
 - 1.1.0 — transparency is now displayed, sources deeper than 8 bits are delivered as 16-bit BGRA, HDR PQ/HLG uses BT.2390 tone mapping, Rec.2020/P3 is converted to sRGB, EXIF orientation is handled by PictureView when irot/imir is absent, and HDR images decode several times faster.
 - 1.0.0 — initial release.

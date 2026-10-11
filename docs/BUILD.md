@@ -67,7 +67,7 @@ ctest --preset release-x86      # the same tests, run as 32-bit processes, plus 
 ```
 
 The DLLs land in `build/release-x86$env:PVDKIT_BUILD_SUFFIX/plugins/<id>/<NAME>.pvd`
-(`IMAGE_FILE_MACHINE_I386`, imports `KERNEL32.dll` only, exports the eight bare `pvd*` names).
+(`IMAGE_FILE_MACHINE_I386`, imports `KERNEL32.dll` only, exports the nine bare `pvd*` names).
 `debug-x86` and `coverage-x86` mirror `debug` and `coverage`. The x86 presets use the triplet
 `triplets/x86-windows-static-clang.cmake`: the same x64-hosted clang-cl cross-compiles for
 `i686-pc-windows-msvc`, and the triplet loads the x86 Visual Studio library environment for the
@@ -115,7 +115,7 @@ Checks that are part of the definition of done:
 ./scripts/coverage.ps1                                  # 100 % lines and branches on src/** and plugins/*/src/**
 ./scripts/coverage.ps1 -Preset coverage-x86             # the same gate for the 32-bit build
 ./scripts/check-imports.ps1 -Path build/release/plugins/avif/AVIF.pvd   # imports == KERNEL32.dll only
-./scripts/check-exports.ps1 -Path build/release/plugins/avif/AVIF.pvd   # exports == the eight bare pvd* names
+./scripts/check-exports.ps1 -Path build/release/plugins/avif/AVIF.pvd   # exports == the nine bare pvd* names
 ./scripts/lint.ps1 -BuildDir build/release -ReleaseDir build/release          # static analysis, zero findings (x64)
 ./scripts/lint.ps1 -BuildDir build/release-x86 -ReleaseDir build/release-x86  # the same for the 32-bit build
 cmake --preset asan; cmake --build --preset asan; ctest --preset asan  # AddressSanitizer over the whole suite (x64)
@@ -236,11 +236,11 @@ The workflows cannot be run locally; their commands are the scripts above, which
 
 ```
 src/pvd/        PVD boundary: value types, IPlugin/IFileSession, Shim (marshalling + firewall),
-                Exports.cpp (the 8 exports, compiled once per plugin), Plugin.def, Plugin.rc,
+                Exports.cpp (the 9 exports, compiled once per plugin), Plugin.def, Plugin.rc,
                 PluginConstants.hpp.in (generated per plugin), PluginIdentity.hpp, PvdApi.hpp
 src/core/       decisions: CodecPlugin, FileSession, Transform, PixelBuffer, Narrow, and the
                 IDecoder / IFileSource / IImageDescriber contracts
-src/adapters/   win/ (file mapping, UTF-8 paths)
+src/adapters/   win/ (file mapping, UTF-8 and UTF-16 paths)
 plugins/<id>/   one plugin: src/core, src/adapters/<lib>, src/DefaultPlugin.cpp (composition),
                 tests/{core,adapters,e2e}, fixtures/, scripts/,
                 package/{readme_en.txt,readme_ru.txt,ChangeLog}, README.md, DESIGN.md
@@ -267,8 +267,10 @@ scripts/        coverage, import/export checks, lint, build-all, pack, package, 
 - `guard_tests` - scans `src/` and every `plugins/*/src/` for forbidden tokens, layering
   violations and cross-root includes.
 - `<id>_core_tests`, `<id>_adapter_tests`, `<id>_e2e_tests` - each plugin's own tests; the e2e
-  executable loads the built DLL with `LoadLibraryW`, drives the eight exports like the host on
-  the plugin's fixtures and reads the VERSIONINFO resource back.
+  executable loads the built DLL with `LoadLibraryW`, drives the nine exports like the host on
+  the plugin's fixtures and reads the VERSIONINFO resource back. Shared UTF-16 tests compare
+  `pvdFileOpenW` with the UTF-8 entry point in disk and memory mode, including Unicode filenames
+  and handle cleanup after closing a file with a decoded page still outstanding.
 - `<id>_check_imports` and `<id>_check_exports` - the import-table and export-table policies per
   plugin. Registered for the Release configuration only (`add_test(... CONFIGURATIONS Release)`):
   the `release` test presets pass `-C Release`, and on the multi-config

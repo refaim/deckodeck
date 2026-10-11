@@ -23,10 +23,12 @@ clang-cl 20 and newer, explained next to its `PATCHES` entry):
 - `ports/openjph`: `ojph_block_decoder_ssse3.cpp` uses SSSE3 intrinsics without a compile flag under
   MSVC (cl.exe accepts them regardless; there is no `/arch:SSSE3`), which clang-cl refuses. The patch
   adds `/clang:-mssse3` for that file when the compiler is clang; the kernel is CPUID-dispatched.
-- `ports/openexr`: the same for the SSE4.1 byte-reconstruction kernel of the ZIP decoder, selected by
-  `_MSC_VER` in `internal_zip.c` (Core) and `ImfZip.cpp` (C++); the patch gives the function a
-  `target("ssse3,sse4.1")` attribute under clang. Every x86-64 CPU since 2008 has SSE4.1, which is
-  what the unpatched MSVC build assumes as well.
+- `ports/openexr`: Core ZIP reconstruction in `internal_zip.c` has no run-time CPU dispatch.
+  Its SSE4.1 kernel is enabled only for an explicit `__SSE4_1__` compiler target; baseline
+  x86/x64 builds use the library's existing scalar reconstruction and SSE2 interleave. The
+  separately CPUID-dispatched C++ kernel in `ImfZip.cpp` gets a `target("ssse3,sse4.1")`
+  attribute under clang. The `exr_zip_baseline` CTest checks the Core ZIP object's instructions
+  to prevent an accidental SSSE3/SSE4 requirement. No compression algorithm is rewritten.
 - `ports/imath`: the stock port with `IMATH_HALF_USE_LOOKUP_TABLE=OFF`, so that no consumer of
   `half.h` references the half-to-float table `half.cpp.obj` defines (that object drags the CRT's
   `thread_safe_statics.obj` into a DLL, rule 13; the paragraph on the C++ library below). The
@@ -58,14 +60,17 @@ underneath the C++ classes: a read context over the file bytes (`exr_start_read`
 - Exceptions from OpenJPH (HTJ2K) never reach us: the Core wraps every OpenJPH call in its own
   try/catch (`internal_ht.cpp`) and answers `EXR_ERR_CORRUPT_CHUNK`.
 
-One piece of the C++ library is linked: four `Imf::RgbaYca` free functions
+Two sets of C++ library helpers are linked: the `ImfMultiView` channel/view naming helpers
+and four `Imf::RgbaYca` free functions
 (`reconstructChromaHoriz`, `reconstructChromaVert`, `YCAtoRGBA`, `fixSaturation`), arithmetic over
 half `Rgba` rows that throws nothing, for the luminance/chroma files (§5). `RgbaYca::computeYw` is
 *not* used: it throws `std::invalid_argument` on a white with y = 0 and on collinear primaries
 (`Imf::RGBtoXYZ`), which a hostile file can carry; the weights it would compute are spelled out in
-`LuminanceChroma.cpp` over a set the plugin validated first (§4). The linker pulls
-`ImfRgbaYca.obj` out of `OpenEXR-3_4.lib` and nothing else of it - no `ImfChromaticities.obj`,
-no Iex, no IlmThread - and nothing of Imath: `half.cpp.obj`, which defines the half-to-float
+`LuminanceChroma.cpp` over a set the plugin validated first (§4). The naming helpers
+interpret OpenEXR view tokens for the page catalogue; they do not open files or decode
+pixels. Both sets are linked from `OpenEXR-3_4.lib`; the release import/export gates verify
+that the resulting DLL still needs only `KERNEL32.dll` and exposes the nine PVD names.
+Imath's `half.cpp.obj`, which defines the half-to-float
 lookup table and, through `<iostream>`, three `std::locale::id` initialisers whose guards pull the
 CRT's `thread_safe_statics.obj` (the object that imports the synch API set on MSVC ≥ 14.50), is
 never referenced because the `ports/imath` overlay builds Imath and OpenEXR with
@@ -73,7 +78,7 @@ never referenced because the `ports/imath` overlay builds Imath and OpenEXR with
 every half-to-float conversion is the bit-exact integer arithmetic in `half.h`. Proof: the
 release DLLs re-linked with `/MAP` list neither `half.cpp.obj` nor `thread_safe_statics.obj` on
 x64 or x86 (the task report has the maps); the release import table is `KERNEL32.dll` and the
-export table the eight names (`exr_check_imports`, `exr_check_exports`).
+export table the nine names, including `pvdFileOpenW` (`exr_check_imports`, `exr_check_exports`).
 
 **Threading: option (b), single-threaded decode in the library.** The Core decodes on the calling
 thread; there is no pool to size, and `DecoderOptions::maxThreads` only budgets the shared
@@ -98,11 +103,15 @@ file; a real allocation failure surfaces as `std::bad_alloc` from our own contai
 ## 2. Composition root (`src/DefaultPlugin.cpp`)
 
 `pvd::makePlugin()` owns, in declaration order, `win::FileSource`, `exr::DecoderFactory`,
-`exr::Describer`, `core::colour::SrgbOutputTables` (every EXR session presents colour, so every
-session borrows them; built once in `pvdInit`) and `core::CodecPlugin`. Options:
+`exr::Describer`, `core::colour::ColourTables` (the plugin-owned output quantizer and bounded lazy transfer/gain
+caches that every EXR page borrows; see ARCHITECTURE section 7) and `core::CodecPlugin`. Options:
 `maxThreads = max(1, hardware_concurrency())`, `strict = false`, `maxPixels = 16384 × 16384`,
-`maxDimension = 32768`, `deepOutput = true` (moot: every EXR page is BGRA64 anyway).
-`PluginInfo{10, "EXR", "1.0.0", "OpenEXR decoder: OpenEXR 3.4.13, Imath 3.2.2, libdeflate 1.25,
+`maxDimension = 32768`, `deepOutput = true`, `nativeRgbOutput = true`. Every EXR page presents
+colour at 16 bits per channel: native sessions use RGB48 without alpha or RGBA64 with alpha;
+legacy sessions use BGRA64. The shared `CodecPlugin` gates the native option on the open request,
+so `pvdFileOpenW` selects native RGB and `pvdFileOpen` preserves the legacy layout. The
+[host ABI analysis](../../docs/host/pictureview-2026-09-30-abi.md) records the compatibility policy.
+`PluginInfo{10, "EXR", "<version>", "OpenEXR decoder: OpenEXR 3.4.13, Imath 3.2.2, libdeflate 1.25,
 OpenJPH 0.30.1; static build"}` - the versions at run time from `exr_get_library_version` and the
 three version headers; the VERSIONINFO comments say the same from the ports vcpkg installed, and
 the e2e version test pins the two equal.
@@ -113,11 +122,15 @@ the e2e version test pins the two equal.
 the fifth byte, and a head of at least 16 bytes (no valid file is shorter; PictureView hands over
 at least 16 KiB or the whole file).
 
-**Part and view** (`core/Parts`): every part's storage kind, channel list, `view` attribute and the
-single-part `multiView` attribute are read; deep parts (`deepscanline`, `deeptile`) are skipped;
-among the parts whose channels yield a selection, the one with `view == "left"` wins, otherwise
-the first. Nothing displayable is `UnsupportedFeature` with the reason ("only deep parts, which
-this plugin does not show" / "no part carries colour channels").
+**Parts, views and layers as pages.** A file exposes a stable catalogue of usable colour
+selections, each confined to one part, view and layer. Deep parts are skipped. The existing
+`choosePart`/`selectChannels` preferred selection stays page zero; remaining selections follow a
+stable order. `multiView` view tokens are interpreted with OpenEXR's channel naming helpers,
+including nested `layer.view.R` names and the implicit first view of bare channels. View tokens
+are not additional layers. Each selection has its own alpha; channels never cross selections.
+The pages are independent still images (`animated = false`, zero frame durations), and may have
+different sizes, source precision, alpha, primaries and peaks. No displayable selection remains
+`UnsupportedFeature`. Metadata is read without decoding all secondary pictures.
 
 **Channels** (`core/Channels`), in this order, the first that fits:
 
@@ -159,7 +172,8 @@ first row.
 ## 4. Colour
 
 The scene-linear values go through the *shared* presentation, not a private one. The decoder turns
-every pixel into **16-bit PQ codes of absolute nits** (BGRA64, `PqCodeTables`, below) and reports
+every pixel into **16-bit PQ codes of absolute nits** (`PqCodeTables`, below), in the session's
+RGB48, RGBA64 or legacy BGRA64 layout, and reports
 `cicp = {primaries code, 16 (PQ), 0, full range}` with the tone-mapping peak in
 `masteringPeakNits`; `core::colour::Presentation` then does PQ → linear → BT.2390 → primaries →
 exact sRGB → 16-bit for the coded sets and PQ → linear → primaries → BT.2390 → exact sRGB →
@@ -170,8 +184,8 @@ zscale-validated maths. In detail:
    `Primaries::isUsable`: every coordinate finite, the white's y positive, the primaries not
    collinear, the derived matrices finite. A set that fails - the two the library's own
    `RGBtoXYZ` throws on (a white with y = 0, collinear primaries) and anything non-finite - is
-   never handed to any matrix: the picture is shown as Rec.709 and the info line says so with the
-   attribute's values (`linear Rec.709 assumed, unusable chromaticities (R ... W ...)`); the
+   never handed to any matrix: the picture is shown as Rec.709 and a single-page title says
+   `linear Rec.709 assumed`; the
    fixtures `rgb_whitey0`, `yc_whitey0`, `yc_collinear` pin it, and the e2e exception counter
    proves nothing throws. A usable set is matched with a tolerance of 1e-3 per coordinate to
    Rec.709 (H.273 code 1), Rec.2020 (9), P3-D65 (12), ACES AP0 and ACES AP1 (ST 2065-1; no H.273
@@ -190,9 +204,9 @@ zscale-validated maths. In detail:
    tristimulus, so a D65-white picture stored as XYZ stays D65 white - what `exrdisplay` does with
    the corpus pair `Rec709_YC` / `XYZ_YC`, and what the e2e test pins (the two present alike: mean
    difference 80 of 65535 codes, the outliers clipped reds where chroma was subsampled in XYZ
-   rather than RGB). The 3.4 `colorInteropID` attribute is read for the info line and is the
+   rather than RGB). The 3.4 `colorInteropID` attribute is the
    fallback when `chromaticities` is absent (`lin_rec709`, `lin_rec2020`, `lin_p3d65`, `lin_ap0`,
-   `lin_ap1`; any other id is only reported). The luminance weights for the peak (below) are the
+   `lin_ap1`; any other id retains the Rec.709 default). The luminance weights for the peak (below) are the
    Y row of the file's own RGB → XYZ. **Which path the presentation takes** follows from this
    split (ARCHITECTURE §3.7, Task 27): a file resolved to a code (Rec.709, Rec.2020, P3-D65)
    gets the BT.2390 tone map *before* the primaries matrix, in its own container, read from a
@@ -247,16 +261,27 @@ zscale-validated maths. In detail:
    against double at a code boundary), the exhaustive proof is what makes the encoder exact.
 6. Grey files (`Y` alone, or a single channel) take the same path with R = G = B.
 
-**Decode at open.** The peak needs every pixel before `pvdFileOpen` returns (the describer prints
-it and the presentation is built from it), so `DecoderFactory::create` reads and encodes the whole
-overlap: one chunk of float RGBA scratch at a time (scanlines: data width × lines per chunk; tiles:
-one tile; luminance/chroma parts: the whole data window, §5), encoded straight into a cached
-BGRA64 buffer (8 bytes per overlap pixel, at most `maxPixels`) with the histogram accumulated on
-the way. `decodeFrame` composites the cache into the
-display window (`checkDestination` refuses anything but BGRA64 with room for the rows). The
-library context is closed before `create` returns; the file bytes are no longer needed afterwards
-(FileSession keeps them anyway). Cost: the session holds the overlap twice while a page is out
-(cache + page), 66 MB + 66 MB for a 4K picture.
+**Eager primary, lazy secondary pages.** `DecoderFactory::create` decodes page zero and measures
+its peak before returning, preserving its existing opening errors and information line. Other
+pages decode only when requested. The decoder keeps one current encoded overlap cache; replacing
+it does not invalidate already returned host pages because `FileSession` owns those separately.
+The library context is scoped to each header/read operation; file bytes and factory PQ tables
+are borrowed for the decoder's lifetime. Disk sessions retain `IFileData`; in-memory bytes remain
+owned by the host until file close.
+
+The cache is encoded directly from the existing chunk scratch, with the histogram accumulated
+on the way. Opaque native pages store RGB48 (three PQ codes, six bytes per pixel), alpha pages
+RGBA64 and legacy pages BGRA64 (four codes, eight bytes). There is no full-image repacking buffer.
+Each page's layout is checked before decoding. `pageMeta` supplies allocation dimensions, alpha,
+source depth and forced high precision; `decodedColour` supplies the successfully decoded page's
+actual colour and percentile peak. The shared presentation then converts its colour channels to
+sRGB in place without changing geometry. The PVD wire codes remain 49/65/64 respectively;
+`pvdInfoPage.nBPP` is informational source depth times channel count.
+
+With matching 3840 x 2160 windows, one opaque native cache and one displayed page use about
+50 MB + 50 MB, versus 66 MB + 66 MB with alpha or legacy output. Additional retained host pages
+cost their own buffers; navigating does not retain every EXR page's cache. YC reconstruction,
+PQ quantization, histogram and peak arithmetic are unchanged.
 
 ## 5. Luminance/chroma files
 
@@ -276,6 +301,17 @@ over a set §4 validated, since `computeYw` itself throws on a degenerate one), 
 four Y/RY/BY fixtures the library can read with `Imf::RgbaInputFile` (linked into the test only):
 the worst difference is one 16-bit PQ code. Half precision is what these files carry.
 
+YC reconstruction follows the same colour-attribute precedence as the presentation. If
+`chromaticities` is absent, a known linear `colorInteropID` supplies the reconstruction weights
+(`lin_rec709`, `lin_rec2020`, `lin_p3d65`, `lin_ap0`, `lin_ap1`); an absent or unknown id retains
+the Rec.709 default. Usable explicit chromaticities always win, and the reconstruction uses
+their actual values even when they match a known set within the metadata's 1e-3 tolerance.
+An unusable explicit set instead keeps the established Rec.709 fallback, including when the
+file also carries a known interop id. The five directed `ColourInteropTests` cases write YC
+samples with OpenEXR and copy their compressed chunks unchanged while varying the attributes:
+fallback equivalence for all five ids, default behaviour, explicit precedence, near-known
+coordinates retaining distinct reconstruction weights, and unusable explicit precedence.
+
 This path reads the whole data window before anything is encoded (the vertical filter needs 27
 rows and the saturation fix three, and the library's own reader does the same): the padded half
 rows, the reconstructed rows and the float result are about 40 bytes per data-window pixel while
@@ -284,21 +320,23 @@ these parts (§3, `checkDataArea`); the RGB and tiled paths never hold more than
 
 ## 6. Describer (`src/core/Describe`) and the shared meta
 
-`ImageMeta` gained three fields for this plugin (docs/ARCHITECTURE.md §3.6): `chromaticities`
-(the explicit set, §4), `compression` (the scheme's name; the host's compression field) and
-`sourceDetail` (the source half of the comments line, formatted by `exr::describeSource` from the
-header facts the adapter collected, because the shared fields cannot say "tiled 64x64" or
-"2 parts"). AVIF and RPGMVP leave the strings empty. `Describer` returns
-`{"OpenEXR", meta.compression, meta.sourceDetail + ", " + presentationNote(meta)}`, for example:
+`ImageMeta::chromaticities` carries explicit colour sets (§4). `compression` and `sourceDetail`
+carry the plugin's title metadata. For a single displayable page, `exr::describeSource` keeps the
+sample type, channel layout and resolved linear colour, for example `half RGBA, linear Rec.709`.
+Known spaces retain their names, usable unrecognized chromaticities say `linear custom`, and
+unusable chromaticities say `linear Rec.709 assumed`. Channel summaries are RGB(A), Y, YA,
+Y+chroma, Y+chroma+A, or grey; layer/channel names, windows, tile geometry, exposure and redundant
+compression are omitted. `Describer` appends ` → sRGB`, without the measured tone-map diagnostics.
+The decode and presentation pipeline still uses every page's complete colour and exposure facts.
 
-`half RGBA, linear Rec.709, ZIP, scanline, display 1920x1080, data 1920x1080 at 0,0, 100 nit white, → sRGB (BT.2390 tone map from 1250 nit)`
-
-with, when applicable, `float RGB`, `half Y+chroma`, `half Y with alpha`, `float Z as grey`,
-`half RGBA (layer beauty)`; `linear ACES AP0`; `linear, unknown chromaticities (custom: R 0.7347,0.2653 G ... W ...)`;
-`colorInteropID lin_ap0`; `tiled 64x64, 5 mip levels` / `5x4 rip levels`; `display 481x371 at -40,-40`
-(the origin only when it is not 0,0; the data window always prints its origin); `250 nit white`;
-`2 parts (part 1: beauty)`; `stereo (left view)`; `deep parts skipped`; and
-`→ sRGB (SDR range, no highlight compression)` at or below 100 nit.
+PVD comments and compression are file-level strings created at open time. They cannot follow the
+currently selected page. A file with several displayable pages therefore reports its page count
+and structure only: `2 pages, multipart, multiview → sRGB`, `2 pages, multiview → sRGB`, or
+`2 pages, layers → sRGB`. No selected page's sample type, alpha, colour, layer or view is presented
+as a fact about the entire file. The compression field is empty for multipage files, since parts
+can use different schemes; single-page files retain the scheme's name in that dedicated field.
+`SourceFacts::pageCount` comes from the complete page catalogue, independently of `partCount`
+(which includes skipped deep parts). `formatName` remains `OpenEXR`.
 
 ## 7. Build specifics
 
@@ -313,9 +351,10 @@ with, when applicable, `float RGB`, `half Y+chroma`, `half Y with alpha`, `float
   line, PQ codes at seven positions of every reference fixture against the double-precision
   reference, luminance/chroma against `Imf::RgbaInputFile`, rejections and their categories, the
   limits, the composed plugin, the unit-level leak gate), `exr_e2e_tests` (`LoadLibraryW(EXR.pvd)`
-  driven like the host on every fixture in both modes, host pixels against the reference pipeline,
-  pinned whole-image hashes, callback abort, out-of-range pages, two files at once, rejections,
-  after `pvdExit`, four threads, the skipped 4K timing case), `exr_sequence_tests`,
+  driven like the host on every fixture in both modes, native-W RGB48/RGBA64 compared byte-for-byte
+  with legacy-A BGRA64 after channel-order selection and opaque alpha omission, host pixels against
+  the reference pipeline, pinned legacy whole-image hashes, callback abort, out-of-range pages,
+  two files at once, rejections, after `pvdExit`, four threads, the skipped 4K timing case), `exr_sequence_tests`,
   `exr_leak_tests` with the hostile corpus, `exr_check_imports`, `exr_check_exports`,
   `exr_package_docs`. The C++ OpenEXR library is linked into the adapter and e2e tests only (as
   the reference reader and the 4K generator), never into the plugin.
@@ -369,8 +408,6 @@ scale, not a benchmark. The release DLL is 1,112,576 bytes on x64 and 1,005,056 
 
 ## 9. Out of scope (documented, not implemented)
 
-Deep images (parts are skipped, deep-only files refused); multi-part files as pages (the core's
-frame mechanism is for equal-size frames of one picture; a documented future extension); the right
-view and other views; layers other than the first complete one; UINT-only channels; mip/rip levels
+Deep images (parts are skipped, deep-only files refused); UINT-only channels; mip/rip levels
 other than the first; the `preview` attribute; pixel aspect ratio (`t15`/`t16`: the host shows
 square pixels); ICC profiles are not a thing in EXR; user exposure or tone controls by design.

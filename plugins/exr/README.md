@@ -14,15 +14,21 @@ What it does:
 - Channels `R`, `G`, `B` (+ `A`); `Y` with `RY`/`BY` chroma (reconstructed with the library's own
   filters) or `Y` alone; otherwise the first layer with `R`, `G`, `B`; otherwise the first channel
   as grey. HALF and FLOAT samples; UINT channels are not colour.
-- Multi-part and stereo files: one part is shown - the first with colour channels, the `left` view
-  when views are named; deep parts are skipped.
+- Multi-part files, stereo views and complete colour layers are exposed as independent pages.
+  The previous preferred picture remains first; other pages decode on demand. Deep parts are skipped.
+  Each page keeps its own dimensions, alpha and colour interpretation.
 - The display window is the picture; the data window is composited into it (cropped outside,
   black or transparent black where there is no data).
 - Colour: scene-linear light with 1.0 = 100 nit (or the file's `whiteLuminance`), the file's
   primaries (Rec.709, Rec.2020, P3-D65, ACES AP0/AP1 by matching, any other chromaticities by a
   run-time matrix; `colorInteropID` as the fallback) converted to sRGB, highlights compressed with
-  BT.2390 tone mapping from the picture's own 99.99th-percentile peak. Every page is handed over
-  as 16-bit BGRA; premultiplied alpha becomes straight alpha.
+  BT.2390 tone mapping from the picture's own 99.99th-percentile peak. Every page retains 16 bits
+  per channel; premultiplied alpha becomes straight alpha.
+- Native RGB through `pvdFileOpenW`: opaque pages use RGB48 (`nBPP = 49`, 6 bytes per pixel),
+  pages with alpha use RGBA64 (`nBPP = 65`, 8 bytes per pixel). The older `pvdFileOpen` entry
+  point retains BGRA64 (`nBPP = 64`) for compatibility. These are PVD format codes, not storage
+  bit counts; the host-selection policy is documented in
+  [the PictureView ABI analysis](../../docs/host/pictureview-2026-09-30-abi.md).
 - Files from archives and virtual panels (the host hands over the whole file in memory).
 
 ## Install
@@ -66,9 +72,10 @@ static distribution documents and dependency licenses.
   luminance/chroma files against the library's own `Imf::RgbaInputFile` on every pixel, every
   rejection and its category, the size limits, decoding into caller buffers), the composed
   production plugin, and the unit-level leak gate.
-- `exr_e2e_tests` - loads the built `EXR.pvd` with `LoadLibraryW`, resolves the eight exports and
-  drives them like the host: every fixture from disk and from memory, host pixels against the
-  reference pipeline, pinned whole-image hashes, callback abort, out-of-range pages, two files at
+- `exr_e2e_tests` - loads the built `EXR.pvd` with `LoadLibraryW`, resolves the nine exports and
+  drives them like the host: every fixture from disk and from memory, native RGB48/RGBA64 bytes
+  against legacy BGRA64 with exact retained samples, host pixels against the reference pipeline,
+  pinned legacy whole-image hashes, callback abort, out-of-range pages, two files at
   once, rejections of non-EXR and malformed input, behaviour after `pvdExit`, four threads decoding
   concurrently; a skipped 4K timing case (`--no-skip=true -tc="4K timing*"`).
 - `exr_sequence_tests`, `exr_leak_tests` (with the hostile corpus), `exr_check_imports`,
@@ -83,23 +90,30 @@ writes the reference pixel table the adapter and e2e tests pin against.
 ## Known limitations
 
 - Deep images are not shown (deep parts are skipped; a deep-only file is refused).
-- Multi-part files show one part, stereo files the left view; other parts, views and layers are
-  not reachable (multi-part as pages is a documented future extension).
+- Parts, views and complete colour layers form a flat list of pages; there is no separate
+  view selector or two-dimensional part/view navigation in PictureView.
 - Mip/rip maps show level 0; the `preview` attribute and the pixel aspect ratio are ignored
   (PictureView shows square pixels).
 - No exposure or tone controls: the picture is shown at 1.0 = 100 nit (or `whiteLuminance`) with
   BT.2390 from its own peak, by design.
-- The whole picture is decoded when the file is opened (the tone-mapping peak needs every pixel);
-  the session keeps the decoded overlap of the data and display windows (8 bytes per pixel) while
-  it is open. RGB and tiled parts are read one chunk at a time and cropped to the display window,
-  so a data window far larger than the display window costs only the chunks it touches;
+- The first page is decoded when the file is opened (the tone-mapping peak needs every pixel);
+  other pages decode on demand. The session keeps the current page's decoded overlap of the
+  data and display windows; already returned page buffers remain valid until freed. The
+  cache holds three 16-bit PQ codes per opaque native pixel (6 bytes), or four codes with alpha
+  or through the legacy entry point (8 bytes). Native opaque pages and their caches therefore
+  use 25% less pixel storage, with colour presentation applied in place. RGB and tiled parts are
+  read one chunk at a time and cropped to the display window, so a data window far larger than
+  the display window costs only the chunks it touches;
   luminance/chroma (Y/RY/BY) parts are reconstructed over the whole data window (about 40 bytes
   per data-window pixel while the file opens), so for them the data window's area is held to the
   same 16384 × 16384 limit as the display window's.
 - A `chromaticities` attribute no colour derivation can use (a white with y = 0, collinear
   primaries, non-finite values) is ignored: the picture is shown as Rec.709 and the info line says
-  `linear Rec.709 assumed, unusable chromaticities (...)`. CIE XYZ files (the primaries at the
+  `linear Rec.709 assumed` for a single-page file. CIE XYZ files (the primaries at the
   XYZ axes, white E) are converted without chromatic adaptation, as OpenEXR's own viewer does.
+- Titles are concise: `half RGBA, linear Rec.709 → sRGB` for a single page; several pages
+  show file-wide structure such as `2 pages, multipart, multiview → sRGB`. PVD title metadata
+  stays fixed while navigating, so it omits a selected page's colour, channels and compression.
 - Files are mapped with `FILE_SHARE_WRITE | FILE_SHARE_DELETE` so Far can keep working with them.
   If another process truncates a file while a page is being decoded, reading the mapped view
   raises a structured exception that the C++ firewall cannot catch - the same behaviour as the
@@ -109,4 +123,8 @@ writes the reference pixel table the adapter and e2e tests pin against.
 
 ## Changes
 
-- 1.0.0 — initial release.
+- 1.0.0 — unpublished first-release candidate: OpenEXR scanline/tiled images and all compression
+  schemes; parts, views and complete colour layers as pages; scene-linear colour converted to
+  sRGB with BT.2390 tone mapping. Native RGB48/RGBA64 through the UTF-16 entry point, compact
+  opaque PQ cache, bounded colour-table reuse, and preserved legacy BGRA64 output.
+  Manual testing in Far is pending.

@@ -31,8 +31,8 @@ namespace pvdkit::tests
       public:
         PresentationReference(const core::Cicp &cicp, const std::optional<float> masteringPeakNits,
                               const std::optional<core::colour::Primaries::Chromaticities> &chromaticities,
-                              const core::colour::SrgbOutputTables &outputTables)
-            : PresentationReference(cicp, masteringPeakNits, usable(chromaticities), outputTables, Filtered{})
+                              const core::colour::ColourTables &tables)
+            : PresentationReference(cicp, masteringPeakNits, usable(chromaticities), tables, Filtered{})
         {
         }
 
@@ -77,14 +77,14 @@ namespace pvdkit::tests
 
         PresentationReference(const core::Cicp &cicp, const std::optional<float> masteringPeakNits,
                               const std::optional<core::colour::Primaries::Chromaticities> &chromaticities,
-                              const core::colour::SrgbOutputTables &outputTables, Filtered)
+                              const core::colour::ColourTables &tables, Filtered)
             : transfer_(cicp.transfer), toneMapInSource_(cicp.transfer == 16 && !chromaticities.has_value()),
               toneMapAfterMatrix_(core::colour::Transfer::isHdr(cicp.transfer) && !toneMapInSource_),
               matrix_(chromaticities ? core::colour::Primaries::toSrgb(*chromaticities)
                                      : core::colour::Primaries::toSrgb(cicp.primaries)),
               luminance_(chromaticities ? core::colour::Primaries::luminanceCoefficients(*chromaticities)
                                         : core::colour::Primaries::luminanceCoefficients(cicp.primaries)),
-              eetf_(core::colour::sourcePeakNits(cicp.transfer, masteringPeakNits)), outputTables_(outputTables)
+              eetf_(core::colour::sourcePeakNits(cicp.transfer, masteringPeakNits)), outputTables_(tables.output())
         {
         }
 

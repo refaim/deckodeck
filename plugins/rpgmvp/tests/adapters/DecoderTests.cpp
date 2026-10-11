@@ -6,6 +6,7 @@
 #include <limits>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <doctest/doctest.h>
@@ -260,7 +261,7 @@ TEST_CASE("Bgra64 is rejected cleanly for sources with at most eight bits per sa
 
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().code == ErrorCode::UnsupportedFeature);
-    CHECK(result.error().detail == "BGRA64 output requires a source deeper than 8 bits per sample");
+    CHECK(result.error().detail == "16-bit output requires a source deeper than 8 bits per sample");
 }
 
 TEST_CASE("16-bit RGB and RGBA sources decode to native-endian BGRA64 samples")
@@ -339,4 +340,202 @@ TEST_CASE("Adam7 and non-interlaced encodings decode to identical pixels repeate
     CHECK((*adam7)->decodeFrame(0, PixelFormat::Bgra32, repeated, 700U * 4U));
     CHECK(first == second);
     CHECK(first == repeated);
+}
+
+namespace
+{
+
+    constexpr PixelFormat kRgb24 = static_cast<PixelFormat>(3);
+    constexpr PixelFormat kRgba32 = static_cast<PixelFormat>(4);
+    constexpr PixelFormat kRgba64 = static_cast<PixelFormat>(5);
+
+} // namespace
+
+TEST_CASE("native RPGMVP destination validation accepts matching RGB and legacy layouts")
+{
+    struct LayoutCase
+    {
+        PixelFormat format;
+        bool alpha;
+        std::uint8_t depth;
+        std::uint32_t pitch;
+        std::size_t size;
+    };
+    constexpr std::array cases{
+        LayoutCase{PixelFormat::Bgr24, false, 8, 9, 18},    LayoutCase{kRgb24, false, 8, 9, 18},
+        LayoutCase{PixelFormat::Bgra32, true, 8, 12, 24},   LayoutCase{kRgba32, true, 8, 12, 24},
+        LayoutCase{PixelFormat::Bgra64, false, 16, 24, 48}, LayoutCase{kRgba64, false, 16, 24, 48},
+        LayoutCase{PixelFormat::Bgra64, true, 16, 24, 48},  LayoutCase{kRgba64, true, 16, 24, 48},
+    };
+    for (const auto &item : cases) {
+        CAPTURE(static_cast<int>(item.format));
+        CAPTURE(item.alpha);
+        pvdkit::core::ImageMeta meta{};
+        meta.width = 3;
+        meta.height = 2;
+        meta.depth = item.depth;
+        meta.hasAlpha = item.alpha;
+        CHECK(pvdkit::rpgmvp::checkDestination(meta, item.format, item.size, item.pitch));
+        CHECK(pvdkit::rpgmvp::checkDestination(meta, item.format, item.size + 1, item.pitch));
+        CHECK_FALSE(pvdkit::rpgmvp::checkDestination(meta, item.format, item.size, item.pitch - 1));
+        CHECK_FALSE(pvdkit::rpgmvp::checkDestination(meta, item.format, item.size - 1, item.pitch));
+    }
+}
+
+TEST_CASE("native RPGMVP destination validation rejects contradictory layouts and shallow deep output")
+{
+    pvdkit::core::ImageMeta meta{};
+    meta.width = 3;
+    meta.height = 2;
+    meta.depth = 8;
+    meta.hasAlpha = true;
+    for (const auto format : {PixelFormat::Bgr24, kRgb24}) {
+        const auto result = pvdkit::rpgmvp::checkDestination(meta, format, 18, 9);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().code == ErrorCode::Internal);
+    }
+    meta.hasAlpha = false;
+    for (const auto format : {PixelFormat::Bgra32, kRgba32, static_cast<PixelFormat>(255)}) {
+        const auto result = pvdkit::rpgmvp::checkDestination(meta, format, 24, 12);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().code == ErrorCode::Internal);
+    }
+    for (const auto depth : {std::uint8_t{1}, std::uint8_t{8}}) {
+        meta.depth = depth;
+        for (const auto format : {PixelFormat::Bgra64, kRgba64}) {
+            const auto result = pvdkit::rpgmvp::checkDestination(meta, format, 48, 24);
+            REQUIRE_FALSE(result.has_value());
+            CHECK(result.error().code == ErrorCode::UnsupportedFeature);
+        }
+    }
+}
+
+TEST_CASE("native RPGMVP RGB8 preserves unequal red and blue samples with either ICC profile")
+{
+    DecoderFactory factory;
+    for (const auto name : {"icc_swapped_rb_64x64.rpgmvp", "icc_srgb_64x64.rpgmvp"}) {
+        CAPTURE(name);
+        auto bytes = fixture(name);
+        auto decoder = factory.create(bytes, kOptions);
+        REQUIRE(decoder.has_value());
+        constexpr std::uint32_t pitch = 64U * 3U;
+        constexpr std::size_t imageSize = std::size_t{pitch} * 64U;
+        std::vector<std::byte> pixels(imageSize + 8U, std::byte{0xA5});
+        REQUIRE((*decoder)->decodeFrame(0, kRgb24, pixels, pitch));
+        const auto pixel = [&](const std::uint32_t x, const std::uint32_t y) {
+            const auto offset = static_cast<std::size_t>(y) * pitch + static_cast<std::size_t>(x) * 3U;
+            return std::array{pixels[offset], pixels[offset + 1U], pixels[offset + 2U]};
+        };
+        CHECK(pixel(16, 16) == std::array{std::byte{255}, std::byte{0}, std::byte{0}});
+        CHECK(pixel(48, 16) == std::array{std::byte{0}, std::byte{255}, std::byte{0}});
+        CHECK(pixel(16, 48) == std::array{std::byte{0}, std::byte{0}, std::byte{255}});
+        CHECK(pixel(48, 48) == std::array{std::byte{128}, std::byte{128}, std::byte{128}});
+        for (auto offset = imageSize; offset < pixels.size(); ++offset) {
+            CHECK(pixels[offset] == std::byte{0xA5});
+        }
+    }
+}
+
+TEST_CASE("native RPGMVP RGBA8 expands palette transparency without premultiplication")
+{
+    DecoderFactory factory;
+    auto bytes = fixture("indexed4_trns_144x192_cursor.rpgmvp");
+    auto decoder = factory.create(bytes, kOptions);
+    REQUIRE(decoder.has_value());
+    constexpr std::uint32_t pitch = 144U * 4U;
+    std::vector<std::byte> pixels(std::size_t{pitch} * 192U);
+    REQUIRE((*decoder)->decodeFrame(0, kRgba32, pixels, pitch));
+    CHECK(pixels[0] == std::byte{0});
+    CHECK(pixels[3] == std::byte{0});
+    constexpr std::size_t offset = std::size_t{17} * 4U;
+    const std::array rgba{pixels[offset], pixels[offset + 1U], pixels[offset + 2U], pixels[offset + 3U]};
+    CHECK(rgba == std::array{std::byte{255}, std::byte{224}, std::byte{78}, std::byte{222}});
+}
+
+TEST_CASE("native RPGMVP deep RGB preserves little endian samples and opaque alpha")
+{
+    DecoderFactory factory;
+    auto bytes = fixture("rgb16_88x4a.rpgmvp");
+    auto decoder = factory.create(bytes, kOptions);
+    REQUIRE(decoder.has_value());
+    std::vector<std::byte> deepPixels(std::size_t{88} * 4U * 8U);
+    REQUIRE((*decoder)->decodeFrame(0, kRgba64, deepPixels, 88U * 8U));
+    const std::array deepFirst{sample16(deepPixels, 0), sample16(deepPixels, 1), sample16(deepPixels, 2),
+                               sample16(deepPixels, 3)};
+    CHECK(deepFirst == std::array<std::uint16_t, 4>{0x1B96, 0x6060, 0x3BF4, 0xFFFF});
+    const std::array deepBytes{deepPixels[0], deepPixels[1], deepPixels[2], deepPixels[3],
+                               deepPixels[4], deepPixels[5], deepPixels[6], deepPixels[7]};
+    CHECK(deepBytes == std::array{std::byte{0x96}, std::byte{0x1B}, std::byte{0x60}, std::byte{0x60}, std::byte{0xF4},
+                                  std::byte{0x3B}, std::byte{0xFF}, std::byte{0xFF}});
+    std::vector<std::byte> shallowPixels(std::size_t{88} * 4U * 3U);
+    REQUIRE((*decoder)->decodeFrame(0, kRgb24, shallowPixels, 88U * 3U));
+    const std::array shallowFirst{shallowPixels[0], shallowPixels[1], shallowPixels[2]};
+    CHECK(shallowFirst == std::array{std::byte{0x1B}, std::byte{0x60}, std::byte{0x3B}});
+}
+
+TEST_CASE("native RPGMVP deep RGBA agrees with legacy channel order and preserves alpha")
+{
+    DecoderFactory factory;
+    auto bytes = fixture("rgba16_60x20_par.rpgmvp");
+    auto decoder = factory.create(bytes, kOptions);
+    REQUIRE(decoder.has_value());
+    std::vector<std::byte> native(std::size_t{60} * 20U * 8U);
+    std::vector<std::byte> legacy(native.size());
+    REQUIRE((*decoder)->decodeFrame(0, kRgba64, native, 60U * 8U));
+    REQUIRE((*decoder)->decodeFrame(0, PixelFormat::Bgra64, legacy, 60U * 8U));
+    const std::array first{sample16(native, 0), sample16(native, 1), sample16(native, 2), sample16(native, 3)};
+    CHECK(first == std::array<std::uint16_t, 4>{0xFFFF, 0xFFFF, 0xFFFF, 0x0000});
+    for (std::size_t offset = 0; offset < legacy.size(); offset += 8U) {
+        std::swap(legacy[offset], legacy[offset + 4U]);
+        std::swap(legacy[offset + 1U], legacy[offset + 5U]);
+    }
+    CHECK(native == legacy);
+}
+
+TEST_CASE("native RPGMVP Adam7 and non interlaced images decode identically and repeatably")
+{
+    DecoderFactory factory;
+    auto adam7Bytes = fixture("rgba8_adam7_700x700_kamen.png_");
+    auto plainBytes = fixture("rgba8_noninterlaced_700x700_kamen.rpgmvp");
+    auto adam7 = factory.create(adam7Bytes, kOptions);
+    auto plain = factory.create(plainBytes, kOptions);
+    REQUIRE(adam7.has_value());
+    REQUIRE(plain.has_value());
+    std::vector<std::byte> first(std::size_t{700} * 700U * 4U);
+    std::vector<std::byte> second(first.size());
+    std::vector<std::byte> repeated(first.size());
+    std::vector<std::byte> legacy(first.size());
+    REQUIRE((*adam7)->decodeFrame(0, kRgba32, first, 700U * 4U));
+    REQUIRE((*plain)->decodeFrame(0, kRgba32, second, 700U * 4U));
+    REQUIRE((*adam7)->decodeFrame(0, kRgba32, repeated, 700U * 4U));
+    REQUIRE((*adam7)->decodeFrame(0, PixelFormat::Bgra32, legacy, 700U * 4U));
+    CHECK(first == second);
+    CHECK(first == repeated);
+    for (std::size_t offset = 0; offset < legacy.size(); offset += 4U) {
+        std::swap(legacy[offset], legacy[offset + 2U]);
+    }
+    CHECK(first == legacy);
+}
+
+TEST_CASE("native RPGMVP decoding retains unsupported depth and corrupt image errors")
+{
+    DecoderFactory factory;
+    auto shallowBytes = fixture("rgba8_48x48.rpgmvp");
+    auto shallow = factory.create(shallowBytes, kOptions);
+    REQUIRE(shallow.has_value());
+    std::vector<std::byte> shallowPixels(std::size_t{48} * 48U * 8U);
+    const auto unsupported = (*shallow)->decodeFrame(0, kRgba64, shallowPixels, 48U * 8U);
+    REQUIRE_FALSE(unsupported.has_value());
+    CHECK(unsupported.error().code == ErrorCode::UnsupportedFeature);
+    const auto missing = (*shallow)->decodeFrame(1, kRgba32, shallowPixels, 48U * 4U);
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().code == ErrorCode::PageOutOfRange);
+
+    auto corruptBytes = fixture("decode-failures/truncated_idat.rpgmvp");
+    auto corrupt = factory.create(corruptBytes, kOptions);
+    REQUIRE(corrupt.has_value());
+    std::vector<std::byte> corruptPixels(std::size_t{48} * 48U * 4U);
+    const auto failed = (*corrupt)->decodeFrame(0, kRgba32, corruptPixels, 48U * 4U);
+    REQUIRE_FALSE(failed.has_value());
+    CHECK(failed.error().code == ErrorCode::DecodeFailed);
 }

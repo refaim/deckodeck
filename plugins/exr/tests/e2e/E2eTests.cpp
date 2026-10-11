@@ -76,11 +76,12 @@ namespace pvdkit::e2e
         // Opens `file` in `mode` and decodes every page; the caller closes the context.
         struct OpenedAndDecoded
         {
+            FixtureFile file;
             OpenedImage image;
             std::vector<DecodedPage> pages;
         };
 
-        OpenedAndDecoded openAndDecodeAll(const PluginExports &exports, const FixtureFile &file, const OpenMode mode)
+        OpenedAndDecoded openAndDecodeAll(const PluginExports &exports, FixtureFile file, const OpenMode mode)
         {
             auto opened = openImage(exports, file, mode);
             REQUIRE(opened.has_value());
@@ -90,7 +91,7 @@ namespace pvdkit::e2e
                 REQUIRE(decoded.has_value());
                 pages.push_back(*decoded);
             }
-            return {*opened, std::move(pages)};
+            return {std::move(file), *opened, std::move(pages)};
         }
 
         void freeAndClose(const PluginExports &exports, OpenedAndDecoded &opened)
@@ -279,17 +280,17 @@ namespace pvdkit::e2e
             auto disk = openAndDecodeAll(exports, file, OpenMode::Disk);
             auto memory = openAndDecodeAll(exports, file, OpenMode::Memory);
 
-            CHECK(disk.image.info.nPages == 1);
+            CHECK(disk.image.info.nPages == expected.pages);
             CHECK(disk.image.info.Flags == 0);
             CHECK(text(disk.image.info.pFormatName) == "OpenEXR");
-            CHECK_FALSE(text(disk.image.info.pCompression).empty());
-            CHECK(text(disk.image.info.pComments).find("→ sRGB (") != std::string::npos);
+            CHECK(text(disk.image.info.pCompression).empty() == (expected.pages > 1));
+            CHECK(text(disk.image.info.pComments).find("→ sRGB") != std::string::npos);
             CHECK(memory.image.info.nPages == disk.image.info.nPages);
             CHECK(text(memory.image.info.pCompression) == text(disk.image.info.pCompression));
             CHECK(text(memory.image.info.pComments) == text(disk.image.info.pComments));
 
-            REQUIRE(disk.pages.size() == 1);
-            REQUIRE(memory.pages.size() == 1);
+            REQUIRE(disk.pages.size() == expected.pages);
+            REQUIRE(memory.pages.size() == expected.pages);
             const auto &d = disk.pages[0];
             const auto &m = memory.pages[0];
             CHECK(d.page.lWidth == expected.width);
@@ -306,6 +307,10 @@ namespace pvdkit::e2e
             CHECK(m.decode.nBPP == d.decode.nBPP);
             CHECK(m.decode.Flags == d.decode.Flags);
             CHECK(m.pixels() == d.pixels());
+            for (std::size_t page = 0; page < disk.pages.size(); ++page) {
+                CHECK(memory.pages[page].pixels() == disk.pages[page].pixels());
+                CHECK(disk.pages[page].page.lFrameTime == 0);
+            }
 
             CHECK(text(disk.image.info.pFormatName) == "OpenEXR");
             freeAndClose(exports, disk);
@@ -361,13 +366,13 @@ namespace pvdkit::e2e
         // holds it within one code of Imf::RgbaInputFile on every pixel of the same architecture.
         constexpr bool k64 = sizeof(std::size_t) == 8;
         constexpr std::array pinned{
-            Pinned{"rgb_half_zip.exr", "→ sRGB (BT.2390 tone map from 497 nit)", 12'113'179'102'565'474'970ULL},
-            Pinned{"rgba_premultiplied.exr", "→ sRGB (BT.2390 tone map from 497 nit)", 13'438'565'081'922'907'489ULL},
+            Pinned{"rgb_half_zip.exr", "→ sRGB", 12'113'179'102'565'474'970ULL},
+            Pinned{"rgba_premultiplied.exr", "→ sRGB", 13'438'565'081'922'907'489ULL},
             Pinned{"chroma_ap0.exr", "linear ACES AP0", 14'442'420'165'258'301'884ULL},
-            Pinned{"t07.exr", "→ sRGB (SDR range, no highlight compression)", 18'066'542'899'252'817'109ULL},
+            Pinned{"t07.exr", "→ sRGB", 18'066'542'899'252'817'109ULL},
             Pinned{"Rec709_YC.exr", "half Y+chroma",
                    k64 ? 18'229'812'072'225'433'002ULL : 4'999'148'834'420'483'629ULL},
-            Pinned{"Garden.exr", "tiled 128x128", 15'692'666'211'289'079'754ULL},
+            Pinned{"Garden.exr", "half Y, linear Rec.709", 15'692'666'211'289'079'754ULL},
         };
         for (const auto &item : pinned) {
             CAPTURE(item.name);
@@ -544,8 +549,7 @@ namespace pvdkit::e2e
         for (const auto name : {"rgb_whitey0.exr", "yc_whitey0.exr", "yc_collinear.exr"}) {
             CAPTURE(name);
             auto opened = openAndDecodeAll(exports, readFixture(name), OpenMode::Disk);
-            CHECK(text(opened.image.info.pComments).find("linear Rec.709 assumed, unusable chromaticities (") !=
-                  std::string::npos);
+            CHECK(text(opened.image.info.pComments).find("linear Rec.709 assumed") != std::string::npos);
             freeAndClose(exports, opened);
         }
         exports.exit();

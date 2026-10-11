@@ -29,12 +29,12 @@ namespace pvdkit::core::colour
 
         constexpr std::size_t kTimingIterations = 20;
 
-        /// One SrgbOutputTables for the whole test executable, standing in for the instance a
+        /// One ColourTables for the whole test executable, standing in for the instance a
         /// plugin's composition root owns (a plugin builds its own; a test executable is free to
         /// keep one in a function-local static, the guard rule applies to plugin code only).
-        const SrgbOutputTables &testTables()
+        const ColourTables &testTables()
         {
-            static const SrgbOutputTables tables;
+            static const ColourTables tables;
             return tables;
         }
 
@@ -221,7 +221,7 @@ namespace pvdkit::core::colour
             constexpr std::uint32_t kLastBits = std::bit_cast<std::uint32_t>(1.0F);
             constexpr unsigned kThreads = 4;
             constexpr std::uint32_t kChunk = (kLastBits + 1) / kThreads;
-            const auto &tables = testTables();
+            const auto &tables = testTables().output();
             std::array<std::uint64_t, kThreads> mismatches{};
             std::array<std::uint64_t, kThreads> decreases{};
             {
@@ -252,20 +252,20 @@ namespace pvdkit::core::colour
         TEST_CASE("a Presentation borrows exactly the sRGB output tables it is given, on any thread")
         {
             // There is no process-wide instance any more: a plugin's composition root owns one
-            // SrgbOutputTables and every Presentation of that plugin borrows it by reference
+            // ColourTables and every Presentation of that plugin borrows it by reference
             // (docs/ARCHITECTURE.md section 7). Two distinct instances prove that the reference
             // is the injected one and not some hidden shared object; the worker threads prove
             // that a band worker or a session on another thread sees the same borrowed instance.
-            const auto first = std::make_unique<const SrgbOutputTables>();
-            const auto second = std::make_unique<const SrgbOutputTables>();
+            const auto first = std::make_unique<const ColourTables>();
+            const auto second = std::make_unique<const ColourTables>();
             REQUIRE(first.get() != second.get());
 
             const Presentation p3Pq{Cicp{12, 16, 12, true}, 1'000.0F, *first};
             const Presentation identity{Cicp{1, 13, 6, false}, std::nullopt, *first};
             const Presentation other{Cicp{12, 16, 12, true}, 1'000.0F, *second};
-            CHECK(&p3Pq.outputTables() == first.get());
-            CHECK(&identity.outputTables() == first.get());
-            CHECK(&other.outputTables() == second.get());
+            CHECK(&p3Pq.outputTables() == &first->output());
+            CHECK(&identity.outputTables() == &first->output());
+            CHECK(&other.outputTables() == &second->output());
             CHECK(&other.outputTables() != &p3Pq.outputTables());
 
             std::array<bool, 4> sameOnThread{};
@@ -275,7 +275,7 @@ namespace pvdkit::core::colour
                 for (std::size_t index = 0; index < sameOnThread.size(); ++index) {
                     workers.emplace_back([&tables = *first, &flag = sameOnThread[index]]() {
                         const Presentation hlg{Cicp{9, 18, 9, false}, std::nullopt, tables};
-                        flag = &hlg.outputTables() == &tables;
+                        flag = &hlg.outputTables() == &tables.output();
                     });
                 }
             }
@@ -284,7 +284,7 @@ namespace pvdkit::core::colour
 
         TEST_CASE("the shared quantizer answers NaN, non-positive and saturated inputs like the exact path")
         {
-            const auto &tables = testTables();
+            const auto &tables = testTables().output();
             // lround(NaN) yields LONG_MIN on this CRT, which the exact path narrowed to code 0.
             CHECK(tables.quantize(std::numeric_limits<float>::quiet_NaN()) == 0);
             CHECK(tables.quantize(-0.0F) == 0);

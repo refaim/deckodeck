@@ -41,6 +41,9 @@ namespace
     using Bgr = std::array<std::uint8_t, 3>;
     using Bgra = std::array<std::uint8_t, 4>;
     using Bgra16 = std::array<std::uint16_t, 4>;
+    using Rgb = std::array<std::uint8_t, 3>;
+    using Rgba = std::array<std::uint8_t, 4>;
+    using Rgba16 = std::array<std::uint16_t, 4>;
 
     std::vector<std::byte> readFixture(const std::string_view name)
     {
@@ -436,7 +439,7 @@ TEST_CASE("the shared presentation of every HDR fixture agrees with the scalar r
     // channel code) against the scalar reference of the same order (tests/support/
     // PresentationReference.hpp, the EETF evaluated per pixel) over libavif's own BGRA64 output of
     // the two HDR fixtures, every pixel, on this architecture's YUV-to-RGB input.
-    const auto tables = std::make_unique<const pvdkit::core::colour::SrgbOutputTables>(); // 384 KiB: not on the stack
+    const auto tables = std::make_unique<const pvdkit::core::colour::ColourTables>(); // 384 KiB: not on the stack
     pvdkit::avif::DecoderFactory factory;
     for (const auto name : {"cosmos1650_yuv444_10bpc_p3pq.avif", "colors_hdr_rec2020.avif"}) {
         CAPTURE(name);
@@ -705,6 +708,250 @@ TEST_CASE("10-bit P3/PQ and grid sources decode end-to-end through the adapter")
     CHECK_FALSE(sofa.rowUniform(769));
 }
 
+TEST_CASE("native RGB layouts decode exact colours and preserve row padding")
+{
+    const auto bytes = readFixture("quad_rgb_lossless.avif");
+    pvdkit::avif::DecoderFactory factory;
+    auto decoder = factory.create(bytes, kOptions);
+    REQUIRE(decoder.has_value());
+    const auto &meta = (*decoder)->meta();
+    struct Output
+    {
+        PixelFormat format;
+        std::uint32_t bytesPerPixel;
+    };
+    constexpr std::array outputs{
+        Output{PixelFormat::Rgb24, 3},
+        Output{PixelFormat::Rgba32, 4},
+        Output{PixelFormat::Rgba64, 8},
+    };
+    constexpr std::array positions{std::pair{16U, 16U}, std::pair{48U, 16U}, std::pair{16U, 48U}, std::pair{48U, 48U}};
+    constexpr std::array<Rgb, 4> expected{{{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255}}};
+    for (const auto &output : outputs) {
+        CAPTURE(static_cast<unsigned>(output.format));
+        const auto rowBytes = meta.width * output.bytesPerPixel;
+        const auto pitch = rowBytes + 8;
+        // Keep a spare maximum-size row so an incorrect foreign target fails assertions without overrunning storage.
+        std::vector<std::byte> pixels(
+            static_cast<std::size_t>(pitch) * meta.height + static_cast<std::size_t>(meta.width) * 8U, std::byte{0x5a});
+        REQUIRE((*decoder)->decodeFrame(0, output.format, pixels, pitch).has_value());
+        for (std::size_t index = 0; index < positions.size(); ++index) {
+            const auto [x, y] = positions[index];
+            const auto &rgb = expected[index];
+            if (output.format == PixelFormat::Rgb24) {
+                CHECK(pixelAt<3>(pixels, pitch, x, y) == rgb);
+            } else if (output.format == PixelFormat::Rgba32) {
+                CHECK(pixelAt<4>(pixels, pitch, x, y) == Rgba{rgb[0], rgb[1], rgb[2], 255});
+            } else {
+                CHECK(pixelAt16<4>(pixels, pitch, x, y) == Rgba16{static_cast<std::uint16_t>(rgb[0] * 257U),
+                                                                  static_cast<std::uint16_t>(rgb[1] * 257U),
+                                                                  static_cast<std::uint16_t>(rgb[2] * 257U), 65535});
+            }
+        }
+        for (std::uint32_t y = 0; y < meta.height; ++y) {
+            const auto padding = std::span{pixels}.subspan(static_cast<std::size_t>(y) * pitch + rowBytes, 8);
+            CHECK(std::ranges::all_of(padding, [](const auto value) { return value == std::byte{0x5a}; }));
+        }
+    }
+}
+
+TEST_CASE("RGB48 target describes six-byte RGB pixels with sixteen-bit channels")
+{
+    avifImage image{};
+    image.width = 5;
+    image.height = 2;
+    image.depth = 10;
+    std::array<std::byte, 5 * 6 * 2> buffer{};
+    const auto target = pvdkit::avif::detail::rgbTarget(image, PixelFormat::Rgb48, buffer, 30, 4);
+    CHECK(target.width == 5);
+    CHECK(target.height == 2);
+    CHECK(target.format == AVIF_RGB_FORMAT_RGB);
+    CHECK(target.depth == 16);
+    CHECK(avifRGBImagePixelSize(&target) == 6);
+    CHECK(target.alphaPremultiplied == AVIF_FALSE);
+    CHECK(target.chromaUpsampling == AVIF_CHROMA_UPSAMPLING_AUTOMATIC);
+    CHECK(target.maxThreads == 4);
+    CHECK(target.rowBytes == 30);
+    CHECK(target.pixels == reinterpret_cast<std::uint8_t *>(buffer.data()));
+}
+
+TEST_CASE("RGB48 matches RGBA64 colour samples for asymmetric eight ten and twelve-bit sources")
+{
+    struct Fixture
+    {
+        std::string_view name;
+        std::uint8_t depth;
+    };
+    constexpr std::array fixtures{
+        Fixture{"quad_rgb_lossless.avif", 8},
+        Fixture{"quad_yuv420.avif", 8},
+        Fixture{"cosmos1650_yuv444_10bpc_p3pq.avif", 10},
+        Fixture{"weld_sato_12B_8B_q0.avif", 12},
+    };
+    pvdkit::avif::DecoderFactory factory;
+    for (const auto &fixture : fixtures) {
+        CAPTURE(fixture.name);
+        const auto bytes = readFixture(fixture.name);
+        auto decoder = factory.create(bytes, kOptions);
+        REQUIRE(decoder.has_value());
+        const auto &meta = (*decoder)->meta();
+        REQUIRE(meta.depth == fixture.depth);
+        REQUIRE_FALSE(meta.hasAlpha);
+        const auto rowBytes = meta.width * 6;
+        const auto pitch = rowBytes + 10;
+        // Guard a wrong foreign target before decode; keep additional storage for mutation diagnostics too.
+        std::vector<std::byte> rgb(
+            static_cast<std::size_t>(pitch) * meta.height + static_cast<std::size_t>(meta.width) * 8U, std::byte{0x5a});
+        avifImage targetImage{};
+        const auto target = pvdkit::avif::detail::rgbTarget(targetImage, PixelFormat::Rgb48, rgb, pitch,
+                                                            static_cast<int>(kOptions.maxThreads));
+        REQUIRE(target.format == AVIF_RGB_FORMAT_RGB);
+        REQUIRE(target.depth == 16);
+        REQUIRE((*decoder)->decodeFrame(0, PixelFormat::Rgb48, rgb, pitch).has_value());
+        const auto rgbaPitch = meta.width * 8;
+        std::vector<std::byte> rgba(static_cast<std::size_t>(rgbaPitch) * meta.height);
+        REQUIRE((*decoder)->decodeFrame(0, PixelFormat::Rgba64, rgba, rgbaPitch).has_value());
+        std::size_t differing = 0;
+        std::size_t asymmetric = 0;
+        for (std::uint32_t y = 0; y < meta.height; ++y) {
+            for (std::uint32_t x = 0; x < meta.width; ++x) {
+                const auto actual = pixelAt16<3>(rgb, pitch, x, y);
+                const auto expected = pixelAt16<4>(rgba, rgbaPitch, x, y);
+                const bool same = actual[0] == expected[0] && actual[1] == expected[1] && actual[2] == expected[2];
+                differing += same ? 0U : 1U;
+                asymmetric += expected[0] != expected[2] ? 1U : 0U;
+            }
+            const auto padding = std::span{rgb}.subspan(static_cast<std::size_t>(y) * pitch + rowBytes, 10);
+            CHECK(std::ranges::all_of(padding, [](const auto value) { return value == std::byte{0x5a}; }));
+        }
+        CHECK(differing == 0);
+        CHECK(asymmetric > 0);
+        if (fixture.name == "quad_rgb_lossless.avif") {
+            CHECK(pixelAt16<3>(rgb, pitch, 16, 16) == std::array<std::uint16_t, 3>{65535, 0, 0});
+            CHECK(pixelAt16<3>(rgb, pitch, 48, 16) == std::array<std::uint16_t, 3>{0, 65535, 0});
+            CHECK(pixelAt16<3>(rgb, pitch, 16, 48) == std::array<std::uint16_t, 3>{0, 0, 65535});
+            CHECK(pixelAt16<3>(rgb, pitch, 48, 48) == std::array<std::uint16_t, 3>{65535, 65535, 65535});
+        }
+    }
+}
+
+TEST_CASE("RGB48 destination validation uses six-byte rows and non-overflowing bounds")
+{
+    using pvdkit::avif::detail::checkDestination;
+    const auto format = PixelFormat::Rgb48;
+    pvdkit::core::ImageMeta meta{};
+    meta.width = 2;
+    meta.height = 3;
+    CHECK(checkDestination(meta, format, 36, 12).has_value());
+    CHECK(checkDestination(meta, format, 42, 14).has_value());
+    const auto shortPitch = checkDestination(meta, format, 36, 11);
+    REQUIRE_FALSE(shortPitch.has_value());
+    CHECK(shortPitch.error().code == ErrorCode::Internal);
+    const auto shortCapacity = checkDestination(meta, format, 35, 12);
+    REQUIRE_FALSE(shortCapacity.has_value());
+    CHECK(shortCapacity.error().code == ErrorCode::Internal);
+    meta.width = 0x40000000U;
+    const auto pitchOverflow = checkDestination(meta, format, 0, 0xC0000000U);
+    REQUIRE_FALSE(pitchOverflow.has_value());
+    CHECK(pitchOverflow.error().code == ErrorCode::Internal);
+    meta.width = 1;
+    meta.height = 0x40000000U;
+    const auto sizeOverflow = checkDestination(meta, format, 0xFFFFFFFFU, 12);
+    REQUIRE_FALSE(sizeOverflow.has_value());
+    CHECK(sizeOverflow.error().code == ErrorCode::Internal);
+}
+
+TEST_CASE("RGB48 decode rejects short destinations and out-of-range frames without writes")
+{
+    const auto bytes = readFixture("quad_rgb_lossless.avif");
+    pvdkit::avif::DecoderFactory factory;
+    auto decoder = factory.create(bytes, kOptions);
+    REQUIRE(decoder.has_value());
+    constexpr std::uint32_t pitch = 64 * 6;
+    std::vector<std::byte> pixels(static_cast<std::size_t>(pitch) * 64, std::byte{0x5a});
+    const auto format = PixelFormat::Rgb48;
+    const auto shortCapacity = (*decoder)->decodeFrame(0, format, std::span{pixels}.first(pixels.size() - 1), pitch);
+    REQUIRE_FALSE(shortCapacity.has_value());
+    CHECK(shortCapacity.error().code == ErrorCode::Internal);
+    const auto shortPitch = (*decoder)->decodeFrame(0, format, pixels, pitch - 1);
+    REQUIRE_FALSE(shortPitch.has_value());
+    CHECK(shortPitch.error().code == ErrorCode::Internal);
+    const auto outOfRange = (*decoder)->decodeFrame(1, format, pixels, pitch);
+    REQUIRE_FALSE(outOfRange.has_value());
+    CHECK(outOfRange.error().code == ErrorCode::PageOutOfRange);
+    CHECK(std::ranges::all_of(pixels, [](const auto value) { return value == std::byte{0x5a}; }));
+}
+
+TEST_CASE("native RGBA layouts retain straight alpha at eight and sixteen bits")
+{
+    const auto bytes = readFixture("alpha_steps.avif");
+    pvdkit::avif::DecoderFactory factory;
+    auto decoder = factory.create(bytes, kOptions);
+    REQUIRE(decoder.has_value());
+    const auto &meta = (*decoder)->meta();
+    for (const auto format : {PixelFormat::Rgba32, PixelFormat::Rgba64}) {
+        CAPTURE(static_cast<unsigned>(format));
+        const auto pitch = meta.width * (format == PixelFormat::Rgba32 ? 4U : 8U);
+        std::vector<std::byte> pixels(static_cast<std::size_t>(pitch) * meta.height);
+        REQUIRE((*decoder)->decodeFrame(0, format, pixels, pitch).has_value());
+        for (const auto y : {0U, 16U, 31U}) {
+            if (format == PixelFormat::Rgba32) {
+                CHECK(pixelAt<4>(pixels, pitch, 16, y) == Rgba{255, 255, 255, 0});
+                CHECK(pixelAt<4>(pixels, pitch, 48, y) == Rgba{255, 255, 255, 128});
+                CHECK(pixelAt<4>(pixels, pitch, 80, y) == Rgba{255, 255, 255, 255});
+            } else {
+                CHECK(pixelAt16<4>(pixels, pitch, 16, y) == Rgba16{65535, 65535, 65535, 0});
+                CHECK(pixelAt16<4>(pixels, pitch, 48, y) == Rgba16{65535, 65535, 65535, 32896});
+                CHECK(pixelAt16<4>(pixels, pitch, 80, y) == Rgba16{65535, 65535, 65535, 65535});
+            }
+        }
+    }
+}
+
+TEST_CASE("native RGBA64 preserves the full range of ten-bit colour and twelve-bit alpha")
+{
+    pvdkit::avif::DecoderFactory factory;
+    const auto format = PixelFormat::Rgba64;
+    SUBCASE("ten-bit limited-range luma expands to all sixteen bits")
+    {
+        const auto bytes = readFixture("tenbit_444.avif");
+        auto decoder = factory.create(bytes, kOptions);
+        REQUIRE(decoder.has_value());
+        const auto &meta = (*decoder)->meta();
+        const auto pitch = meta.width * 8;
+        std::vector<std::byte> pixels(static_cast<std::size_t>(pitch) * meta.height);
+        REQUIRE((*decoder)->decodeFrame(0, format, pixels, pitch).has_value());
+        for (const auto x : {0U, 4U, 5U, 20U, 32U, 45U, 58U, 59U, 63U}) {
+            const float normalized = std::clamp((16.0F * static_cast<float>(x) - 64.0F) / 876.0F, 0.0F, 1.0F);
+            const auto grey = static_cast<std::uint16_t>(std::lround(normalized * 65535.0F));
+            CHECK(pixelAt16<4>(pixels, pitch, x, 0) == Rgba16{grey, grey, grey, 65535});
+            CHECK(pixelAt16<4>(pixels, pitch, x, 63) == Rgba16{grey, grey, grey, 65535});
+        }
+    }
+    SUBCASE("twelve-bit alpha is rescaled rather than left-shifted")
+    {
+        const auto bytes = readFixture("colors-animated-12bpc-keyframes-0-2-3.avif");
+        const auto alpha = decodeSourceAlpha(bytes, 0);
+        REQUIRE(alpha.depth == 12);
+        auto decoder = factory.create(bytes, kOptions);
+        REQUIRE(decoder.has_value());
+        const auto &meta = (*decoder)->meta();
+        const auto pitch = meta.width * 8;
+        std::vector<std::byte> pixels(static_cast<std::size_t>(pitch) * meta.height);
+        REQUIRE((*decoder)->decodeFrame(0, format, pixels, pitch).has_value());
+        bool distinguishedFromShift = false;
+        for (std::uint32_t y = 0; y < meta.height; ++y) {
+            for (std::uint32_t x = 0; x < meta.width; ++x) {
+                const auto sample = alpha.at(x, y);
+                const auto expectedAlpha = rescaleTo16(sample, alpha.depth);
+                CHECK(pixelAt16<4>(pixels, pitch, x, y)[3] == expectedAlpha);
+                distinguishedFromShift = distinguishedFromShift || expectedAlpha != (sample << 4U);
+            }
+        }
+        CHECK(distinguishedFromShift);
+    }
+}
+
 TEST_CASE("alpha fixture converts to exact straight BGRA alpha")
 {
     auto bytes = readFixture("alpha_steps.avif");
@@ -807,6 +1054,73 @@ TEST_CASE("the RGB target hands libavif the caller buffer, requested BGR/BGRA de
     CHECK(bgra64.maxThreads == 4);
     CHECK(bgra64.pixels == reinterpret_cast<std::uint8_t *>(buffer.data()));
     CHECK(bgra64.rowBytes == 40);
+}
+
+TEST_CASE("native RGB targets preserve the caller storage contract")
+{
+    using pvdkit::avif::detail::rgbTarget;
+    avifImage image{};
+    image.width = 5;
+    image.height = 2;
+    image.depth = 10;
+    std::array<std::byte, 5 * 8 * 2> buffer{};
+
+    struct ExpectedTarget
+    {
+        PixelFormat format;
+        avifRGBFormat avifFormat;
+        std::uint32_t depth;
+        std::uint32_t pitch;
+    };
+    constexpr std::array expected{
+        ExpectedTarget{PixelFormat::Rgb24, AVIF_RGB_FORMAT_RGB, 8, 15},
+        ExpectedTarget{PixelFormat::Rgba32, AVIF_RGB_FORMAT_RGBA, 8, 20},
+        ExpectedTarget{PixelFormat::Rgba64, AVIF_RGB_FORMAT_RGBA, 16, 40},
+    };
+    for (const auto &target : expected) {
+        CAPTURE(static_cast<unsigned>(target.format));
+        const auto rgb = rgbTarget(image, target.format, buffer, target.pitch, 4);
+        CHECK(rgb.width == 5);
+        CHECK(rgb.height == 2);
+        CHECK(rgb.format == target.avifFormat);
+        CHECK(rgb.depth == target.depth);
+        CHECK(rgb.alphaPremultiplied == AVIF_FALSE);
+        CHECK(rgb.chromaUpsampling == AVIF_CHROMA_UPSAMPLING_AUTOMATIC);
+        CHECK(rgb.maxThreads == 4);
+        CHECK(rgb.pixels == reinterpret_cast<std::uint8_t *>(buffer.data()));
+        CHECK(rgb.rowBytes == target.pitch);
+    }
+}
+
+TEST_CASE("native RGB destination validation checks complete pixel rows")
+{
+    using pvdkit::avif::detail::checkDestination;
+    pvdkit::core::ImageMeta meta{};
+    meta.width = 2;
+    meta.height = 3;
+
+    struct ExpectedStorage
+    {
+        PixelFormat format;
+        std::uint32_t pitch;
+    };
+    constexpr std::array expected{
+        ExpectedStorage{PixelFormat::Rgb24, 6},
+        ExpectedStorage{PixelFormat::Rgba32, 8},
+        ExpectedStorage{PixelFormat::Rgba64, 16},
+    };
+    for (const auto &storage : expected) {
+        CAPTURE(static_cast<unsigned>(storage.format));
+        const auto size = static_cast<std::size_t>(storage.pitch) * 3;
+        CHECK(checkDestination(meta, storage.format, size, storage.pitch).has_value());
+        CHECK(checkDestination(meta, storage.format, size + 6, storage.pitch + 2).has_value());
+        const auto shortPitch = checkDestination(meta, storage.format, size, storage.pitch - 1);
+        REQUIRE_FALSE(shortPitch.has_value());
+        CHECK(shortPitch.error().code == ErrorCode::Internal);
+        const auto shortCapacity = checkDestination(meta, storage.format, size - 1, storage.pitch);
+        REQUIRE_FALSE(shortCapacity.has_value());
+        CHECK(shortCapacity.error().code == ErrorCode::Internal);
+    }
 }
 
 TEST_CASE("signature probing and hostile inputs fail without crashing")

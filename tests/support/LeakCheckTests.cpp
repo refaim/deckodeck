@@ -116,10 +116,15 @@ namespace
     class ContendedSection
     {
       public:
-        ContendedSection()
+        explicit ContendedSection(const DWORD waiterDelayMs = 0)
         {
             InitializeCriticalSection(&section_);
-            contend();
+            try {
+                contend(waiterDelayMs);
+            } catch (...) {
+                DeleteCriticalSection(&section_);
+                throw;
+            }
         }
 
         ~ContendedSection()
@@ -136,25 +141,41 @@ namespace
         }
 
       private:
-        // Thread A holds the section until told to let go; thread B blocks on it meanwhile.
-        void contend()
+        // Keep ownership until the other thread has actually allocated DebugInfo. A ready
+        // thread may remain unscheduled beyond any fixed sleep, especially during parallel gates.
+        void contend(const DWORD waiterDelayMs)
         {
-            const UniqueHandle held{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
-            const UniqueHandle release{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
-            REQUIRE((held && release));
-            std::jthread holder{[&] {
+            std::jthread waiter;
+            bool readSucceeded = false;
+            bool allocated = false;
+            {
                 EnterCriticalSection(&section_);
-                SetEvent(held.get());
-                WaitForSingleObject(release.get(), INFINITE);
-                LeaveCriticalSection(&section_);
-            }};
-            WaitForSingleObject(held.get(), INFINITE);
-            std::jthread waiter{[&] {
-                EnterCriticalSection(&section_);
-                LeaveCriticalSection(&section_);
-            }};
-            Sleep(20); // long enough for the waiter to block, which is what allocates the debug block
-            SetEvent(release.get());
+                const std::unique_ptr<CRITICAL_SECTION, decltype(&LeaveCriticalSection)> held{&section_,
+                                                                                              LeaveCriticalSection};
+                waiter = std::jthread{[&] {
+                    Sleep(waiterDelayMs);
+                    EnterCriticalSection(&section_);
+                    LeaveCriticalSection(&section_);
+                }};
+                const auto deadline = GetTickCount64() + 30'000;
+                do {
+                    std::uintptr_t info = 0;
+                    // Observe through Win32 rather than concurrently reading a pointer that
+                    // ntdll writes, or modifying the logically opaque critical section.
+                    readSucceeded =
+                        ReadProcessMemory(GetCurrentProcess(), static_cast<const void *>(&section_.DebugInfo), &info,
+                                          sizeof(info), nullptr) != FALSE;
+                    allocated = info != 0 && info != static_cast<std::uintptr_t>(-1);
+                    if (!readSucceeded || allocated) {
+                        break;
+                    }
+                    Sleep(1);
+                } while (GetTickCount64() < deadline);
+            }
+            // Even a failed observation must unlock and join before a doctest assertion throws.
+            waiter.join();
+            REQUIRE(readSucceeded);
+            REQUIRE(allocated);
         }
 
         CRITICAL_SECTION section_{};
@@ -345,6 +366,13 @@ TEST_CASE("a view of a file is listed with the file behind it, so a lazily mappe
     CHECK(exactCountersZero(snapshotResources() - before));
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
+}
+
+TEST_CASE("a delayed waiter still allocates the critical section debug block")
+{
+    const ContendedSection section{100};
+    CHECK(section.section().DebugInfo != nullptr);
+    CHECK(reinterpret_cast<std::uintptr_t>(section.section().DebugInfo) != static_cast<std::uintptr_t>(-1));
 }
 
 TEST_CASE("a critical section's debug block is recognised and reported, not charged")

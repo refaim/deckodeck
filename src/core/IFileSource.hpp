@@ -18,12 +18,13 @@ namespace pvdkit::core
         [[nodiscard]] virtual std::span<const std::byte> bytes() const = 0;
     };
 
-    /// Opens UTF-8 paths as owned read-only file data.
+    /// Opens UTF-8 or native UTF-16 paths as owned read-only file data.
     class IFileSource
     {
       public:
         virtual ~IFileSource() = default;
         [[nodiscard]] virtual Result<std::unique_ptr<IFileData>> open(std::string_view utf8Path) = 0;
+        [[nodiscard]] virtual Result<std::unique_ptr<IFileData>> open(std::wstring_view widePath) = 0;
     };
 
 } // namespace pvdkit::core

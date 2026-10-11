@@ -8,10 +8,10 @@ namespace pvdkit::rpgmvp
         std::string kind(const core::ImageMeta &meta)
         {
             if (meta.indexed) {
-                return meta.hasAlpha ? "palette with transparency" : "palette";
+                return meta.hasAlpha ? "indexed+alpha" : "indexed";
             }
             if (meta.chroma == core::ChromaFormat::Yuv400) {
-                return meta.hasAlpha ? "greyscale with alpha" : "greyscale";
+                return meta.hasAlpha ? "grey+alpha" : "grey";
             }
             return meta.hasAlpha ? "RGBA" : "RGB";
         }
@@ -20,7 +20,7 @@ namespace pvdkit::rpgmvp
 
     std::string describe(const core::ImageMeta &meta)
     {
-        std::string result = "RPG Maker MV/MZ encrypted PNG, " + std::to_string(meta.depth) + "-bit " + kind(meta);
+        std::string result = std::to_string(meta.depth) + "-bit " + kind(meta);
         if (meta.interlaced) {
             result += ", interlaced";
         }

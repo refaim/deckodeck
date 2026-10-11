@@ -57,13 +57,14 @@ namespace pvdkit::e2e
         const auto exit = resolve<decltype(&pvdExit)>(module.get(), "pvdExit");
         const auto pluginInfo = resolve<decltype(&pvdPluginInfo)>(module.get(), "pvdPluginInfo");
         const auto fileOpen = resolve<decltype(&pvdFileOpen)>(module.get(), "pvdFileOpen");
+        const auto fileOpenW = resolve<decltype(&pvdFileOpenW)>(module.get(), "pvdFileOpenW");
         const auto pageInfo = resolve<decltype(&pvdPageInfo)>(module.get(), "pvdPageInfo");
         const auto pageDecode = resolve<decltype(&pvdPageDecode)>(module.get(), "pvdPageDecode");
         const auto pageFree = resolve<decltype(&pvdPageFree)>(module.get(), "pvdPageFree");
         const auto fileClose = resolve<decltype(&pvdFileClose)>(module.get(), "pvdFileClose");
-        for (const auto &failure :
-             {init.error_or(""), exit.error_or(""), pluginInfo.error_or(""), fileOpen.error_or(""),
-              pageInfo.error_or(""), pageDecode.error_or(""), pageFree.error_or(""), fileClose.error_or("")}) {
+        for (const auto &failure : {init.error_or(""), exit.error_or(""), pluginInfo.error_or(""),
+                                    fileOpen.error_or(""), fileOpenW.error_or(""), pageInfo.error_or(""),
+                                    pageDecode.error_or(""), pageFree.error_or(""), fileClose.error_or("")}) {
             if (!failure.empty()) {
                 return std::unexpected(failure);
             }
@@ -72,6 +73,7 @@ namespace pvdkit::e2e
         exports.exit = *exit;
         exports.pluginInfo = *pluginInfo;
         exports.fileOpen = *fileOpen;
+        exports.fileOpenW = *fileOpenW;
         exports.pageInfo = *pageInfo;
         exports.pageDecode = *pageDecode;
         exports.pageFree = *pageFree;
@@ -164,10 +166,10 @@ namespace pvdkit::e2e
             return false;
         }
         const auto pitch = static_cast<std::uint64_t>(pitchBytes);
-        if (bitsPerPixel == 64) {
-            return pitch >= static_cast<std::uint64_t>(width) * 8U;
+        if (bitsPerPixel == 49 || bitsPerPixel == 64 || bitsPerPixel == 65) {
+            return pitch >= static_cast<std::uint64_t>(width) * (bitsPerPixel / 8U);
         }
-        if (bitsPerPixel == 24 || bitsPerPixel == 32) {
+        if (bitsPerPixel == 24 || bitsPerPixel == 25 || bitsPerPixel == 32 || bitsPerPixel == 33) {
             return pitch == static_cast<std::uint64_t>(width) * (bitsPerPixel / 8U);
         }
         return false;
@@ -183,8 +185,8 @@ namespace pvdkit::e2e
         if (exports.pageDecode(context, page, &decoded.decode, callback, callbackContext) == FALSE) {
             return std::nullopt;
         }
-        // The plugin promises top-down rows and a writable buffer of its own. The established
-        // The kit emits tight 24/32/64-bit layouts; accept host-valid padding on the 64-bit path.
+        // The plugin promises top-down rows and a writable buffer of its own. Native RGB wire
+        // codes preserve the stored size; accept host-valid padding on 16-bit RGB/RGBA paths.
         REQUIRE(decoded.decode.pImage != nullptr);
         REQUIRE(isSupportedDecodeLayout(decoded.page.lWidth, decoded.decode.nBPP, decoded.decode.lImagePitch));
         return decoded;

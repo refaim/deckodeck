@@ -1,2 +1,5 @@
-plugins/*/package/readme_*.txt -text
-plugins/*/package/ChangeLog -text
+# Distribution readmes require CRLF; the package-docs gate enforces their exact encoding.
+plugins/*/package/readme_*.txt -text whitespace=cr-at-eol
+plugins/*/package/ChangeLog -text whitespace=cr-at-eol
+# Preserve the author's SDK snapshot byte-for-byte, including its CRLF line endings.
+third_party/pvd/PictureViewPlugin.h -text whitespace=cr-at-eol

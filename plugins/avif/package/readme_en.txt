@@ -9,13 +9,15 @@ How to use:
   Nothing to learn. Open an .avif file the way you open any picture in
   PictureView. Animated files come as pages, switch them as usual.
 
-  Transparency is shown. Identity 8-bit SDR pictures use BGR24 when opaque
-  or BGRA32 with alpha. Pictures needing HDR or wide-gamut presentation,
-  at any depth, and all pictures deeper than 8 bits use BGRA64. Thus, with
-  dithering or 10-bit output enabled in PictureView's settings, you see all
+  Transparency is shown. Identity 8-bit SDR pictures use RGB24 when opaque
+  or RGBA32 with alpha. Pictures needing HDR or wide-gamut presentation,
+  at any depth, and all pictures deeper than 8 bits use RGB48 when opaque
+  or RGBA64 with alpha. RGB48 keeps 16-bit precision with 6 bytes per pixel
+  instead of 8. With dithering or 10-bit output enabled in PictureView, you see all
   the precision of deep files. Rotation, mirroring and cropping stored in
   the file are applied. EXIF orientation is honoured when the file has
   no irot/imir transformation.
+  The legacy PictureView interface retains the corresponding BGR/BGRA layouts.
 
   HDR (PQ/HLG) and wide-gamut (Rec.2020/P3) pictures are converted to
   sRGB for display, with BT.2390 tone mapping for HDR.

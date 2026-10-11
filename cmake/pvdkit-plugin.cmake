@@ -212,7 +212,7 @@ function(pvdkit_add_plugin_e2e_tests id)
         "pvdkit_add_plugin_e2e_tests(${id}): SEQUENCE_EXPECTATIONS must name the plugin's expectation source")
   endif()
 
-  # The test loads the built DLL with LoadLibraryW and drives its eight exports like the host; it
+  # The test loads the built DLL with LoadLibraryW and drives its nine exports like the host; it
   # links none of the plugin's static libraries (pvdkit_options only carries flags, and the pvd
   # include path serves the SDK types). The shared driver sources are compiled into every plugin's
   # e2e test because pluginPath()/fixturePath() come from per-plugin compile definitions.
@@ -253,7 +253,7 @@ function(pvdkit_add_plugin_e2e_tests id)
     COMMAND "${PVDKIT_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File
             "${PROJECT_SOURCE_DIR}/scripts/check-imports.ps1" -Path "$<TARGET_FILE:${id}_plugin>")
 
-  # The export-table policy: exactly the eight PVD entry points under their bare names. On x86 the
+  # The export-table policy: exactly the nine PVD entry points under their bare names. On x86 the
   # __stdcall symbols are `_pvdInit@0` etc.; the .def file makes the linker export them undecorated,
   # and this test keeps it that way on both architectures (same Release-only registration as above).
   add_test(

@@ -163,8 +163,9 @@ namespace pvdkit::sequence
         if (decoded.pImage == nullptr) {
             return "pvdPageDecode returned a null image";
         }
-        if (decoded.nBPP != 24 && decoded.nBPP != 32 && decoded.nBPP != 64) {
-            return "pvdPageDecode returned a pixel depth other than 24, 32 or 64";
+        if (decoded.nBPP != 24 && decoded.nBPP != 25 && decoded.nBPP != 32 && decoded.nBPP != 33 &&
+            decoded.nBPP != 49 && decoded.nBPP != 64 && decoded.nBPP != 65) {
+            return "pvdPageDecode returned an unsupported BGR or RGB pixel layout";
         }
 
         const auto signedPitch = static_cast<std::int64_t>(decoded.lImagePitch);

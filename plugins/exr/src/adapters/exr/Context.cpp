@@ -6,6 +6,8 @@
 #include <utility>
 
 #include <Imath/ImathConfig.h>
+#include <OpenEXR/ImfChromaticities.h>
+#include <OpenEXR/ImfMultiView.h>
 #include <libdeflate.h>
 #include <openjph/ojph_version.h>
 
@@ -117,9 +119,12 @@ namespace pvdkit::exr
                     part.multiView = attributeStrings(context, partIndex, "multiView");
                     for (int channel = 0; channel < channels->num_channels; ++channel) {
                         const auto &entry = channels->entries[channel];
-                        part.channels.push_back(
-                            ChannelInfo{std::string{entry.name.str, static_cast<std::size_t>(entry.name.length)},
-                                        pixelType(entry.pixel_type), entry.x_sampling, entry.y_sampling});
+                        std::string name{entry.name.str, static_cast<std::size_t>(entry.name.length)};
+                        const auto view =
+                            part.multiView.empty() ? part.view : Imf::viewFromChannelName(name, part.multiView);
+                        const auto normalized = part.multiView.empty() ? name : Imf::removeViewName(name, view);
+                        part.channels.push_back(ChannelInfo{std::move(name), pixelType(entry.pixel_type),
+                                                            entry.x_sampling, entry.y_sampling, view, normalized});
                     }
                     return part;
                 });

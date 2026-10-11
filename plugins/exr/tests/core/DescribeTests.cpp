@@ -12,7 +12,6 @@ namespace pvdkit::exr
 {
     namespace
     {
-
         SourceFacts baseline()
         {
             SourceFacts facts;
@@ -20,7 +19,7 @@ namespace pvdkit::exr
             facts.colour = ColourSignal{PrimariesMatch::Rec709, 1, std::nullopt, std::nullopt};
             facts.compression = Compression::Zip;
             facts.display = Box{0, 0, 1919, 1079};
-            facts.data = Box{0, 0, 1919, 1079};
+            facts.data = facts.display;
             return facts;
         }
 
@@ -40,152 +39,111 @@ namespace pvdkit::exr
             CHECK(compressionName(Compression::Htj2k32) == "HTJ2K");
         }
 
-        TEST_CASE("the source line names channels colour compression layout windows and white")
+        TEST_CASE("single-page source summaries omit geometry compression exposure and channel prefixes")
         {
-            CHECK(describeSource(baseline()) ==
-                  "half RGBA, linear Rec.709, ZIP, scanline, display 1920x1080, data 1920x1080 at 0,0, 100 nit white");
-
-            auto facts = baseline();
-            facts.selection = ChannelSelection{ChannelKind::Rgb, "", {"R", "G", "B"}, "", PixelType::Float};
-            facts.compression = Compression::Piz;
-            facts.whiteLuminance = 250.0F;
-            facts.display = Box{-40, -40, 440, 330};
-            facts.data = Box{0, 0, 399, 299};
-            CHECK(describeSource(facts) == "float RGB, linear Rec.709, PIZ, scanline, display 481x371 at -40,-40, "
-                                           "data 400x300 at 0,0, 250 nit white");
-            facts.display = Box{0, 5, 480, 375};
-            CHECK(describeSource(facts).find(", display 481x371 at 0,5, ") != std::string::npos);
-        }
-
-        TEST_CASE("channel kinds and layers are spelled out")
-        {
+            CHECK(describeSource(baseline()) == "half RGBA, linear Rec.709");
             auto facts = baseline();
             facts.selection = ChannelSelection{
-                ChannelKind::Rgb, "beauty", {"beauty.R", "beauty.G", "beauty.B"}, "beauty.A", PixelType::Half};
-            CHECK(describeSource(facts).starts_with("half RGBA (layer beauty), "));
-            facts.selection =
-                ChannelSelection{ChannelKind::LuminanceChroma, "", {"Y", "RY", "BY"}, "", PixelType::Half};
-            CHECK(describeSource(facts).starts_with("half Y+chroma, "));
-            facts.selection =
-                ChannelSelection{ChannelKind::LuminanceChroma, "", {"Y", "RY", "BY"}, "A", PixelType::Half};
-            CHECK(describeSource(facts).starts_with("half Y+chroma with alpha, "));
-            facts.selection = ChannelSelection{ChannelKind::Luminance, "", {"Y", "", ""}, "", PixelType::Float};
-            CHECK(describeSource(facts).starts_with("float Y, "));
-            facts.selection = ChannelSelection{ChannelKind::Luminance, "", {"Y", "", ""}, "A", PixelType::Half};
-            CHECK(describeSource(facts).starts_with("half Y with alpha, "));
-            facts.selection = ChannelSelection{ChannelKind::Single, "", {"Z", "", ""}, "", PixelType::Float};
-            CHECK(describeSource(facts).starts_with("float Z as grey, "));
-            // A kind outside the enumeration (never produced) prints the sample type alone.
-            facts.selection = ChannelSelection{static_cast<ChannelKind>(255), "", {"Z", "", ""}, "", PixelType::Half};
-            CHECK(describeSource(facts).starts_with("half , "));
+                ChannelKind::Rgb, "beauty", {"beauty.R", "beauty.G", "beauty.B"}, "", PixelType::Float};
+            facts.compression = Compression::Piz;
+            facts.whiteLuminance = 1.0e30F;
+            facts.display = Box{-40, -40, 440, 330};
+            facts.data = Box{5, 3, 404, 302};
+            facts.colorInteropID = "lin_rec709";
+            facts.tiled = true;
+            facts.levelMode = LevelMode::Ripmap;
+            facts.tileWidth = 64;
+            facts.levelsX = 5;
+            facts.levelsY = 4;
+            CHECK(describeSource(facts) == "float RGB, linear Rec.709");
         }
 
-        TEST_CASE("colour is named by its match and custom sets print their coordinates")
+        TEST_CASE("single-page channel summaries distinguish colour luminance chroma and grey")
+        {
+            auto facts = baseline();
+            facts.selection =
+                ChannelSelection{ChannelKind::LuminanceChroma, "", {"Y", "RY", "BY"}, "", PixelType::Half};
+            CHECK(describeSource(facts) == "half Y+chroma, linear Rec.709");
+            facts.selection.alpha = "A";
+            CHECK(describeSource(facts) == "half Y+chroma+A, linear Rec.709");
+            facts.selection = ChannelSelection{ChannelKind::Luminance, "", {"Y", "", ""}, "", PixelType::Float};
+            CHECK(describeSource(facts) == "float Y, linear Rec.709");
+            facts.selection.alpha = "A";
+            CHECK(describeSource(facts) == "float YA, linear Rec.709");
+            facts.selection = ChannelSelection{ChannelKind::Single, "", {"Z", "", ""}, "", PixelType::Float};
+            CHECK(describeSource(facts) == "float grey, linear Rec.709");
+            facts.selection.kind = static_cast<ChannelKind>(255);
+            CHECK(describeSource(facts) == "float , linear Rec.709");
+        }
+
+        TEST_CASE("single-page colour summaries retain known custom and assumed colour distinctions")
         {
             auto facts = baseline();
             facts.colour = ColourSignal{PrimariesMatch::AcesAp0, 2, kAcesAp0, std::nullopt};
-            CHECK(describeSource(facts).find(", linear ACES AP0, ") != std::string::npos);
+            CHECK(describeSource(facts) == "half RGBA, linear ACES AP0");
             facts.colour = ColourSignal{PrimariesMatch::Rec2020, 9, std::nullopt, std::nullopt};
-            CHECK(describeSource(facts).find(", linear Rec.2020, ") != std::string::npos);
-            facts.colour =
-                ColourSignal{PrimariesMatch::Custom, 2,
-                             core::colour::Primaries::Chromaticities{
-                                 {0.7347F, 0.2653F}, {0.1596F, 0.8404F}, {0.0366F, 0.0001F}, {0.3457F, 0.3585F}},
-                             std::nullopt};
-            CHECK(
-                describeSource(facts).find(", linear, unknown chromaticities (custom: R 0.7347,0.2653 G 0.1596,0.8404 "
-                                           "B 0.0366,0.0001 W 0.3457,0.3585), ") != std::string::npos);
-            facts.colour = ColourSignal{PrimariesMatch::CieXyz, 2,
-                                        core::colour::Primaries::Chromaticities{
-                                            {1.0F, 0.0F}, {0.0F, 1.0F}, {0.0F, 0.0F}, {1.0F / 3.0F, 1.0F / 3.0F}},
-                                        std::nullopt};
-            CHECK(describeSource(facts).find(", linear CIE XYZ, ") != std::string::npos);
-            // An attribute no derivation can use: Rec.709 stands in, the values are still printed.
+            CHECK(describeSource(facts) == "half RGBA, linear Rec.2020");
+            facts.colour = ColourSignal{PrimariesMatch::Custom, 2, kAcesAp0, std::nullopt};
+            CHECK(describeSource(facts) == "half RGBA, linear custom");
             facts.colour = ColourSignal{PrimariesMatch::Rec709, 1, std::nullopt,
                                         core::colour::Primaries::Chromaticities{
                                             {0.640F, 0.330F}, {0.300F, 0.600F}, {0.150F, 0.060F}, {0.3127F, 0.0F}}};
-            CHECK(describeSource(facts).find(", linear Rec.709 assumed, unusable chromaticities (R 0.6400,0.3300 "
-                                             "G 0.3000,0.6000 B 0.1500,0.0600 W 0.3127,0.0000), ") !=
-                  std::string::npos);
-            facts.colorInteropID = "lin_ap0";
-            CHECK(describeSource(facts).find(", colorInteropID lin_ap0, ") != std::string::npos);
+            CHECK(describeSource(facts) == "half RGBA, linear Rec.709 assumed");
         }
 
-        TEST_CASE("the white luminance item rounds and clamps whatever the attribute says")
-        {
-            auto facts = baseline();
-            facts.whiteLuminance = 249.6F;
-            CHECK(describeSource(facts).find(", 250 nit white") != std::string::npos);
-            // Beyond any integer: the item saturates instead of rounding an unrepresentable value.
-            facts.whiteLuminance = 1.0e30F;
-            CHECK(describeSource(facts).find(", 9223372036854775807 nit white") != std::string::npos);
-        }
-
-        TEST_CASE("tiles levels parts views and skipped deep parts are reported")
-        {
-            auto facts = baseline();
-            facts.tiled = true;
-            facts.tileWidth = 64;
-            facts.tileHeight = 32;
-            CHECK(describeSource(facts).find(", tiled 64x32, ") != std::string::npos);
-            facts.levelMode = LevelMode::Mipmap;
-            facts.levelsX = 5;
-            facts.levelsY = 5;
-            CHECK(describeSource(facts).find(", tiled 64x32, 5 mip levels, ") != std::string::npos);
-            facts.levelMode = LevelMode::Ripmap;
-            facts.levelsX = 5;
-            facts.levelsY = 4;
-            CHECK(describeSource(facts).find(", tiled 64x32, 5x4 rip levels, ") != std::string::npos);
-            facts.levelMode = static_cast<LevelMode>(255);
-            CHECK(describeSource(facts).find(", tiled 64x32, display") != std::string::npos);
-
-            facts = baseline();
-            facts.partCount = 2;
-            facts.partIndex = 1;
-            facts.partName = "beauty";
-            CHECK(describeSource(facts).ends_with(", 100 nit white, 2 parts (part 1: beauty)"));
-            facts.partName.clear();
-            CHECK(describeSource(facts).ends_with(", 100 nit white, 2 parts (part 1)"));
-            facts.stereo = true;
-            facts.view = "left";
-            CHECK(describeSource(facts).ends_with(", 2 parts (part 1), stereo (left view)"));
-            facts.view.clear();
-            CHECK(describeSource(facts).ends_with(", 2 parts (part 1), stereo"));
-            facts.deepSkipped = true;
-            CHECK(describeSource(facts).ends_with(", stereo, deep parts skipped"));
-        }
-
-        TEST_CASE("the presentation note follows the peak the decoder measured")
+        TEST_CASE("presentation summaries name the output without repeating tone-map diagnostics")
         {
             core::ImageMeta meta;
             meta.cicp = core::Cicp{1, 16, 0, true};
             meta.masteringPeakNits = 1'250.0F;
-            CHECK(presentationNote(meta) == "→ sRGB (BT.2390 tone map from 1250 nit)");
+            CHECK(presentationNote(meta) == "→ sRGB");
             meta.masteringPeakNits = 100.0F;
-            CHECK(presentationNote(meta) == "→ sRGB (SDR range, no highlight compression)");
-            meta.masteringPeakNits = 100.4F;
-            CHECK(presentationNote(meta) == "→ sRGB (SDR range, no highlight compression)");
-            meta.masteringPeakNits = 10'000.0F;
-            CHECK(presentationNote(meta) == "→ sRGB (BT.2390 tone map from 10000 nit)");
-
+            CHECK(presentationNote(meta) == "→ sRGB");
             meta.sourceDetail = "half RGB, linear Rec.709";
-            CHECK(exr::describe(meta) == "half RGB, linear Rec.709, → sRGB (BT.2390 tone map from 10000 nit)");
+            CHECK(exr::describe(meta) == "half RGB, linear Rec.709 → sRGB");
         }
 
-        TEST_CASE("the describer hands the host the format compression and comments")
+        TEST_CASE("multipage source summaries describe the file without asserting one page's properties")
+        {
+            auto facts = baseline();
+            facts.pageCount = 2;
+            facts.partCount = 2;
+            facts.partName = "beauty";
+            CHECK(describeSource(facts) == "2 pages, multipart");
+            facts.stereo = true;
+            facts.view = "left";
+            CHECK(describeSource(facts) == "2 pages, multipart, multiview");
+            facts.partCount = 1;
+            CHECK(describeSource(facts) == "2 pages, multiview");
+            facts.stereo = false;
+            CHECK(describeSource(facts) == "2 pages, layers");
+            facts.selection.type = PixelType::Float;
+            facts.colour = ColourSignal{PrimariesMatch::AcesAp0, 2, kAcesAp0, std::nullopt};
+            CHECK(describeSource(facts) == "2 pages, layers");
+        }
+
+        TEST_CASE("single-page describer retains compression in its dedicated host field")
         {
             core::ImageMeta meta;
-            meta.cicp = core::Cicp{1, 16, 0, true};
-            meta.masteringPeakNits = 400.0F;
+            meta.frameCount = 1;
             meta.compression = "PIZ";
-            meta.sourceDetail = "half RGBA, linear Rec.709, PIZ, scanline";
-            const Describer describer;
-            const auto description = describer.describe(meta);
+            meta.sourceDetail = "half RGBA, linear Rec.709";
+            const auto description = Describer{}.describe(meta);
             CHECK(description.formatName == "OpenEXR");
             CHECK(description.compression == "PIZ");
-            CHECK(description.comments ==
-                  "half RGBA, linear Rec.709, PIZ, scanline, → sRGB (BT.2390 tone map from 400 nit)");
+            CHECK(description.comments == "half RGBA, linear Rec.709 → sRGB");
         }
 
+        TEST_CASE("multipage describer does not present the first page's compression as a file-wide fact")
+        {
+            core::ImageMeta meta;
+            meta.frameCount = 2;
+            meta.compression = "PIZ";
+            meta.sourceDetail = "2 pages, multipart, multiview";
+            const auto description = Describer{}.describe(meta);
+            CHECK(description.formatName == "OpenEXR");
+            CHECK(description.compression.empty());
+            CHECK(description.comments == "2 pages, multipart, multiview → sRGB");
+        }
     } // namespace
 } // namespace pvdkit::exr

@@ -73,6 +73,17 @@ extern "C" BOOL __stdcall pvdFileOpen(const char *fileName, const INT64 fileSize
         FALSE);
 }
 
+extern "C" BOOL __stdcall pvdFileOpenW(const wchar_t *fileName, const INT64 fileSize, const BYTE *head,
+                                       const UINT32 headSize, pvdInfoImage *output, void **context)
+{
+    return pvdkit::pvd::guarded(
+        [&] {
+            return processState ? processState->shim().fileOpenW(fileName, fileSize, head, headSize, output, context)
+                                : FALSE;
+        },
+        FALSE);
+}
+
 extern "C" BOOL __stdcall pvdPageInfo(void *context, const UINT32 page, pvdInfoPage *output)
 {
     return pvdkit::pvd::guarded(

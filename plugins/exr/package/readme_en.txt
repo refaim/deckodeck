@@ -15,21 +15,31 @@ How to use:
   plugin takes 1.0 as 100 nit (or as the file's whiteLuminance), honours
   the file's primaries (Rec.709, Rec.2020, P3-D65, ACES AP0/AP1 or any
   custom chromaticities) and squeezes the highlights into the display
-  range with BT.2390 tone mapping from the picture's own peak. Every
-  picture is handed to PictureView as 16-bit BGRA, so with dithering or
-  10-bit output enabled in its settings you see the whole precision.
-  Transparency is shown; the EXR premultiplied alpha becomes straight
-  alpha. The display window is what you see: data outside it is cropped
+  range with BT.2390 tone mapping from the picture's own peak. PictureView
+  versions using the wide filename entry point receive 16-bit RGB for
+  opaque images or RGBA with transparency; the older entry point retains
+  16-bit BGRA. Dithering and 10-bit output can use the 16-bit output
+  precision. Opaque native RGB uses 25% less pixel storage for both the
+  cached image and the displayed page. The EXR premultiplied alpha becomes
+  straight alpha. The display window is what you see: data outside it is cropped
   and areas without data are black (transparent black with alpha).
 
-  Of a multi-part or stereo file one part is shown: the first one with
-  colour channels, the left view when there are views. Deep parts are
-  skipped. Channels: R, G, B (and A); Y with RY/BY chroma or Y alone;
-  otherwise the first layer with R, G, B; otherwise the first channel
-  as grey. UINT channels (ids, masks) are not colour.
+  Parts, stereo views and complete colour layers are independent pages.
+  Switch them with PictureView's page navigation. The previous preferred
+  picture remains first; other pages are decoded when opened and keep
+  their own size, alpha and colour. Deep parts are skipped. Channels:
+  R, G, B (and A); Y with RY/BY chroma or Y alone; otherwise a usable
+  channel as grey. UINT channels (ids, masks) are not colour. Luminance/chroma
+  reconstruction also honours colorInteropID when chromaticities is
+  absent; valid explicit chromaticities take precedence.
 
-  Not done yet: deep images, multi-part files as pages, the right view,
-  layers other than the first, user exposure or tone controls.
+  The title is a short file summary. For several pages it shows their
+  count and structure (multipart, multiview or layers), since PictureView
+  keeps this text while navigating. Page-specific colour and channels
+  are omitted from that summary.
+
+  Not done yet: deep images, UINT-only channels, mip/rip levels beyond
+  the first, user exposure or tone controls.
 
 Install:
   Unpack the archive into PictureView's folder (the one with

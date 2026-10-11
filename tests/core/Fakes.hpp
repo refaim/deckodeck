@@ -135,8 +135,7 @@ namespace pvdkit::core::test
 
             // Pixel id = 1 + frame * 100 + row-major index, so pages of different
             // frames are distinguishable (frame 0: 1..6, frame 1: 101..106, ...).
-            const auto channels =
-                format == pvd::PixelFormat::Bgra64 ? 8U : (format == pvd::PixelFormat::Bgra32 ? 4U : 3U);
+            const auto channels = pvd::pixelLayout(format).bytesPerPixel;
             for (std::uint32_t y = 0; y < meta_.height; ++y) {
                 for (std::uint32_t x = 0; x < meta_.width; ++x) {
                     const auto id = 1U + frame * 100U + y * meta_.width + x;
@@ -160,6 +159,7 @@ namespace pvdkit::core::test
         int openCalls = 0;
         int dataDestructions = 0;
         std::string openedPath;
+        std::optional<std::wstring> openedWidePath;
         std::vector<std::byte> fileBytes;
         std::optional<Error> openError;
         bool throwOnOpen = false;
@@ -196,9 +196,21 @@ namespace pvdkit::core::test
 
         [[nodiscard]] Result<std::unique_ptr<IFileData>> open(const std::string_view utf8Path) override
         {
+            state_.get().openedPath = utf8Path;
+            return openData();
+        }
+
+        [[nodiscard]] Result<std::unique_ptr<IFileData>> open(const std::wstring_view widePath) override
+        {
+            state_.get().openedWidePath = widePath;
+            return openData();
+        }
+
+      private:
+        [[nodiscard]] Result<std::unique_ptr<IFileData>> openData()
+        {
             auto &state = state_.get();
             ++state.openCalls;
-            state.openedPath = utf8Path;
             if (state.throwOnOpen) {
                 throw FileOpenException{};
             }
@@ -208,7 +220,6 @@ namespace pvdkit::core::test
             return std::unique_ptr<IFileData>{std::make_unique<FakeFileData>(state.fileBytes, state.dataDestructions)};
         }
 
-      private:
         std::reference_wrapper<FileSourceState> state_;
     };
 
@@ -320,12 +331,12 @@ namespace pvdkit::core::test
         return DecoderOptions{2, false, maxPixels, 100};
     }
 
-    /// The sRGB output tables a plugin's composition root would own, built once for the test
+    /// The colour tables a plugin's composition root would own, built once for the test
     /// executable (a function-local static is fine in a test executable; the guard forbids it in
     /// plugin code, where the composition root owns the instance instead).
-    inline const colour::SrgbOutputTables &outputTables()
+    inline const colour::ColourTables &outputTables()
     {
-        static const colour::SrgbOutputTables tables;
+        static const colour::ColourTables tables;
         return tables;
     }
 

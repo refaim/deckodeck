@@ -1,7 +1,7 @@
 #pragma once
 
 // Drives a built plugin (.pvd) exactly the way 0PictureView.dll does: LoadLibraryW, GetProcAddress of
-// the eight exports, then the C ABI. Nothing here links against the plugin's static libraries.
+// the nine exports, then the C ABI. Nothing here links against the plugin's static libraries.
 
 #include <cstddef>
 #include <cstdint>
@@ -19,7 +19,7 @@
 namespace pvdkit::e2e
 {
 
-    /// The eight entry points, typed exactly as the SDK header declares them, so a signature or
+    /// The nine entry points, typed exactly as the SDK header declares them, so a signature or
     /// calling-convention drift between the header and this driver fails to compile here.
     struct PluginExports
     {
@@ -27,6 +27,7 @@ namespace pvdkit::e2e
         decltype(&pvdExit) exit;
         decltype(&pvdPluginInfo) pluginInfo;
         decltype(&pvdFileOpen) fileOpen;
+        decltype(&pvdFileOpenW) fileOpenW;
         decltype(&pvdPageInfo) pageInfo;
         decltype(&pvdPageDecode) pageDecode;
         decltype(&pvdPageFree) pageFree;
@@ -104,14 +105,15 @@ namespace pvdkit::e2e
             return decode.nBPP / 8;
         }
         [[nodiscard]] std::span<const std::byte> row(std::uint32_t y) const noexcept;
-        /// The `bytesPerPixel()` channel bytes of pixel (x, y): B, G, R[, A].
+        /// The stored channel bytes of pixel (x, y), in the order selected by decode.nBPP.
         [[nodiscard]] std::vector<std::uint8_t> pixel(std::uint32_t x, std::uint32_t y) const;
         /// All rows, tightly packed, for whole-image comparisons.
         [[nodiscard]] std::vector<std::byte> pixels() const;
     };
 
     /// Whether a positive top-down pitch can hold one row of a supported host pixel layout.
-    /// The kit emits tight 24/32/64-bit rows; the host contract also permits padded 64-bit rows.
+    /// Wire codes 24/25, 32/33, 49 and 64/65 store 3, 4, 6 and 8 bytes respectively.
+    /// The kit emits tight 8-bit rows; the host contract also permits padded 16-bit RGB/RGBA rows.
     [[nodiscard]] bool isSupportedDecodeLayout(std::uint32_t width, std::uint32_t bitsPerPixel,
                                                std::int32_t pitchBytes) noexcept;
 

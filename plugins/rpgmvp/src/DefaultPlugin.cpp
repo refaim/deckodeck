@@ -27,7 +27,7 @@ namespace pvdkit::pvd
 
         core::DecoderOptions defaultOptions()
         {
-            return {std::max(1U, std::thread::hardware_concurrency()), false, kMaxPixels, kMaxDimension, true};
+            return {std::max(1U, std::thread::hardware_concurrency()), false, kMaxPixels, kMaxDimension, true, true};
         }
 
         PluginInfo defaultInfo()
@@ -40,7 +40,7 @@ namespace pvdkit::pvd
         {
           public:
             explicit DefaultPlugin(const core::DecoderOptions &options)
-                : plugin_{fileSource_, decoderFactory_, describer_, outputTables_, options, defaultInfo()}
+                : plugin_{fileSource_, decoderFactory_, describer_, tables_, options, defaultInfo()}
             {
             }
 
@@ -58,10 +58,9 @@ namespace pvdkit::pvd
             win::FileSource fileSource_;
             rpgmvp::DecoderFactory decoderFactory_;
             rpgmvp::Describer describer_;
-            // The sRGB output tables every colour-presenting session of this plugin borrows: pure
-            // math built once here, in pvdInit, so no function-local static exists anywhere in the
-            // plugin (MSVC >= 14.50 would import api-ms-win-core-synch-l1-2-0.dll for its guard).
-            core::colour::SrgbOutputTables outputTables_;
+            // Plugin-owned sRGB output tables and lazy immutable transfer/gain caches.
+            // Sessions borrow entries; the owner outlives them and never evicts cached tables.
+            core::colour::ColourTables tables_;
             core::CodecPlugin plugin_;
         };
 

@@ -71,6 +71,42 @@ namespace pvdkit::core::colour
             std::vector<std::thread> workers_;
         };
 
+        using ColourTable = std::array<float, 65'536>;
+
+        std::size_t transferSlot(const std::uint16_t characteristics) noexcept
+        {
+            switch (characteristics) {
+            case 1:
+            case 6:
+            case 14:
+            case 15:
+                return 0;
+            case 4:
+                return 1;
+            case 5:
+                return 2;
+            case 8:
+                return 3;
+            case 16:
+                return 4;
+            case 18:
+                return 5;
+            default:
+                return 6;
+            }
+        }
+
+        std::unique_ptr<const ColourTable> makeGainTable(const float peakNits, const std::span<const float> transfer)
+        {
+            auto values = std::make_unique<ColourTable>();
+            const ToneMap::Eetf toneMap{peakNits};
+            for (std::size_t code = 0; code < values->size(); ++code) {
+                const auto linear = transfer[code];
+                (*values)[code] = linear > 0.0F ? toneMap.mapNits(linear) / linear : 0.0F;
+            }
+            return values;
+        }
+
         std::uint16_t exactQuantize(const float linear) noexcept
         {
             const auto encoded = std::clamp(Transfer::linearToSrgb(linear), 0.0F, 1.0F);
@@ -138,52 +174,79 @@ namespace pvdkit::core::colour
         return std::min(*masteringPeakNits, 10'000.0F);
     }
 
+    const SrgbOutputTables &ColourTables::output() const noexcept
+    {
+        return output_;
+    }
+
+    std::span<const float> ColourTables::transfer(const std::uint16_t characteristics) const
+    {
+        const std::lock_guard lock{mutex_};
+        auto &entry = transfers_[transferSlot(characteristics)];
+        if (!entry) {
+            auto values = std::make_unique<Table>();
+            for (std::size_t code = 0; code < values->size(); ++code) {
+                (*values)[code] = Transfer::toLinear(characteristics, static_cast<float>(code) / kCodeMaximum);
+            }
+            entry = std::move(values);
+        }
+        return *entry;
+    }
+
+    std::span<const float> ColourTables::gains(const float peakNits, const std::span<const float> transfer) const
+    {
+        const std::lock_guard lock{mutex_};
+        for (const auto &entry : gains_) {
+            if (entry.values && entry.peakNits == peakNits) {
+                return *entry.values;
+            }
+        }
+        for (auto &entry : gains_) {
+            if (!entry.values) {
+                auto values = makeGainTable(peakNits, transfer);
+                entry.peakNits = peakNits;
+                entry.values = std::move(values);
+                return *entry.values;
+            }
+        }
+        return {};
+    }
+
     Presentation::Presentation(const Cicp &cicp, const std::optional<float> masteringPeakNits,
-                               const SrgbOutputTables &outputTables)
-        : Presentation(cicp, masteringPeakNits, std::nullopt, outputTables)
+                               const ColourTables &tables)
+        : Presentation(cicp, masteringPeakNits, std::nullopt, tables)
     {
     }
 
     Presentation::Presentation(const Cicp &cicp, const std::optional<float> masteringPeakNits,
                                const std::optional<Primaries::Chromaticities> &chromaticities,
-                               const SrgbOutputTables &outputTables)
+                               const ColourTables &tables)
         : Presentation(cicp, masteringPeakNits,
-                       chromaticities && Primaries::isUsable(*chromaticities) ? chromaticities : std::nullopt,
-                       outputTables, Usable{})
+                       chromaticities && Primaries::isUsable(*chromaticities) ? chromaticities : std::nullopt, tables,
+                       Usable{})
     {
     }
 
     Presentation::Presentation(const Cicp &cicp, const std::optional<float> masteringPeakNits,
                                const std::optional<Primaries::Chromaticities> &chromaticities,
-                               const SrgbOutputTables &outputTables, Usable)
+                               const ColourTables &tables, Usable)
         : active_(needed(cicp, chromaticities)), hlg_(cicp.transfer == 18),
           toneMapAfterMatrix_(Transfer::isHdr(cicp.transfer) && (hlg_ || chromaticities.has_value())),
           sourcePeakNits_(colour::sourcePeakNits(cicp.transfer, masteringPeakNits)),
           primaries_(chromaticities ? Primaries::toSrgb(*chromaticities) : Primaries::toSrgb(cicp.primaries)),
           sourceLuminance_(chromaticities ? Primaries::luminanceCoefficients(*chromaticities)
                                           : Primaries::luminanceCoefficients(cicp.primaries)),
-          toneMap_(sourcePeakNits_), outputTables_(outputTables)
+          toneMap_(sourcePeakNits_), outputTables_(tables.output())
     {
         if (!active_) {
             return;
         }
-        // 65,536 transfer decodes and, for PQ over coded primaries, as many EETF evaluations (four
-        // powers each), on the calling thread: no thread is created at pvdFileOpen (the band
-        // workers of applyImage are the only threads a session starts, and only for large
-        // pictures), so the session's tables cost the open what they cost, once (ARCHITECTURE
-        // section 3.7 has the numbers). The object is immutable once the constructor returns.
-        transferLut_ = std::make_unique<Table>();
+        transferLut_ = tables.transfer(cicp.transfer);
         if (Transfer::isHdr(cicp.transfer) && !toneMapAfterMatrix_) {
-            toneGain_ = std::make_unique<Table>();
-        }
-        for (std::size_t code = 0; code < transferLut_->size(); ++code) {
-            const auto linear = Transfer::toLinear(cicp.transfer, static_cast<float>(code) / kCodeMaximum);
-            (*transferLut_)[code] = linear;
-            if (toneGain_) {
-                // The gain ToneMap::applyMaxRgb applies to a pixel whose largest channel is this
-                // code's linear value. Code 0 decodes to no light and its entry is never read: a
-                // pixel whose maximum code is 0 is black by definition (convertPixels below).
-                (*toneGain_)[code] = linear > 0.0F ? toneMap_.mapNits(linear) / linear : 0.0F;
+            toneGain_ = tables.gains(sourcePeakNits_, transferLut_);
+            if (toneGain_.empty()) {
+                ownedToneGain_ = makeGainTable(sourcePeakNits_, transferLut_);
+                toneGain_ = *ownedToneGain_;
             }
         }
     }
@@ -201,8 +264,11 @@ namespace pvdkit::core::colour
     }
 
     template <class Load, class Store>
-    void Presentation::convertPixels(const std::size_t pixelCount, const Load &load, const Store &store) const noexcept
+    void Presentation::convertPixels(const std::size_t pixelCount, const Load &load, const Store &store,
+                                     const bool rgbOrder) const noexcept
     {
+        const std::size_t redChannel = rgbOrder ? 0U : 2U;
+        const std::size_t blueChannel = 2U - redChannel;
         constexpr std::size_t kBlock = 64;
         std::array<float, kBlock> red{};
         std::array<float, kBlock> green{};
@@ -213,21 +279,21 @@ namespace pvdkit::core::colour
             // Pass 1: the transfer LUT, the HLG OOTF and, on the table path, the EETF gain.
             for (std::size_t index = 0; index < count; ++index) {
                 const auto pixel = base + index;
-                const auto redCode = load(pixel, 2);
+                const auto redCode = load(pixel, redChannel);
                 const auto greenCode = load(pixel, 1);
-                const auto blueCode = load(pixel, 0);
-                Primaries::Rgb linear{(*transferLut_)[redCode], (*transferLut_)[greenCode], (*transferLut_)[blueCode]};
+                const auto blueCode = load(pixel, blueChannel);
+                Primaries::Rgb linear{transferLut_[redCode], transferLut_[greenCode], transferLut_[blueCode]};
                 if (hlg_) {
                     linear = hlgDisplayNits(linear, sourceLuminance_);
                 }
-                if (toneGain_) {
+                if (!toneGain_.empty()) {
                     // The LUT is monotone non-decreasing, so the largest linear value is the LUT
                     // at the largest code and the table holds its EETF gain: bit for bit what
                     // applyMaxRgb computes per pixel (tests/support/PresentationReference.hpp,
                     // PipelineTests). A maximum code of 0 is the no-light case, which the curve
                     // maps to the display's black.
                     const auto maximumCode = std::max({redCode, greenCode, blueCode});
-                    const auto gain = (*toneGain_)[maximumCode];
+                    const auto gain = toneGain_[maximumCode];
                     linear = maximumCode == 0 ? Primaries::Rgb{kTargetBlack, kTargetBlack, kTargetBlack}
                                               : Primaries::Rgb{linear[0] * gain, linear[1] * gain, linear[2] * gain};
                 }
@@ -251,55 +317,63 @@ namespace pvdkit::core::colour
                     linear = ToneMap::applyMaxRgb(toneMap_, linear);
                 }
                 const auto pixel = base + index;
-                store(pixel, 0, outputTables_.quantize(linear[2]));
+                store(pixel, blueChannel, outputTables_.quantize(linear[2]));
                 store(pixel, 1, outputTables_.quantize(linear[1]));
-                store(pixel, 2, outputTables_.quantize(linear[0]));
+                store(pixel, redChannel, outputTables_.quantize(linear[0]));
             }
         }
     }
 
-    void Presentation::apply(const std::span<std::uint16_t> bgraRow) const noexcept
+    void Presentation::apply(const std::span<std::uint16_t> bgraRow, const bool rgbOrder,
+                             const unsigned channels) const noexcept
     {
         if (!active_) {
             return;
         }
         convertPixels(
-            bgraRow.size() / 4,
-            [bgraRow](const std::size_t pixel, const std::size_t channel) { return bgraRow[pixel * 4 + channel]; },
-            [bgraRow](const std::size_t pixel, const std::size_t channel, const std::uint16_t code) {
-                bgraRow[pixel * 4 + channel] = code;
-            });
+            bgraRow.size() / channels,
+            [bgraRow, channels](const std::size_t pixel, const std::size_t channel) {
+                return bgraRow[pixel * channels + channel];
+            },
+            [bgraRow, channels](const std::size_t pixel, const std::size_t channel, const std::uint16_t code) {
+                bgraRow[pixel * channels + channel] = code;
+            },
+            rgbOrder);
     }
 
-    void Presentation::apply(const std::span<std::byte> bgraRow) const noexcept
+    void Presentation::apply(const std::span<std::byte> bgraRow, const bool rgbOrder,
+                             const unsigned channels) const noexcept
     {
         if (!active_) {
             return;
         }
         // Little-endian 16-bit samples in byte storage (PixelBuffer owns bytes, not samples).
+        const auto bytesPerPixel = channels * 2U;
         convertPixels(
-            bgraRow.size() / 8,
-            [bgraRow](const std::size_t pixel, const std::size_t channel) {
-                const auto offset = pixel * 8 + channel * 2;
+            bgraRow.size() / bytesPerPixel,
+            [bgraRow, bytesPerPixel](const std::size_t pixel, const std::size_t channel) {
+                const auto offset = pixel * bytesPerPixel + channel * 2;
                 return static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(bgraRow[offset]) |
                                                   (std::to_integer<std::uint8_t>(bgraRow[offset + 1]) << 8U));
             },
-            [bgraRow](const std::size_t pixel, const std::size_t channel, const std::uint16_t code) {
-                const auto offset = pixel * 8 + channel * 2;
+            [bgraRow, bytesPerPixel](const std::size_t pixel, const std::size_t channel, const std::uint16_t code) {
+                const auto offset = pixel * bytesPerPixel + channel * 2;
                 bgraRow[offset] = std::byte{static_cast<std::uint8_t>(code & 0xffU)};
                 bgraRow[offset + 1] = std::byte{static_cast<std::uint8_t>(code >> 8U)};
-            });
+            },
+            rgbOrder);
     }
 
     void Presentation::applyImage(const std::span<std::byte> pixels, const std::uint32_t pitchBytes,
-                                  const std::uint32_t height, const unsigned maxThreads) const
+                                  const std::uint32_t height, const unsigned maxThreads, const bool rgbOrder,
+                                  const unsigned channels) const
     {
         constexpr std::uint64_t kParallelThresholdPixels = 256ULL * 1'024ULL;
         constexpr unsigned kMaximumBands = 4;
-        const auto pixelCount = static_cast<std::uint64_t>(pixels.size()) / 8;
+        const auto pixelCount = static_cast<std::uint64_t>(pixels.size()) / (static_cast<std::uint64_t>(channels) * 2U);
         const auto bandCount = std::min(std::clamp(maxThreads, 1U, kMaximumBands), height);
         if (pixelCount < kParallelThresholdPixels || bandCount == 1) {
-            apply(pixels);
+            apply(pixels, rgbOrder, channels);
             return;
         }
 
@@ -315,10 +389,10 @@ namespace pvdkit::core::colour
             const auto rowCount = rowsPerBand + (bandIndex < extraRows ? 1U : 0U);
             const auto band = pixels.subspan(static_cast<std::size_t>(firstRow) * pitchBytes,
                                              static_cast<std::size_t>(rowCount) * pitchBytes);
-            workers.start([this, band]() noexcept { apply(band); });
+            workers.start([this, band, rgbOrder, channels]() noexcept { apply(band, rgbOrder, channels); });
             firstRow += rowCount;
         }
-        apply(pixels.subspan(static_cast<std::size_t>(firstRow) * pitchBytes));
+        apply(pixels.subspan(static_cast<std::size_t>(firstRow) * pitchBytes), rgbOrder, channels);
     }
 
     float Presentation::sourcePeakNits() const noexcept
@@ -333,7 +407,12 @@ namespace pvdkit::core::colour
 
     std::span<const float> Presentation::toneMapGains() const noexcept
     {
-        return toneGain_ ? std::span<const float>{*toneGain_} : std::span<const float>{};
+        return toneGain_;
+    }
+
+    std::span<const float> Presentation::transferValues() const noexcept
+    {
+        return transferLut_;
     }
 
 } // namespace pvdkit::core::colour

@@ -308,6 +308,46 @@ TEST_CASE("file source opens short absolute paths that rely on Win32 normalisati
     checkOpens(source, utf8Path(LR"(\\.\)" + file.wstring()));
 }
 
+TEST_CASE("wide file source preserves Unicode and lone-surrogate filenames")
+{
+    TempTree tree{L"pvdkit-adapter-wide"};
+    pvdkit::win::FileSource source;
+    for (const auto &name : {std::wstring{L"\u0444\u0430\u0439\u043b-\U0001F600.bin"},
+                             L"surrogate-" + std::wstring(1, static_cast<wchar_t>(0xD800)) + L".bin"}) {
+        const auto file = tree.file(name);
+        writeBytes(file, kPayload);
+        // No UTF-8 conversion: Windows filenames may contain unpaired UTF-16 surrogates.
+        const auto opened = source.open(std::wstring_view{file.native()});
+        REQUIRE(opened.has_value());
+        CHECK(std::ranges::equal((*opened)->bytes(), kPayload));
+    }
+
+    const auto missing = source.open(std::wstring_view{(tree.path() / L"missing.bin").native()});
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().code == ErrorCode::FileOpenFailed);
+    const auto tooLong = source.open(std::wstring_view{LR"(C:\)" + std::wstring(40000, L'c')});
+    REQUIRE_FALSE(tooLong.has_value());
+    CHECK(tooLong.error().code == ErrorCode::FileOpenFailed);
+    CHECK(tooLong.error().detail.starts_with("GetFullPathNameW"));
+}
+
+TEST_CASE("wide file source normalises long paths without converting to UTF-8")
+{
+    TempTree tree{L"pvdkit-adapter-wide-long"};
+    const auto directory = tree.createLongDirectory();
+    const auto file = tree.file(directory / L"\u0444\u0430\u0439\u043b.bin");
+    writeBytes(file, kPayload);
+    const auto slashed =
+        directory.generic_wstring() + L"/../" + directory.filename().wstring() + L"/" + file.filename().wstring();
+    REQUIRE(slashed.size() >= kMaxPath);
+    pvdkit::win::FileSource source;
+    for (const auto &path : {slashed, extended(file).wstring()}) {
+        const auto opened = source.open(std::wstring_view{path});
+        REQUIRE(opened.has_value());
+        CHECK(std::ranges::equal((*opened)->bytes(), kPayload));
+    }
+}
+
 TEST_CASE("file source opens long paths written with forward slashes and dot-dot segments")
 {
     TempTree tree{L"pvdkit-adapter-long-slash"};
