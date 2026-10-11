@@ -60,8 +60,13 @@ namespace
 
         ~ColourFiles()
         {
-            std::error_code ignored;
-            std::filesystem::remove_all(directory_, ignored);
+            try {
+                std::error_code ignored;
+                std::filesystem::remove_all(directory_, ignored);
+            } catch (...) {
+                // Even the error_code overload can allocate; destructor cleanup is best effort.
+                return;
+            }
         }
 
         ColourFiles(const ColourFiles &) = delete;
