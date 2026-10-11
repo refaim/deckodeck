@@ -18,6 +18,7 @@ Each release has a zip per architecture, x64 for 64-bit Far and x86 for 32-bit.
 | --- | --- | --- |
 | AVIF.pvd | 1.2.0 | [avif/v1.2.0](https://github.com/refaim/deckodeck/releases/tag/avif/v1.2.0) |
 | RPGMVP.pvd | 1.2.0 | [rpgmvp/v1.2.0](https://github.com/refaim/deckodeck/releases/tag/rpgmvp/v1.2.0) |
+| EXR.pvd | 1.0.0 | [exr/v1.0.0](https://github.com/refaim/deckodeck/releases/tag/exr/v1.0.0) |
 <!-- downloads:end -->
 
 ## Install
