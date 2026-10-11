@@ -108,8 +108,8 @@ TEST_CASE("leak: a decoder created, used and destroyed N times on every fixture 
             REQUIRE((*decoder)->frameTiming(0).has_value());
             REQUIRE((*decoder)->decodeFrame(0, PixelFormat::Bgra64, pixels, pitch).has_value());
             // Error paths on a live decoder: a frame out of range and a destination too small.
-            CHECK_FALSE((*decoder)->frameTiming(1).has_value());
-            CHECK_FALSE((*decoder)->decodeFrame(1, PixelFormat::Bgra64, pixels, pitch).has_value());
+            CHECK_FALSE((*decoder)->frameTiming(meta.frameCount).has_value());
+            CHECK_FALSE((*decoder)->decodeFrame(meta.frameCount, PixelFormat::Bgra64, pixels, pitch).has_value());
             CHECK_FALSE((*decoder)
                             ->decodeFrame(0, PixelFormat::Bgra64, std::span{pixels}.first(pixels.size() - 1), pitch)
                             .has_value());

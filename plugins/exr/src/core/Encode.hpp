@@ -7,6 +7,7 @@
 
 #include "core/PqTables.hpp"
 #include "core/colour/Primaries.hpp"
+#include "pvd/Types.hpp"
 
 namespace pvdkit::exr
 {
@@ -58,12 +59,14 @@ namespace pvdkit::exr
         bool grey = false;  ///< Only the first float carries light; it feeds all three channels.
         core::colour::Primaries::Rgb luminance{0.2126F, 0.7152F, 0.0722F}; ///< Y coefficients of the file's primaries.
         const PqCodeTables &tables;                                        ///< The plugin's exact encoder.
+        pvd::PixelFormat format = pvd::PixelFormat::Bgra64;                ///< RGB48, RGBA64 or legacy BGRA64.
     };
 
     /// Turns interleaved scene-linear RGBA floats (four per pixel; the fourth is ignored without
-    /// alpha) into BGRA64 PQ codes with straight alpha, sanitizing NaN/inf/negative samples, and
-    /// adds every pixel's luminance to the histogram. `bgra` holds four codes per pixel.
-    void encodePixels(std::span<const float> rgba, const EncodeParams &params, std::span<std::uint16_t> bgra,
+    /// alpha) into the selected RGB48, RGBA64 or BGRA64 PQ layout with straight alpha, sanitizing
+    /// NaN/inf/negative samples, and adds every pixel's luminance to the histogram. `codes` holds
+    /// three codes per RGB48 pixel or four per RGBA64/BGRA64 pixel.
+    void encodePixels(std::span<const float> rgba, const EncodeParams &params, std::span<std::uint16_t> codes,
                       LuminanceHistogram &histogram) noexcept;
 
 } // namespace pvdkit::exr

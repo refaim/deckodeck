@@ -8,7 +8,7 @@ the v1 exclusions. Namespace: `pvdkit::avif`. Include root: `plugins/avif/src`.
 ## 1. Composition root (`src/DefaultPlugin.cpp`)
 
 `pvd::makePlugin()` returns an object that owns, in declaration order, `win::FileSource`,
-`avif::DecoderFactory`, `avif::Describer`, `core::colour::SrgbOutputTables` (the sRGB output tables
+`avif::DecoderFactory`, `avif::Describer`, `core::colour::ColourTables` (the sRGB output tables
 every HDR/wide-gamut session of this plugin instance borrows; built once in `pvdInit`, ≈ 5 ms on
 x64, so that no function-local static exists in the DLL - ARCHITECTURE §7) and `core::CodecPlugin`,
 and forwards `IPlugin`.
@@ -19,9 +19,12 @@ images smaller than 256 Ki pixels remain single-threaded. A session's presentati
 PQ transfer LUT and, for PQ over the coded primaries every AVIF carries, the BT.2390 gain table)
 are built on the calling thread at `pvdFileOpen`: ≈ 9 ms on x64, ≈ 21 ms on x86 (ARCHITECTURE
 §3.7).
-`deepOutput = true`: sources deeper than 8 bits are delivered as BGRA64 by default. An 8-bit source
-also uses BGRA64 when HDR or wide-gamut signalling requires shared colour presentation; identity
-8-bit SDR remains BGR24 when opaque or BGRA32 with alpha.
+`deepOutput = true`, `nativeRgbOutput = true`: a request with `nativeRgb = true` (the wide PVD
+entry point) receives RGB24 when opaque or RGBA32 with straight alpha. Sources deeper than 8 bits,
+and any source needing HDR or wide-gamut colour presentation, use RGB48 when opaque or RGBA64
+with alpha. The PVD format codes are 25, 33, 49 and 65; storage is 3, 4, 6 and 8 bytes per pixel.
+Opaque 16-bit output thus uses 25% less pixel memory than RGBA64. The legacy narrow
+entry point retains BGR24/BGRA32/BGRA64. Custom decoder options default `nativeRgbOutput` to false.
 `PluginInfo{kPluginIdentity.priority (10), name ("AVIF"), version ("<version>"),
 "AVIF decoder: libavif <ver>, dav1d <ver>, libyuv <ver>; static build"}` — the identity from the
 generated `pvd/PluginConstants.hpp` (declared once in `plugins/avif/CMakeLists.txt`), the library
@@ -31,17 +34,15 @@ version test pins the two equal.
 
 ## 2. Describer (`src/core/Describe.hpp/.cpp`)
 
-`std::string describe(const core::ImageMeta&)`. Format:
-`"<depth>-bit YUV 4:2:0 (limited range), CICP 1/13/6, straight alpha, 12 frames, ICC, EXIF, EXIF orientation 6, XMP"`.
-Items absent are omitted; `Yuv400` prints `YUV 4:0:0 (monochrome)`; premultiplied prints
-`premultiplied alpha`; still image prints no frames item; full range prints `full range`. The EXIF
-orientation item is emitted only when no shared clap/irot/imir transform suppresses the host code,
-and only for orientations 2..8; 1 means no rotation and is not printed.
-Well-known CICP triples get a suffix: `1/13/6` → `(sRGB)`, `1/1/1` → `(BT.709)`,
-`9/16/9` → `(BT.2020 PQ)`, `9/18/9` → `(BT.2020 HLG)`, `12/16/12` → `(P3 PQ)`; `2/2/2` → `(unspecified)`.
-When shared colour presentation applies, the final item records it, for example
-`→ sRGB (BT.2390 tone map from PQ 1000 nit)` or `→ sRGB (Rec.2020 primaries)`. Unknown transfer
-or primaries codes use the safe sRGB/BT.709 fallback and that fallback is written explicitly.
+`std::string describe(const core::ImageMeta&)` produces compact title comments, for example
+`8-bit 4:4:4, sRGB`, `10-bit 4:2:0, PQ → sRGB` or
+`10-bit 4:4:4, premul alpha, HLG → sRGB`. Source depth and chroma layout are retained;
+`Yuv400` prints `grey`. Alpha prints `alpha` or `premul alpha` only when present.
+Known SDR colour labels remain short; converted wide gamuts name their source primaries and
+`→ sRGB`. Unknown transfer or primaries codes append `(fallback)` to the colour label.
+Range, numeric CICP, frame count, ICC/EXIF/XMP presence, transforms, mastering peak and
+presentation algorithms are omitted from the title. ICC application is not implied; colour
+presentation still follows CICP. The host already receives animation and orientation separately.
 
 `class Describer final : core::IImageDescriber` returns
 `ImageDescription{"AVIF", "AV1", describe(meta)}`; `CodecPlugin` turns that into the host's
@@ -74,8 +75,11 @@ or primaries codes use the safe sRGB/BT.709 fallback and that fallback is writte
   persistent memory reader); `core::FileSession` guarantees this by declaring the file data before
   the decoder.
 - `frameTiming`: `avifDecoderNthImageTiming` → `llround(duration × 1000)` clamped to `uint32`.
-- `decodeFrame`: `avifDecoderNthImage`; `avifRGBImageSetDefaults`; `depth = 16` and `format = BGRA`
-  for BGRA64, otherwise the unchanged `depth = 8` and `format = BGRA or BGR`;
+- `decodeFrame`: `avifDecoderNthImage`; `avifRGBImageSetDefaults`; `depth = 16` for RGB48/RGBA64/BGRA64,
+  otherwise `depth = 8`; `format = RGB`, `RGBA`, `BGR` or `BGRA` follows the requested byte layout.
+  libavif writes all seven supported layouts directly into the caller's buffer, with no channel-swap
+  buffer or pass. Eight-bit RGB/BGR and RGBA/BGRA have matching libyuv conversion support; 16-bit
+  destinations use libavif's built-in conversion for both channel orders (`reformat_libyuv.c`);
   `alphaPremultiplied = AVIF_FALSE` (straight alpha out);
   `chromaUpsampling = AVIF_CHROMA_UPSAMPLING_AUTOMATIC`; `pixels = dst.data()`, `rowBytes = pitch`;
   `avifImageYUVToRGB`. RGB samples are full-range unsigned 16-bit values. libavif normalizes the
@@ -88,9 +92,11 @@ or primaries codes use the safe sRGB/BT.709 fallback and that fallback is writte
   BT.2390 tone mapping (for PQ before the Rec.2020/P3 → sRGB matrix, in the file's own primaries,
   from a gain table indexed by the pixel's largest code; for HLG after it, per pixel - ARCHITECTURE
   §3.7, Task 27), converts the primaries, and encodes display-referred sRGB. Identity 8-bit SDR
-  files bypass it and retain BGR24/BGRA32 and their previous bytes. Presentation-required images
-  at any source depth, and all sources deeper than 8 bits, use BGRA64. ICC profiles are not
-  applied: PictureView ignores them and deckodeck does not have a CMS yet. Cost of the
+  files bypass it and keep RGB24/RGBA32 or the legacy BGR24/BGRA32. Presentation-required images
+  at any source depth, and all sources deeper than 8 bits, use RGB48 when opaque, RGBA64 with alpha,
+  or legacy BGRA64. Shared presentation processes the three- or four-channel buffer directly. ICC profiles
+  are not applied: PictureView ignores them and deckodeck does not have a CMS yet. The following
+  measurements used the legacy BGRA64 path. Cost of the
   presentation on `cosmos1650_yuv444_10bpc_p3pq.avif` (1024 × 428, P3/PQ; `avif_e2e_tests`, Release,
   through the DLL, per file = `pvdFileOpen` + `pvdPageDecode` + `pvdPageFree` + `pvdFileClose`):
 
@@ -165,6 +171,7 @@ Synthetic, generated by `scripts/make-synthetic-fixtures.ps1` with the installed
 ICC profile application, user-adjustable exposure/tone settings (the PVD interface has none), gain
 maps, progressive preview rendering and layered/`a1lx` selection. ICC profile presence is detected
 (`ImageMeta::hasIcc`) but the bytes are not retained or forwarded through the PVD ABI: the host
-ignores ICC profiles (proven, `docs/host/pictureview-abi.md`). libavif rejects
+ignores PVD ICC transport in the examined 2021.4.19 and 2026.09.30 x64 builds (proven,
+`docs/host/pictureview-abi.md` and `docs/host/pictureview-2026-09-30-abi.md`). libavif rejects
 `clap`/`irot`/`imir` properties that are not marked essential (`clap_irot_imir_non_essential.avif`);
 such files are refused rather than shown untransformed.

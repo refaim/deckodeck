@@ -12,11 +12,6 @@ namespace pvdkit::core
     namespace
     {
 
-        Error outOfRange()
-        {
-            return Error{ErrorCode::PageOutOfRange, "page index is out of range"};
-        }
-
         Error aborted()
         {
             return Error{ErrorCode::Aborted, "decoding was aborted by the host"};
@@ -38,15 +33,10 @@ namespace pvdkit::core
 
     FileSession::FileSession(std::unique_ptr<IFileData> fileData, std::unique_ptr<IDecoder> decoder,
                              pvd::ImageInfo imageInfo, const DecoderOptions &options,
-                             const colour::SrgbOutputTables &outputTables)
+                             const colour::ColourTables &tables)
         : fileData_(std::move(fileData)), decoder_(std::move(decoder)), imageInfo_(std::move(imageInfo)),
-          options_(options), outputTables_(outputTables)
+          options_(options), tables_(tables)
     {
-        const auto &meta = decoder_->meta();
-        if (colour::Presentation::needed(meta.cicp, meta.chromaticities)) {
-            presentation_ = std::make_unique<colour::Presentation>(meta.cicp, meta.masteringPeakNits,
-                                                                   meta.chromaticities, outputTables_);
-        }
     }
 
     FileSession::~FileSession() = default;
@@ -58,10 +48,11 @@ namespace pvdkit::core
 
     Result<pvd::PageInfo> FileSession::pageInfo(const std::uint32_t page) const
     {
-        const auto &meta = decoder_->meta();
-        if (page >= meta.frameCount) {
-            return std::unexpected(outOfRange());
+        const auto metadata = decoder_->pageMeta(page);
+        if (!metadata) {
+            return std::unexpected(metadata.error());
         }
+        const auto &meta = metadata->image;
 
         std::uint32_t frameTimeMs = 0;
         if (meta.animated) {
@@ -81,21 +72,25 @@ namespace pvdkit::core
 
     Result<pvd::DecodedPage> FileSession::decodePage(const std::uint32_t page, const pvd::Progress &progress)
     {
-        const auto &meta = decoder_->meta();
-        if (page >= meta.frameCount) {
-            return std::unexpected(outOfRange());
+        const auto metadata = decoder_->pageMeta(page);
+        if (!metadata) {
+            return std::unexpected(metadata.error());
         }
+        const auto &meta = metadata->image;
         if (!progress.report(0, 3)) {
             return std::unexpected(aborted());
         }
 
-        const bool presentationNeeded = presentation_ != nullptr;
-        const auto format = presentationNeeded || (options_.deepOutput && meta.depth > 8)
-                                ? pvd::PixelFormat::Bgra64
-                                : (meta.hasAlpha ? pvd::PixelFormat::Bgra32 : pvd::PixelFormat::Bgr24);
-        const auto bytesPerPixel =
-            format == pvd::PixelFormat::Bgra64 ? 8U : (format == pvd::PixelFormat::Bgra32 ? 4U : 3U);
-        auto created = PixelBuffer::create(meta.width, meta.height, bytesPerPixel, options_.maxPixels);
+        const bool highPrecision =
+            metadata->forceHighPrecision || colour::Presentation::needed(meta.cicp, meta.chromaticities);
+        const auto native = options_.nativeRgbOutput;
+        const auto format = highPrecision || (options_.deepOutput && meta.depth > 8)
+                                ? (native ? (meta.hasAlpha ? pvd::PixelFormat::Rgba64 : pvd::PixelFormat::Rgb48)
+                                          : pvd::PixelFormat::Bgra64)
+                                : (meta.hasAlpha ? (native ? pvd::PixelFormat::Rgba32 : pvd::PixelFormat::Bgra32)
+                                                 : (native ? pvd::PixelFormat::Rgb24 : pvd::PixelFormat::Bgr24));
+        const auto layout = pvd::pixelLayout(format);
+        auto created = PixelBuffer::create(meta.width, meta.height, layout.bytesPerPixel, options_.maxPixels);
         if (!created) {
             return std::unexpected(created.error());
         }
@@ -105,8 +100,12 @@ namespace pvdkit::core
         if (!decoded) {
             return std::unexpected(decoded.error());
         }
-        if (presentationNeeded) {
-            presentation_->applyImage(buffer.bytes(), buffer.pitchBytes(), buffer.height(), options_.maxThreads);
+        const auto encoding = decoder_->decodedColour();
+        if (colour::Presentation::needed(encoding.cicp, encoding.chromaticities)) {
+            const colour::Presentation presentation(encoding.cicp, encoding.masteringPeakNits, encoding.chromaticities,
+                                                    tables_);
+            presentation.applyImage(buffer.bytes(), buffer.pitchBytes(), buffer.height(), options_.maxThreads, native,
+                                    layout.bytesPerPixel / 2U);
         }
         if (!progress.report(1, 3)) {
             return std::unexpected(aborted());
@@ -127,8 +126,7 @@ namespace pvdkit::core
         auto retained = std::make_unique<PixelBuffer>(std::move(buffer));
         const auto view = retained->view();
         outstanding_.push_back(std::move(retained));
-        return pvd::DecodedPage{view.pixels, view.bytesPerPixel * 8, view.pitchBytes, meta.hasAlpha,
-                                hostOrientation(meta)};
+        return pvd::DecodedPage{view.pixels, layout.pvdCode, view.pitchBytes, meta.hasAlpha, hostOrientation(meta)};
     }
 
     bool FileSession::freePage(const std::span<const std::byte> pixels)
@@ -144,7 +142,7 @@ namespace pvdkit::core
 
     const colour::SrgbOutputTables &FileSession::outputTables() const noexcept
     {
-        return outputTables_;
+        return tables_.output();
     }
 
 } // namespace pvdkit::core

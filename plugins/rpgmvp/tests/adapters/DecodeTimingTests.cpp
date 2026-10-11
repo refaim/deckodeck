@@ -7,7 +7,8 @@
 // page faults of the fresh 48/96 MB page included) and the adapter alone decoding into a buffer
 // that already exists (the inflate-bound number). Deflate streams differ between zlib
 // implementations, so PVDKIT_RPGMVP_TIMING_CACHE=<dir> keeps the encoded files across builds and
-// the before/after numbers describe the same input.
+// the before/after numbers describe the same input. Each case also compares native RGBA against
+// the legacy BGRA swap on those exact encoded bytes; ABI codes never determine storage sizes.
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -51,7 +52,7 @@ namespace
     constexpr std::uint32_t kNoiseMask8 = 0x07U;
     constexpr std::uint32_t kNoiseMaskLow16 = 0x3FU;
     constexpr int kSynthesisVersion = 2;
-    constexpr pvdkit::core::DecoderOptions kOptions{1, false, std::uint64_t{16'384} * 16'384, 32'768, true};
+    constexpr pvdkit::core::DecoderOptions kOptions{1, false, std::uint64_t{16'384} * 16'384, 32'768, true, true};
 
     struct FreeDeleter
     {
@@ -196,26 +197,29 @@ namespace
     }
 
     /// The host path: open in memory mode, decode page 0 into a fresh page, free it.
-    double measureHostDecode(const std::span<const std::byte> file, const std::uint32_t bitsPerPixel)
+    double measureHostDecode(const std::span<const std::byte> file, const pvdkit::pvd::PixelFormat format)
     {
+        const auto layout = pvdkit::pvd::pixelLayout(format);
         const auto plugin = pvdkit::pvd::makePlugin(kOptions);
         REQUIRE(plugin != nullptr);
         return medianMilliseconds([&] {
-            auto session = plugin->open(pvdkit::pvd::OpenRequest{"timing.rpgmvp", 0, file});
+            pvdkit::pvd::OpenRequest request{"timing.rpgmvp", 0, file};
+            request.nativeRgb = layout.rgb;
+            auto session = plugin->open(request);
             REQUIRE(session.has_value());
             auto page = (*session)->decodePage(0, pvdkit::pvd::Progress{});
             REQUIRE(page.has_value());
-            CHECK(page->bitsPerPixel == bitsPerPixel);
-            CHECK(page->pixels.size() == static_cast<std::size_t>(kWidth) * kHeight * bitsPerPixel / 8U);
+            CHECK(page->bitsPerPixel == layout.pvdCode);
+            CHECK(page->pitchBytes == kWidth * layout.bytesPerPixel);
+            CHECK(page->pixels.size() == static_cast<std::size_t>(kWidth) * kHeight * layout.bytesPerPixel);
             CHECK((*session)->freePage(page->pixels));
         });
     }
 
-    /// The adapter alone (parse, inflate, unfilter, channel swap) into a buffer that exists already.
-    double measureAdapterDecode(const std::span<const std::byte> file, const std::uint32_t bitsPerPixel)
+    /// The adapter alone (parse, inflate, unfilter, optional channel swap) into an existing buffer.
+    double measureAdapterDecode(const std::span<const std::byte> file, const pvdkit::pvd::PixelFormat format)
     {
-        const auto format = bitsPerPixel == 64 ? pvdkit::pvd::PixelFormat::Bgra64 : pvdkit::pvd::PixelFormat::Bgra32;
-        const auto pitch = kWidth * bitsPerPixel / 8U;
+        const auto pitch = kWidth * pvdkit::pvd::pixelLayout(format).bytesPerPixel;
         std::vector<std::byte> destination(static_cast<std::size_t>(pitch) * kHeight);
         pvdkit::rpgmvp::DecoderFactory factory;
         return medianMilliseconds([&] {
@@ -229,18 +233,23 @@ namespace
     {
         const auto file = timingInput(bitDepth);
         REQUIRE(pvdkit::rpgmvp::recognises(file));
-        const std::uint32_t bitsPerPixel = bitDepth == 16 ? 64U : 32U;
-        const auto decodedBytes = static_cast<double>(kWidth) * kHeight * bitsPerPixel / 8.0;
-        const auto host = measureHostDecode(file, bitsPerPixel);
-        const auto adapter = measureAdapterDecode(file, bitsPerPixel);
+        const auto legacy = bitDepth == 16 ? pvdkit::pvd::PixelFormat::Bgra64 : pvdkit::pvd::PixelFormat::Bgra32;
+        const auto native = bitDepth == 16 ? pvdkit::pvd::PixelFormat::Rgba64 : pvdkit::pvd::PixelFormat::Rgba32;
+        const auto decodedBytes =
+            static_cast<double>(kWidth) * kHeight * pvdkit::pvd::pixelLayout(native).bytesPerPixel;
+        const auto legacyHost = measureHostDecode(file, legacy);
+        const auto nativeHost = measureHostDecode(file, native);
+        const auto legacyAdapter = measureAdapterDecode(file, legacy);
+        const auto nativeAdapter = measureAdapterDecode(file, native);
         MESSAGE("RPGMVP " << kWidth << "x" << kHeight << " RGBA" << static_cast<int>(bitDepth) << ": compressed "
                           << file.size() << " bytes (" << 100.0 * static_cast<double>(file.size()) / decodedBytes
-                          << " % of the decoded page); host path median " << host << " ms ("
-                          << decodedBytes / (host * 1'000.0) << " MB/s); adapter into an existing buffer median "
-                          << adapter << " ms (" << decodedBytes / (adapter * 1'000.0) << " MB/s); " << kTimingRuns
-                          << " runs after one warm-up each; " << pvdkit::rpgmvp::libraryVersions());
+                          << " % of the decoded page); legacy host median " << legacyHost << " ms, native host "
+                          << nativeHost << " ms (" << legacyHost / nativeHost << "x, "
+                          << decodedBytes / (nativeHost * 1'000.0) << " MB/s); legacy adapter median " << legacyAdapter
+                          << " ms, native adapter " << nativeAdapter << " ms (" << legacyAdapter / nativeAdapter
+                          << "x, " << decodedBytes / (nativeAdapter * 1'000.0) << " MB/s); identical encoded input; "
+                          << kTimingRuns << " runs after one warm-up each; " << pvdkit::rpgmvp::libraryVersions());
     }
-
 } // namespace
 
 TEST_CASE("RPGMVP release timing: 4000x3000 RGBA8" * doctest::skip())

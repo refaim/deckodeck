@@ -1,10 +1,15 @@
 # PictureView 2021.4.19 x64: extended PVD decoder ABI
 
+For the separately examined newer binary, see
+[PictureView 2026.09.30 x64: ICC behavior](pictureview-2026-09-30-abi.md).
+
 > **Interoperability note.** This document is derived from static analysis of the
 > unmodified 2021.4.19 x64 `0PictureView.dll` and the decoder plug-ins shipped with
 > it. It describes that binary, not a source-level promise by the host author and
-> not necessarily any other PictureView build. The public baseline is PVD interface
-> v1.0 in `third_party/pvd/PictureViewPlugin.h`.
+> not necessarily any other PictureView build. Its historical public baseline was
+> PVD interface v1.0. The current `third_party/pvd/PictureViewPlugin.h` is the
+> author's v1.1 snapshot dated 2026.09.30; the conclusions below remain specific
+> to the 2021 binary.
 
 All virtual addresses below assume the preferred image base `0x180000000`.
 `llvm-readobj` identifies the host as COFF x86-64 with PE timestamp

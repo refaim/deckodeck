@@ -1,5 +1,5 @@
 // Composition root of AVIF.pvd: the only place where the Win32 and libavif adapters, the AVIF
-// describer and the shared core meet (ARCHITECTURE §3.7). `Exports.cpp` calls `makePlugin()`
+// describer and the shared core meet (ARCHITECTURE В§3.7). `Exports.cpp` calls `makePlugin()`
 // without knowing any of them.
 #include "pvd/PluginFactory.hpp"
 
@@ -28,8 +28,8 @@ namespace pvdkit::pvd
 
         core::DecoderOptions defaultOptions()
         {
-            return core::DecoderOptions{std::max(1U, std::thread::hardware_concurrency()), false, kMaxPixels,
-                                        kMaxDimension, true};
+            return core::DecoderOptions{
+                std::max(1U, std::thread::hardware_concurrency()), false, kMaxPixels, kMaxDimension, true, true};
         }
 
         // Identity from the generated pvd/PluginConstants.hpp (the same values the VERSIONINFO resource
@@ -42,14 +42,14 @@ namespace pvdkit::pvd
                               "AVIF decoder: " + avif::libraryVersions() + "; static build"};
         }
 
-        // Owns the adapters, the describer, the sRGB output tables and the core plugin in dependency
+        // Owns the adapters, the describer, the colour tables and the core plugin in dependency
         // order: `CodecPlugin` holds references to the four members declared before it, so they are
         // constructed first and destroyed last.
         class DefaultPlugin final : public IPlugin
         {
           public:
             explicit DefaultPlugin(const core::DecoderOptions &options)
-                : plugin_{fileSource_, decoderFactory_, describer_, outputTables_, options, defaultInfo()}
+                : plugin_{fileSource_, decoderFactory_, describer_, tables_, options, defaultInfo()}
             {
             }
 
@@ -67,10 +67,9 @@ namespace pvdkit::pvd
             win::FileSource fileSource_;
             avif::DecoderFactory decoderFactory_;
             avif::Describer describer_;
-            // The sRGB output tables every colour-presenting session of this plugin borrows: pure
-            // math built once here, in pvdInit, so no function-local static exists anywhere in the
-            // plugin (MSVC >= 14.50 would import api-ms-win-core-synch-l1-2-0.dll for its guard).
-            core::colour::SrgbOutputTables outputTables_;
+            // Plugin-owned sRGB output tables and lazy immutable transfer/gain caches.
+            // Sessions borrow entries; the owner outlives them and never evicts cached tables.
+            core::colour::ColourTables tables_;
             core::CodecPlugin plugin_;
         };
 

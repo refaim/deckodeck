@@ -16,11 +16,11 @@ namespace pvdkit::exr
 {
 
     /// The picture as the decoder keeps it for the session: the overlap of the data and display
-    /// windows as BGRA64 PQ codes (`layout.overlap` width x height x 4, row-major; empty without an
-    /// overlap) plus the luminance histogram the tone-mapping peak is read from.
+    /// windows as PQ codes in the selected layout (three codes per RGB48 pixel, four per RGBA64
+    /// or BGRA64 pixel, row-major; empty without an overlap), plus the luminance histogram.
     struct CachedPixels
     {
-        std::unique_ptr<std::uint16_t[]> bgra;
+        std::unique_ptr<std::uint16_t[]> pixels;
         std::size_t codes = 0;
         LuminanceHistogram histogram;
     };

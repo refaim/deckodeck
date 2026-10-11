@@ -44,7 +44,7 @@ namespace pvdkit::avif
         /// `meta.width` pixels in `format`; the size arithmetic is 64-bit. Violations are `Internal`.
         [[nodiscard]] core::Result<void> checkDestination(const core::ImageMeta &meta, pvd::PixelFormat format,
                                                           std::size_t dstSize, std::uint32_t pitchBytes);
-        /// Describes `dst` to libavif: 8-bit BGR/BGRA or 16-bit BGRA, straight alpha, automatic
+        /// Describes `dst` to libavif: 8-bit RGB/BGR/RGBA/BGRA or 16-bit RGB/RGBA/BGRA, straight alpha, automatic
         /// chroma upsampling, `maxThreads` conversion threads, `pitchBytes` per row.
         [[nodiscard]] avifRGBImage rgbTarget(const avifImage &image, pvd::PixelFormat format, std::span<std::byte> dst,
                                              std::uint32_t pitchBytes, int maxThreads);

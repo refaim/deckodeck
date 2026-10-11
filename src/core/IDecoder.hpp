@@ -84,6 +84,22 @@ namespace pvdkit::core
         std::string sourceDetail{};
     };
 
+    /// Geometry and sample requirements known before allocating one page.
+    struct PageMeta
+    {
+        ImageMeta image;
+        /// Reserve 16-bit output when colour signalling is finalized only during decode.
+        bool forceHighPrecision = false;
+    };
+
+    /// Colour of the last successfully decoded pixels, including a measured HDR peak.
+    struct ColourEncoding
+    {
+        Cicp cicp{};
+        std::optional<float> masteringPeakNits;
+        std::optional<colour::Primaries::Chromaticities> chromaticities;
+    };
+
     /// Holds the display duration of one decoded frame.
     struct FrameTiming
     {
@@ -97,9 +113,11 @@ namespace pvdkit::core
         bool strict = false;
         std::uint64_t maxPixels = 0;
         std::uint32_t maxDimension = 0;
-        /// When the source has more than 8 bits per sample, preserve it in Bgra64 instead of
-        /// reducing it to 8-bit output. Kept last and defaulted for aggregate callers.
+        /// When the source has more than 8 bits per sample, preserve 16-bit samples instead of
+        /// reducing them to 8-bit output. Defaulted for aggregate callers.
         bool deepOutput = false;
+        /// Opt in to native RGB when the open request permits it. Defaults preserve legacy codecs.
+        bool nativeRgbOutput = false;
     };
 
     /// Decodes frames from one parsed file.
@@ -108,6 +126,21 @@ namespace pvdkit::core
       public:
         virtual ~IDecoder() = default;
         [[nodiscard]] virtual const ImageMeta &meta() const = 0;
+        /// Reject out-of-range pages; overrides must return a value independent of decode mutation.
+        [[nodiscard]] virtual Result<PageMeta> pageMeta(const std::uint32_t page) const
+        {
+            const auto &image = meta();
+            if (page >= image.frameCount) {
+                return std::unexpected(Error{ErrorCode::PageOutOfRange, "page index is out of range"});
+            }
+            return PageMeta{image};
+        }
+        /// Called only after success; any late need for presentation requires forceHighPrecision.
+        [[nodiscard]] virtual ColourEncoding decodedColour() const
+        {
+            const auto &image = meta();
+            return ColourEncoding{image.cicp, image.masteringPeakNits, image.chromaticities};
+        }
         [[nodiscard]] virtual Result<FrameTiming> frameTiming(std::uint32_t frame) const = 0;
         [[nodiscard]] virtual Result<void> decodeFrame(std::uint32_t frame, pvd::PixelFormat format,
                                                        std::span<std::byte> dst, std::uint32_t pitchBytes) = 0;

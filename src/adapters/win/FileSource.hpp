@@ -12,6 +12,7 @@ namespace pvdkit::win
     {
       public:
         [[nodiscard]] core::Result<std::unique_ptr<core::IFileData>> open(std::string_view utf8Path) override;
+        [[nodiscard]] core::Result<std::unique_ptr<core::IFileData>> open(std::wstring_view widePath) override;
     };
 
 } // namespace pvdkit::win

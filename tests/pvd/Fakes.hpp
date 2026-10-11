@@ -60,6 +60,8 @@ namespace pvdkit::pvd::test
         ImageInfo imageInfo{2, true, "AVIF session format", "AV1 session compression", "session comments"};
         PageInfo pageInfo{320, 240, 32, 125};
         std::string openedName;
+        std::optional<std::wstring> openedWideName;
+        bool openedNativeRgb = false;
         std::uint64_t openedFileSize = 0;
         std::vector<std::byte> openedHead;
         std::uint32_t observedPage = 0;
@@ -166,7 +168,10 @@ namespace pvdkit::pvd::test
         {
             ++state_.openCalls;
             state_.openedName = request.utf8FileName;
+            state_.openedWideName =
+                request.wideFileName.transform([](const std::wstring_view name) { return std::wstring{name}; });
             state_.openedFileSize = request.fileSize;
+            state_.openedNativeRgb = request.nativeRgb;
             state_.openedHead.assign(request.head.begin(), request.head.end());
             if (state_.throwOpen) {
                 throw std::runtime_error{"open failure"};

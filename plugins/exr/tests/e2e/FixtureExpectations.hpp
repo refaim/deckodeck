@@ -14,10 +14,11 @@ namespace pvdkit::exr::tests
         std::uint32_t height;
         std::uint32_t pageBpp; // informational: sample bits (16 half / 32 float) x channels (3, 4 with alpha)
         bool alpha;
+        std::uint32_t pages = 1;
     };
 
     // Every fixture of plugins/exr/fixtures/SOURCES.md the plugin accepts; sizes are the display
-    // windows. Every page is delivered as BGRA64 (the colour path), whatever the source.
+    // windows. Legacy opens deliver BGRA64; native opens deliver RGB48 or RGBA64.
     inline constexpr std::array kAccepted{
         FixtureExpectation{"rgb_half_zip.exr", 16, 8, 48, false},
         FixtureExpectation{"rgb_half_none.exr", 16, 8, 48, false},
@@ -33,7 +34,7 @@ namespace pvdkit::exr::tests
         FixtureExpectation{"rgb_half_htj2k32.exr", 16, 8, 48, false},
         FixtureExpectation{"rgba_premultiplied.exr", 16, 8, 64, true},
         FixtureExpectation{"y_float_zips.exr", 16, 8, 96, false},
-        FixtureExpectation{"layer_rgb.exr", 16, 8, 64, true},
+        FixtureExpectation{"layer_rgb.exr", 16, 8, 64, true, 2},
         FixtureExpectation{"rgb_float_mixed.exr", 16, 8, 128, true},
         FixtureExpectation{"data_inside_display.exr", 16, 12, 64, true},
         FixtureExpectation{"data_larger_than_display.exr", 8, 6, 48, false},
@@ -52,12 +53,12 @@ namespace pvdkit::exr::tests
         FixtureExpectation{"interop_unknown.exr", 16, 8, 48, false},
         FixtureExpectation{"peak_above_10000.exr", 16, 8, 48, false},
         FixtureExpectation{"nan_inf_negative.exr", 16, 8, 96, false},
-        FixtureExpectation{"multipart_views.exr", 8, 8, 48, false},
+        FixtureExpectation{"multipart_views.exr", 8, 8, 48, false, 2},
         FixtureExpectation{"multipart_deep_flat.exr", 8, 8, 48, false},
         FixtureExpectation{"multipart_deeptile_flat.exr", 8, 8, 48, false},
         FixtureExpectation{"multiview_string.exr", 8, 8, 48, false},
-        FixtureExpectation{"multiview_left_first.exr", 8, 8, 48, false},
-        FixtureExpectation{"multiview_right_first.exr", 8, 8, 48, false},
+        FixtureExpectation{"multiview_left_first.exr", 8, 8, 48, false, 2},
+        FixtureExpectation{"multiview_right_first.exr", 8, 8, 48, false, 2},
         FixtureExpectation{"tiled_rgba_3x3.exr", 8, 8, 64, true},
         FixtureExpectation{"tiled_data_offset.exr", 16, 16, 48, false},
         FixtureExpectation{"chroma_zips.exr", 16, 8, 64, true},

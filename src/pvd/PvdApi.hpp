@@ -16,10 +16,6 @@ extern "C"
 #include "../../third_party/pvd/PictureViewPlugin.h"
 }
 
-// Undocumented by the public SDK: BMP.pvd from the PictureView 2021.4.19 distribution sets
-// decoded-image flag bit 2 when its 32-bit BMP alpha mask makes the alpha channel meaningful.
-#define PVD_IDF_ALPHA 2
-
 // Undocumented by the public SDK: PictureView consumes Flags >> 4 as its orientation code.
 // Provenance and the EXIF-to-code table: docs/host/pictureview-abi.md, "Decode flags".
 #define PVD_IDF_ORIENTATION_SHIFT 4

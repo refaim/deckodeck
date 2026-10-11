@@ -24,6 +24,8 @@ namespace pvdkit::exr
         PixelType type = PixelType::Half;
         std::int32_t xSampling = 1;
         std::int32_t ySampling = 1;
+        std::string view{};            ///< The library-resolved multiView membership, or the part view.
+        std::string nameWithoutView{}; ///< The library-normalized channel name, filled by the adapter.
     };
 
     /// How the selected channels turn into pixels.

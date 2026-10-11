@@ -52,7 +52,7 @@ TEST_CASE("the RPGMVP production composition reports its generated identity")
     CHECK(info.name == pvdkit::pvd::kPluginIdentity.name);
     CHECK(info.name == "RPGMVP");
     CHECK(info.version == pvdkit::pvd::kPluginIdentity.version);
-    CHECK(info.version == "1.1.0");
+    CHECK(info.version == "1.2.0");
     CHECK(info.comments ==
           "RPG Maker MV/MZ encrypted PNG decoder: " + pvdkit::rpgmvp::libraryVersions() + "; static build");
 }
@@ -71,7 +71,7 @@ TEST_CASE("the RPGMVP production composition opens memory and disk inputs identi
     CHECK_FALSE((*memory)->imageInfo().animated);
     CHECK((*memory)->imageInfo().formatName == "RPGMVP");
     CHECK((*memory)->imageInfo().compression == "Deflate");
-    CHECK((*memory)->imageInfo().comments == "RPG Maker MV/MZ encrypted PNG, 8-bit palette with transparency");
+    CHECK((*memory)->imageInfo().comments == "8-bit indexed+alpha");
 
     const auto head = std::span{bytes}.first(std::min(bytes.size(), kHostHeadSize));
     auto disk = plugin->open(pvdkit::pvd::OpenRequest{name, bytes.size(), head});

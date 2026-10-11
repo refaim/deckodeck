@@ -118,6 +118,7 @@ namespace
         pvdInfoDecode decoded{};
         void *context = nullptr;
         CHECK(pvdFileOpen("x", 0, nullptr, 0, &image, &context) == FALSE);
+        CHECK(pvdFileOpenW(L"x", 0, nullptr, 0, &image, &context) == FALSE);
         CHECK(pvdPageInfo(nullptr, 0, &page) == FALSE);
         CHECK(pvdPageDecode(nullptr, 0, &decoded, nullptr, nullptr) == FALSE);
         CHECK_NOTHROW(pvdPageFree(nullptr, &decoded));
@@ -159,6 +160,33 @@ namespace
         pvdExit();
         CHECK(state.livePlugins == 0);
         CHECK(pvdPageInfo(nullptr, 0, &pageInfo) == FALSE);
+    }
+
+    TEST_CASE("wide export forwards UTF-16 and stays behind the firewall")
+    {
+        ExportsGuard guard{FactoryMode::Fake};
+        auto &state = guard.state();
+        REQUIRE(pvdInit() == PVD_CURRENT_INTERFACE_VERSION);
+        constexpr std::array bytes{std::byte{0x31}, std::byte{0x32}};
+        pvdInfoImage image{};
+        void *context = nullptr;
+        REQUIRE(pvdFileOpenW(L"\u0444\u0430\u0439\u043b-\U0001F600.avif", 123,
+                             reinterpret_cast<const BYTE *>(bytes.data()), static_cast<UINT32>(bytes.size()), &image,
+                             &context) == TRUE);
+        REQUIRE(state.openedWideName.has_value());
+        CHECK(*state.openedWideName == L"\u0444\u0430\u0439\u043b-\U0001F600.avif");
+        CHECK(state.openedFileSize == 123);
+        CHECK(state.openedHead == std::vector<std::byte>{bytes.begin(), bytes.end()});
+        pvdFileClose(context);
+        CHECK(state.liveSessions == 0);
+
+        state.throwOpen = true;
+        context = reinterpret_cast<void *>(1);
+        CHECK(pvdFileOpenW(L"throw.avif", 1, nullptr, 0, &image, &context) == FALSE);
+        CHECK(context == nullptr);
+        CHECK(state.liveSessions == 0);
+        pvdExit();
+        CHECK(pvdFileOpenW(L"after-exit.avif", 1, nullptr, 0, &image, &context) == FALSE);
     }
 
     TEST_CASE("double init replaces the process-wide plugin and double exit is safe")

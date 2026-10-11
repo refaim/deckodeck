@@ -4,6 +4,7 @@ EXPORTS
     pvdExit
     pvdPluginInfo
     pvdFileOpen
+    pvdFileOpenW
     pvdPageInfo
     pvdPageDecode
     pvdPageFree

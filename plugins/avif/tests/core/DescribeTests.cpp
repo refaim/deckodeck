@@ -8,223 +8,142 @@
 
 namespace pvdkit::avif
 {
-
-    using core::ChromaFormat;
-    using core::Cicp;
-    using core::CropRect;
-    using core::ImageMeta;
-    using core::MirrorAxis;
-    using core::Transforms;
-
     namespace
     {
-
-        ImageMeta baseMeta()
+        core::ImageMeta baseMeta()
         {
-            return ImageMeta{
-                8, 6, 8, ChromaFormat::Yuv420, false, false, Cicp{1, 13, 6, false}, 1, false, {}, false, false, false};
+            core::ImageMeta meta{};
+            meta.depth = 8;
+            meta.chroma = core::ChromaFormat::Yuv420;
+            meta.cicp = core::Cicp{1, 13, 6, false};
+            meta.frameCount = 1;
+            return meta;
         }
 
-        TEST_CASE("describe names every chroma format and range")
+        TEST_CASE("describe keeps source depth and compact layout independent of range")
         {
             auto meta = baseMeta();
-            for (const auto &[chroma, text] :
-                 std::array{std::pair{ChromaFormat::Yuv444, std::string_view{"YUV 4:4:4"}},
-                            std::pair{ChromaFormat::Yuv422, std::string_view{"YUV 4:2:2"}},
-                            std::pair{ChromaFormat::Yuv420, std::string_view{"YUV 4:2:0"}}}) {
+            for (const auto &[chroma, expected] :
+                 std::array{std::pair{core::ChromaFormat::Yuv444, std::string_view{"8-bit 4:4:4, sRGB"}},
+                            std::pair{core::ChromaFormat::Yuv422, std::string_view{"8-bit 4:2:2, sRGB"}},
+                            std::pair{core::ChromaFormat::Yuv420, std::string_view{"8-bit 4:2:0, sRGB"}},
+                            std::pair{core::ChromaFormat::Yuv400, std::string_view{"8-bit grey, sRGB"}}}) {
                 meta.chroma = chroma;
-                meta.cicp.fullRange = false;
-                CHECK(describe(meta).starts_with("8-bit " + std::string{text} + " (limited range)"));
-                meta.cicp.fullRange = true;
-                CHECK(describe(meta).starts_with("8-bit " + std::string{text} + " (full range)"));
+                for (const bool fullRange : {false, true}) {
+                    meta.cicp.fullRange = fullRange;
+                    CHECK(describe(meta) == std::string{expected});
+                    CHECK(describe(meta).size() <= 25);
+                }
             }
-
-            meta.chroma = ChromaFormat::Yuv400;
-            meta.cicp.fullRange = false;
-            CHECK(describe(meta).starts_with("8-bit YUV 4:0:0 (monochrome)"));
-            meta.cicp.fullRange = true;
-            CHECK(describe(meta).starts_with("8-bit YUV 4:0:0 (monochrome)"));
+            meta.depth = 12;
+            CHECK(describe(meta) == "12-bit grey, sRGB");
         }
 
-        TEST_CASE("describe labels known CICP triples and leaves unknown triples numeric")
+        TEST_CASE("describe keeps short colour and HDR presentation labels")
         {
             auto meta = baseMeta();
             for (const auto &[cicp, expected] :
-                 std::array{std::pair{Cicp{1, 13, 6, false}, std::string_view{"CICP 1/13/6 (sRGB)"}},
-                            std::pair{Cicp{1, 1, 1, false}, std::string_view{"CICP 1/1/1 (BT.709)"}},
-                            std::pair{Cicp{9, 16, 9, false}, std::string_view{"CICP 9/16/9 (BT.2020 PQ)"}},
-                            std::pair{Cicp{9, 18, 9, false}, std::string_view{"CICP 9/18/9 (BT.2020 HLG)"}},
-                            std::pair{Cicp{12, 16, 12, false}, std::string_view{"CICP 12/16/12 (P3 PQ)"}},
-                            std::pair{Cicp{2, 2, 2, false}, std::string_view{"CICP 2/2/2 (unspecified)"}},
-                            std::pair{Cicp{7, 8, 10, false}, std::string_view{"CICP 7/8/10"}}}) {
+                 std::array{std::pair{core::Cicp{1, 13, 6, false}, std::string_view{"8-bit 4:2:0, sRGB"}},
+                            std::pair{core::Cicp{1, 1, 1, false}, std::string_view{"8-bit 4:2:0, BT.709"}},
+                            std::pair{core::Cicp{1, 6, 6, false}, std::string_view{"8-bit 4:2:0, BT.709"}},
+                            std::pair{core::Cicp{1, 14, 6, false}, std::string_view{"8-bit 4:2:0, BT.709"}},
+                            std::pair{core::Cicp{1, 15, 6, false}, std::string_view{"8-bit 4:2:0, BT.709"}},
+                            std::pair{core::Cicp{2, 2, 2, false}, std::string_view{"8-bit 4:2:0, unspecified"}},
+                            std::pair{core::Cicp{9, 16, 9, false}, std::string_view{"8-bit 4:2:0, PQ → sRGB"}},
+                            std::pair{core::Cicp{12, 16, 12, false}, std::string_view{"8-bit 4:2:0, PQ → sRGB"}},
+                            std::pair{core::Cicp{9, 18, 9, false}, std::string_view{"8-bit 4:2:0, HLG → sRGB"}},
+                            std::pair{core::Cicp{1, 4, 6, false}, std::string_view{"8-bit 4:2:0, gamma 2.2 → sRGB"}},
+                            std::pair{core::Cicp{1, 5, 6, false}, std::string_view{"8-bit 4:2:0, gamma 2.8 → sRGB"}},
+                            std::pair{core::Cicp{1, 8, 0, false}, std::string_view{"8-bit 4:2:0, linear → sRGB"}}}) {
                 meta.cicp = cicp;
-                CHECK(describe(meta).find(expected) != std::string::npos);
+                CHECK(describe(meta) == std::string{expected});
+                CHECK(describe(meta).size() <= 45);
             }
         }
 
-        TEST_CASE("describe distinguishes absent straight and premultiplied alpha")
+        TEST_CASE("describe keeps converted source gamut concise")
         {
             auto meta = baseMeta();
-            meta.hasAlpha = false;
-            meta.alphaPremultiplied = true;
-            CHECK(describe(meta).find("alpha") == std::string::npos);
+            for (const auto &[primaries, expected] :
+                 std::array{std::pair{std::uint16_t{4}, std::string_view{"8-bit 4:2:0, BT.470M → sRGB"}},
+                            std::pair{std::uint16_t{5}, std::string_view{"8-bit 4:2:0, BT.601 → sRGB"}},
+                            std::pair{std::uint16_t{6}, std::string_view{"8-bit 4:2:0, BT.601 → sRGB"}},
+                            std::pair{std::uint16_t{7}, std::string_view{"8-bit 4:2:0, SMPTE 240M → sRGB"}},
+                            std::pair{std::uint16_t{9}, std::string_view{"8-bit 4:2:0, Rec.2020 → sRGB"}},
+                            std::pair{std::uint16_t{11}, std::string_view{"8-bit 4:2:0, P3-DCI → sRGB"}},
+                            std::pair{std::uint16_t{12}, std::string_view{"8-bit 4:2:0, P3-D65 → sRGB"}},
+                            std::pair{std::uint16_t{22}, std::string_view{"8-bit 4:2:0, EBU 3213 → sRGB"}}}) {
+                meta.cicp.primaries = primaries;
+                CHECK(describe(meta) == std::string{expected});
+                CHECK(describe(meta).size() <= 45);
+            }
+        }
 
+        TEST_CASE("describe flags unknown colour fallbacks without numeric prose")
+        {
+            auto meta = baseMeta();
+            for (const auto &[cicp, expected] : std::array{
+                     std::pair{core::Cicp{1, 99, 6, false}, std::string_view{"8-bit 4:2:0, sRGB (fallback)"}},
+                     std::pair{core::Cicp{99, 13, 6, false}, std::string_view{"8-bit 4:2:0, sRGB (fallback)"}},
+                     std::pair{core::Cicp{99, 99, 6, false}, std::string_view{"8-bit 4:2:0, sRGB (fallback)"}},
+                     std::pair{core::Cicp{9, 99, 6, false},
+                               std::string_view{"8-bit 4:2:0, Rec.2020 → sRGB (fallback)"}},
+                     std::pair{core::Cicp{99, 16, 6, false}, std::string_view{"8-bit 4:2:0, PQ → sRGB (fallback)"}}}) {
+                meta.cicp = cicp;
+                CHECK(describe(meta) == std::string{expected});
+                CHECK(describe(meta).size() <= 45);
+            }
+        }
+
+        TEST_CASE("describe keeps source alpha concise and ignores unused premultiplication")
+        {
+            auto meta = baseMeta();
+            meta.alphaPremultiplied = true;
+            CHECK(describe(meta) == "8-bit 4:2:0, sRGB");
             meta.hasAlpha = true;
             meta.alphaPremultiplied = false;
-            CHECK(describe(meta).ends_with("straight alpha"));
-
+            CHECK(describe(meta) == "8-bit 4:2:0, alpha, sRGB");
             meta.alphaPremultiplied = true;
-            CHECK(describe(meta).ends_with("premultiplied alpha"));
+            CHECK(describe(meta) == "8-bit 4:2:0, premul alpha, sRGB");
         }
 
-        TEST_CASE("describe omits frames for a still and reports an animation")
-        {
-            auto meta = baseMeta();
-            CHECK(describe(meta).find("frame") == std::string::npos);
-
-            meta.frameCount = 12;
-            meta.animated = true;
-            CHECK(describe(meta).ends_with("12 frames"));
-        }
-
-        TEST_CASE("describe reports each embedded metadata kind")
-        {
-            auto meta = baseMeta();
-            meta.hasIcc = true;
-            CHECK(describe(meta).ends_with("ICC"));
-
-            meta = baseMeta();
-            meta.hasExif = true;
-            CHECK(describe(meta).ends_with("EXIF"));
-
-            meta = baseMeta();
-            meta.hasXmp = true;
-            CHECK(describe(meta).ends_with("XMP"));
-
-            meta = baseMeta();
-            meta.hasExif = true;
-            meta.exifOrientation = 6;
-            CHECK(describe(meta).ends_with("EXIF, EXIF orientation 6"));
-
-            meta.transforms.clap = CropRect{0, 0, 4, 3};
-            CHECK_FALSE(describe(meta).contains("EXIF orientation"));
-        }
-
-        TEST_CASE("describe prints EXIF orientation only for the rotated values 2..8")
-        {
-            auto meta = baseMeta();
-            meta.hasExif = true;
-
-            meta.exifOrientation = 1;
-            CHECK_FALSE(describe(meta).contains("EXIF orientation"));
-
-            meta.exifOrientation = 2;
-            CHECK(describe(meta).ends_with("EXIF orientation 2"));
-
-            meta.exifOrientation = 8;
-            CHECK(describe(meta).ends_with("EXIF orientation 8"));
-
-            // Out of the 0/1..8 domain `ImageMeta::exifOrientation` documents, but the describer
-            // takes the value as given (no precondition), so the ">8" branch of the range check
-            // needs its own case for full branch coverage.
-            meta.exifOrientation = 9;
-            CHECK_FALSE(describe(meta).contains("EXIF orientation"));
-        }
-
-        TEST_CASE("describe reports each transform and mirror axis")
-        {
-            auto meta = baseMeta();
-            meta.transforms.clap = CropRect{0, 0, 4, 3};
-            CHECK(describe(meta).ends_with("clap"));
-
-            meta = baseMeta();
-            meta.transforms.irotAngle = 2;
-            CHECK(describe(meta).ends_with("irot 2"));
-
-            meta = baseMeta();
-            meta.transforms.imir = MirrorAxis::TopBottom;
-            CHECK(describe(meta).ends_with("imir top-bottom"));
-
-            meta.transforms.imir = MirrorAxis::LeftRight;
-            CHECK(describe(meta).ends_with("imir left-right"));
-        }
-
-        TEST_CASE("describe creates the exact full combined string")
+        TEST_CASE("describe suppresses ancillary metadata transforms animation and HDR algorithm details")
         {
             auto meta = baseMeta();
             meta.depth = 10;
-            meta.chroma = ChromaFormat::Yuv444;
-            meta.cicp = Cicp{9, 16, 9, true};
+            meta.cicp = core::Cicp{9, 16, 9, true};
             meta.hasAlpha = true;
             meta.alphaPremultiplied = true;
-            meta.frameCount = 12;
             meta.animated = true;
+            meta.frameCount = 12;
             meta.hasIcc = true;
             meta.hasExif = true;
-            meta.exifOrientation = 6;
             meta.hasXmp = true;
-            meta.transforms = Transforms{CropRect{1, 1, 4, 3}, 3, MirrorAxis::LeftRight};
-
-            CHECK(describe(meta) == "10-bit YUV 4:4:4 (full range), CICP 9/16/9 (BT.2020 PQ), "
-                                    "premultiplied alpha, "
-                                    "12 frames, ICC, EXIF, XMP, clap, irot 3, imir left-right, "
-                                    "→ sRGB (BT.2390 tone map from PQ 1000 nit)");
-        }
-
-        TEST_CASE("describe records HDR and wide-gamut presentation")
-        {
-            auto meta = baseMeta();
-            for (const auto &[primaries, name] :
-                 std::array{std::pair{std::uint16_t{4}, std::string_view{"BT.470M"}},
-                            std::pair{std::uint16_t{5}, std::string_view{"BT.601-625"}},
-                            std::pair{std::uint16_t{6}, std::string_view{"BT.601-625"}},
-                            std::pair{std::uint16_t{7}, std::string_view{"SMPTE 240M/BT.601-525"}},
-                            std::pair{std::uint16_t{9}, std::string_view{"Rec.2020"}},
-                            std::pair{std::uint16_t{11}, std::string_view{"P3-DCI"}},
-                            std::pair{std::uint16_t{12}, std::string_view{"P3-D65"}},
-                            std::pair{std::uint16_t{22}, std::string_view{"EBU 3213-E"}}}) {
-                meta.cicp = Cicp{primaries, 13, 6, false};
-                CHECK(describe(meta).ends_with("→ sRGB (" + std::string{name} + " primaries)"));
+            meta.exifOrientation = 6;
+            meta.masteringPeakNits = 4000.0F;
+            meta.transforms = core::Transforms{core::CropRect{1, 1, 4, 3}, 3, core::MirrorAxis::LeftRight};
+            const auto text = describe(meta);
+            CHECK(text == "10-bit 4:2:0, premul alpha, PQ → sRGB");
+            CHECK(text.size() <= 45);
+            for (const auto redundant :
+                 {"YUV", "range", "CICP", "ICC", "EXIF", "XMP", "clap", "irot", "imir", "frames", "nit", "BT.2390"}) {
+                CHECK_FALSE(text.contains(redundant));
             }
-
-            meta.cicp = Cicp{11, 18, 12, false};
-            meta.masteringPeakNits = 4'000.0F;
-            CHECK(describe(meta).ends_with("→ sRGB (BT.2390 tone map from HLG 1000 nit)"));
-
-            meta.cicp = Cicp{12, 16, 12, false};
-            CHECK(describe(meta).ends_with("→ sRGB (BT.2390 tone map from PQ 4000 nit)"));
+            meta.transforms.imir = core::MirrorAxis::TopBottom;
+            meta.exifOrientation = 9;
+            CHECK(describe(meta) == text);
         }
 
-        TEST_CASE("describe records safe fallbacks for unknown colour codes")
-        {
-            auto meta = baseMeta();
-            meta.cicp.transfer = 99;
-            CHECK(describe(meta).ends_with("→ sRGB (unknown transfer 99 treated as sRGB)"));
-
-            meta = baseMeta();
-            meta.cicp.primaries = 99;
-            CHECK(describe(meta).ends_with("→ sRGB (unknown primaries 99 treated as BT.709)"));
-
-            meta.cicp = Cicp{99, 99, 6, false};
-            CHECK(describe(meta).ends_with("→ sRGB (unknown transfer 99 treated as sRGB; "
-                                           "unknown primaries 99 treated as BT.709)"));
-        }
-
-        TEST_CASE("Describer names the format AVIF, the codec AV1 and describes the "
-                  "metadata")
+        TEST_CASE("Describer retains AVIF format and AV1 compression with compact comments")
         {
             auto meta = baseMeta();
             meta.hasAlpha = true;
             const Describer describer;
-            const core::IImageDescriber &describerInterface = describer;
-
-            const auto description = describerInterface.describe(meta);
-
-            CHECK(description.formatName == "AVIF");
-            CHECK(description.compression == "AV1");
-            CHECK(description.comments == describe(meta));
-            CHECK(description.comments == "8-bit YUV 4:2:0 (limited range), CICP 1/13/6 (sRGB), straight alpha");
+            const core::IImageDescriber &interface = describer;
+            const auto result = interface.describe(meta);
+            CHECK(result.formatName == "AVIF");
+            CHECK(result.compression == "AV1");
+            CHECK(result.comments == "8-bit 4:2:0, alpha, sRGB");
         }
-
     } // namespace
 } // namespace pvdkit::avif

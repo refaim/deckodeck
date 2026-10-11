@@ -76,9 +76,7 @@ TEST_CASE("the production plugin opens a fixture from memory and from disk with 
     CHECK_FALSE(memoryInfo.animated);
     CHECK(memoryInfo.formatName == "OpenEXR");
     CHECK(memoryInfo.compression == "ZIP");
-    CHECK(memoryInfo.comments ==
-          "half RGB, linear Rec.709, ZIP, scanline, display 16x8, data 16x8 at 0,0, 100 nit white, "
-          "→ sRGB (BT.2390 tone map from 497 nit)");
+    CHECK(memoryInfo.comments == "half RGB, linear Rec.709 → sRGB");
 
     const auto head = std::span{bytes}.first(std::min(bytes.size(), kHostHeadSize));
     auto fromDisk = plugin->open(pvdkit::pvd::OpenRequest{name, bytes.size(), head});
@@ -140,4 +138,25 @@ TEST_CASE("the production plugin rejects non-EXR input as NotRecognised and a mi
     const auto refused = plugin->open(pvdkit::pvd::OpenRequest{"magic_only.exr", 0, magic});
     REQUIRE_FALSE(refused.has_value());
     CHECK(refused.error().code == ErrorCode::ParseFailed);
+}
+
+TEST_CASE("the default EXR composition permits native RGB while narrow requests keep BGRA64")
+{
+    const auto plugin = pvdkit::pvd::makePlugin();
+    for (const std::string_view name : {"rgb_half_zip.exr", "rgba_premultiplied.exr"}) {
+        const auto bytes = readFixture(name);
+        for (const bool native : {false, true}) {
+            CAPTURE(name);
+            CAPTURE(native);
+            auto opened = plugin->open(pvdkit::pvd::OpenRequest{name, 0, bytes, std::nullopt, native});
+            REQUIRE(opened.has_value());
+            const auto page = (*opened)->decodePage(0, pvdkit::pvd::Progress{});
+            REQUIRE(page.has_value());
+            const bool alpha = name == "rgba_premultiplied.exr";
+            CHECK(page->bitsPerPixel == (native ? (alpha ? 65U : 49U) : 64U));
+            CHECK(page->pitchBytes == 16 * (native && !alpha ? 6U : 8U));
+            CHECK(page->pixels.size() == static_cast<std::size_t>(page->pitchBytes) * 8);
+            CHECK(page->hasAlpha == alpha);
+        }
+    }
 }

@@ -1,13 +1,12 @@
-# This overlay port pins openexr 3.4.13#2 (see vcpkg.json in this directory) independently of the
+# This overlay port pins openexr 3.4.13#3 (see vcpkg.json in this directory) independently of the
 # top-level vcpkg.json's "builtin-baseline": it is the stock vcpkg port plus two build patches.
-# clang-cl-zip-sse4.patch: OpenEXRCore's internal_zip.c selects its SSE4.1 byte-reconstruction
-# kernel whenever _MSC_VER is defined on x86/x64 - cl.exe accepts any intrinsic regardless of
-# /arch - but clang-cl defines _MSC_VER too and refuses to inline _mm_shuffle_epi8 /
-# _mm_extract_epi8 into a function compiled without the ssse3/sse4.1 target features, so the
-# port did not build with this repository's triplets. The patch gives that one function a
-# `target("ssse3,sse4.1")` attribute under clang, which reproduces exactly what the MSVC build
-# does (the kernel is not dispatched at run time upstream either; every x86-64 CPU since 2008
-# has SSE4.1). clang-cl-x86-interlocked.patch is explained next to its PATCHES entry below.
+# clang-cl-zip-sse4.patch: OpenEXRCore's ZIP reconstruction has no run-time CPU dispatch.
+# Its _MSC_VER shortcut enables SSSE3/SSE4.1 even for baseline x86/x64 builds. Restrict that
+# kernel to an explicit __SSE4_1__ compiler target; our baseline builds use the library's
+# existing scalar reconstruction and SSE2 interleave. The separately run-time-dispatched
+# C++ ZIP kernel keeps its per-function clang target attribute, so it still compiles without
+# enabling those instructions for the whole library. The exr_zip_baseline test checks the
+# Core ZIP object's actual instructions. clang-cl-x86-interlocked.patch is explained below.
 # Moving the baseline does not update this port; bump version/port-version here by hand (and
 # re-verify SHA512 below) when a newer OpenEXR is needed.
 vcpkg_from_github(

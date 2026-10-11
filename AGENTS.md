@@ -11,8 +11,9 @@ viewer plugin for Far Manager 3, by Pavel Skakov), as a monorepo of shared libra
 directory per plugin. The shared libraries keep their original name, `pvdkit` (`docs/BUILD.md`
 explains the split); this file and `docs/ARCHITECTURE.md` use `pvdkit` throughout for exactly that shared
 layer, never for the product. Every plugin speaks the
-PVD decoder interface v1 defined in `third_party/pvd/PictureViewPlugin.h` (UTF-8 copy of the
-SDK original; never edit it). The author's reference decoders (`third_party/pvd/examples/pvdBMP.cpp`,
+PVD decoder interface v1.1 (2026.09.30; numeric interface version remains 1) defined in
+`third_party/pvd/PictureViewPlugin.h` (verbatim UTF-8 SDK snapshot; never hand-edit it).
+The author's reference decoders (`third_party/pvd/examples/pvdBMP.cpp`,
 `pvdIJL.cpp`, `pvdDjVu.cpp`) and the PictureView distribution readme/help
 (`third_party/pvd/dist-docs/`) document how the host calls the exports and which priorities the
 built-in decoders use; read them before touching the pvd layer. Plugins today: `plugins/avif` →
@@ -48,7 +49,7 @@ only. No WIC, no GDI+, no system codecs.
 5. **Errors.** Expected failures (not our format, corrupt file, unsupported feature, page out of
    range, host abort, size limits, file cannot be opened) are `std::expected<T, Error>`. Exceptions
    are ON and reserved for OOM (`std::bad_alloc`) and broken invariants. Never throw for control
-   flow. The 8 exports are wrapped in a catch-all firewall that turns any exception into `FALSE` /
+   flow. The 9 exports are wrapped in a catch-all firewall that turns any exception into `FALSE` /
    no-op. Nothing ever propagates into the host.
 6. **TDD.** Failing test first, then the minimal code that passes, then refactor. Tests and the code
    they cover land in the same unit of work. No "tests later".
@@ -157,4 +158,4 @@ tests/support/  the leak gate: heap/handle accounting, hostile corpus, the scena
   with its reason - both the local run and the CI run must be clean, and the local run alone
   cannot prove the CI one.
 - The Release presets produce every `<NAME>.pvd` whose import table lists only `KERNEL32.dll` and
-  whose export table is exactly the eight bare `pvd*` names (`<id>_check_imports`, `<id>_check_exports`).
+  whose export table is exactly the nine bare `pvd*` names (`<id>_check_imports`, `<id>_check_exports`).

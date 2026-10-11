@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -76,7 +78,7 @@ TEST_CASE("the production plugin opens a fixture from memory and from disk with 
     CHECK(memoryInfo.animated);
     CHECK(memoryInfo.formatName == "AVIF");
     CHECK(memoryInfo.compression == "AV1");
-    CHECK(memoryInfo.comments.find("3 frames") != std::string::npos);
+    CHECK(memoryInfo.comments == "8-bit 4:4:4, sRGB");
 
     const auto head = std::span{bytes}.first(std::min(bytes.size(), kHostHeadSize));
     auto fromDisk = plugin->open(pvdkit::pvd::OpenRequest{name, bytes.size(), head});
@@ -91,6 +93,62 @@ TEST_CASE("the production plugin opens a fixture from memory and from disk with 
     CHECK(page->width == 64);
     CHECK(page->height == 64);
     CHECK(page->frameTimeMs == 300);
+}
+
+TEST_CASE("native RGB production defaults preserve legacy output for callers that do not opt in")
+{
+    const auto plugin = pvdkit::pvd::makePlugin();
+    REQUIRE(plugin != nullptr);
+    struct ExpectedOutput
+    {
+        std::string_view fixture;
+        std::uint32_t legacyCode;
+        std::uint32_t nativeCode;
+        bool alpha;
+    };
+    constexpr std::array expected{
+        ExpectedOutput{"quad_rgb_lossless.avif", 24, 25, false},
+        ExpectedOutput{"alpha_steps.avif", 32, 33, true},
+        ExpectedOutput{"tenbit_444.avif", 64, 49, false},
+        ExpectedOutput{"cosmos1650_yuv444_10bpc_p3pq.avif", 64, 49, false},
+    };
+    for (const auto &output : expected) {
+        const auto bytes = readFixture(output.fixture);
+        for (const bool nativeRgb : {false, true}) {
+            CAPTURE(output.fixture);
+            CAPTURE(nativeRgb);
+            const auto opened =
+                plugin->open(pvdkit::pvd::OpenRequest{output.fixture, 0, bytes, std::nullopt, nativeRgb});
+            REQUIRE(opened.has_value());
+            const auto decoded = (*opened)->decodePage(0, pvdkit::pvd::Progress{});
+            REQUIRE(decoded.has_value());
+            CHECK(decoded->bitsPerPixel == (nativeRgb ? output.nativeCode : output.legacyCode));
+            CHECK(decoded->hasAlpha == output.alpha);
+            CHECK((*opened)->freePage(decoded->pixels));
+        }
+    }
+}
+
+TEST_CASE("RGB48 production output uses six bytes for opaque deep and HDR sources")
+{
+    const auto plugin = pvdkit::pvd::makePlugin();
+    REQUIRE(plugin != nullptr);
+    for (const auto name : {"tenbit_444.avif", "cosmos1650_yuv444_10bpc_p3pq.avif", "colors_hdr_rec2020.avif",
+                            "weld_sato_12B_8B_q0.avif"}) {
+        CAPTURE(name);
+        const auto bytes = readFixture(name);
+        const auto opened = plugin->open(pvdkit::pvd::OpenRequest{name, 0, bytes, std::nullopt, true});
+        REQUIRE(opened.has_value());
+        const auto page = (*opened)->pageInfo(0);
+        REQUIRE(page.has_value());
+        const auto decoded = (*opened)->decodePage(0, pvdkit::pvd::Progress{});
+        REQUIRE(decoded.has_value());
+        CHECK(decoded->bitsPerPixel == 49);
+        CHECK_FALSE(decoded->hasAlpha);
+        CHECK(decoded->pitchBytes == page->width * 6);
+        CHECK(decoded->pixels.size() == static_cast<std::size_t>(page->width) * page->height * 6);
+        CHECK((*opened)->freePage(decoded->pixels));
+    }
 }
 
 TEST_CASE("the production plugin uses lenient decoding")

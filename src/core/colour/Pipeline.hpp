@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 
@@ -74,6 +75,31 @@ namespace pvdkit::core::colour
         return static_cast<std::uint16_t>(count);
     }
 
+    /// Plugin-owned immutable colour tables. Lazy publication is serialized; entries never move
+    /// or expire while sessions borrow them. The bounded gain cache falls back to session ownership.
+    class ColourTables
+    {
+      public:
+        [[nodiscard]] const SrgbOutputTables &output() const noexcept;
+
+      private:
+        friend class Presentation;
+        using Table = std::array<float, 65'536>;
+        struct GainEntry
+        {
+            float peakNits{};
+            std::unique_ptr<const Table> values;
+        };
+
+        [[nodiscard]] std::span<const float> transfer(std::uint16_t characteristics) const;
+        [[nodiscard]] std::span<const float> gains(float peakNits, std::span<const float> transfer) const;
+
+        SrgbOutputTables output_;
+        mutable std::mutex mutex_;
+        mutable std::array<std::unique_ptr<const Table>, 7> transfers_;
+        mutable std::array<GainEntry, 8> gains_;
+    };
+
     /// The per-session presentation: 16-bit BGRA codes of a CICP-described source to 16-bit sRGB.
     /// Per pixel: the transfer LUT (linear light, absolute nits for PQ), the HLG OOTF, the
     /// BT.2390 EETF on max(R, G, B), the primaries matrix, the exact sRGB quantiser - the EETF in
@@ -92,15 +118,14 @@ namespace pvdkit::core::colour
     class Presentation
     {
       public:
-        /// `outputTables` is borrowed for the lifetime of this object; the caller keeps it alive
+        /// `tables` is borrowed for the lifetime of this object; the caller keeps it alive
         /// (the composition root owns it and outlives every session, ARCHITECTURE section 2).
-        Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits, const SrgbOutputTables &outputTables);
+        Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits, const ColourTables &tables);
         /// The same over explicit chromaticities (`ImageMeta::chromaticities`): when set and usable
         /// (`Primaries::isUsable`) they replace the coded primaries and the matrix is derived from
         /// them at run time; a set that is not usable is ignored (the coded primaries stand).
         Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits,
-                     const std::optional<Primaries::Chromaticities> &chromaticities,
-                     const SrgbOutputTables &outputTables);
+                     const std::optional<Primaries::Chromaticities> &chromaticities, const ColourTables &tables);
 
         Presentation(const Presentation &) = delete;
         Presentation &operator=(const Presentation &) = delete;
@@ -112,16 +137,17 @@ namespace pvdkit::core::colour
         /// sRGB. A set that is not usable is ignored here as in the constructor.
         [[nodiscard]] static bool needed(const Cicp &cicp,
                                          const std::optional<Primaries::Chromaticities> &chromaticities) noexcept;
-        /// Converts one tightly packed BGRA64 row in place. Alpha is copied through unchanged.
-        void apply(std::span<std::uint16_t> bgraRow) const noexcept;
+        /// Converts packed 16-bit pixels in place, preserving alpha when present.
+        /// `channels` is 3 (RGB48) or 4 (BGRA64/RGBA64); rows contain whole pixels.
+        void apply(std::span<std::uint16_t> row, bool rgbOrder = false, unsigned channels = 4) const noexcept;
         /// Byte-span bridge for PixelBuffer, whose storage is byte-owned by the shared core.
-        void apply(std::span<std::byte> bgraRow) const noexcept;
-        /// Converts a whole tightly packed BGRA64 image (`height` rows of `pitchBytes`) in place.
+        void apply(std::span<std::byte> row, bool rgbOrder = false, unsigned channels = 4) const noexcept;
+        /// Converts a whole tightly packed RGB48/BGRA64/RGBA64 image (`height` rows of `pitchBytes`).
         /// Images of at least 256 Ki pixels are split into min(clamp(maxThreads, 1, 4), height)
         /// disjoint row bands: the last band runs on the calling thread, the others on
         /// std::thread workers that are joined before the call returns, on every path.
         void applyImage(std::span<std::byte> pixels, std::uint32_t pitchBytes, std::uint32_t height,
-                        unsigned maxThreads) const;
+                        unsigned maxThreads, bool rgbOrder = false, unsigned channels = 4) const;
         [[nodiscard]] float sourcePeakNits() const noexcept;
         [[nodiscard]] const SrgbOutputTables &outputTables() const noexcept;
         /// The BT.2390 gain by maximum channel code: 65,536 entries for a PQ session over coded
@@ -129,6 +155,7 @@ namespace pvdkit::core::colour
         /// sessions and PQ over explicit chromaticities never build it). Exposed so the tests can
         /// pin which path a session takes and what the table holds.
         [[nodiscard]] std::span<const float> toneMapGains() const noexcept;
+        [[nodiscard]] std::span<const float> transferValues() const noexcept;
 
       private:
         using Table = std::array<float, 65'536>;
@@ -138,16 +165,16 @@ namespace pvdkit::core::colour
         };
         /// The members' initialisation, over chromaticities already checked (or absent).
         Presentation(const Cicp &cicp, std::optional<float> masteringPeakNits,
-                     const std::optional<Primaries::Chromaticities> &chromaticities,
-                     const SrgbOutputTables &outputTables, Usable);
+                     const std::optional<Primaries::Chromaticities> &chromaticities, const ColourTables &tables,
+                     Usable);
 
-        /// Converts `pixelCount` pixels read through `load(pixel, channel)` (channel 0 = blue,
-        /// 1 = green, 2 = red; a 16-bit code) and written through `store(pixel, channel, code)`, in
+        /// Converts `pixelCount` pixels read through `load(pixel, channel)` and written through
+        /// `store(pixel, channel, code)`; RGB order selects red/blue indices once per call. Uses
         /// blocks of a few dozen pixels and three passes over structure-of-arrays stack buffers:
         /// decode (LUT, OOTF, the table path's gain), the matrix (a call-free, branch-free loop the
         /// compiler vectorises), the scalar path's EETF and the quantiser.
         template <class Load, class Store>
-        void convertPixels(std::size_t pixelCount, const Load &load, const Store &store) const noexcept;
+        void convertPixels(std::size_t pixelCount, const Load &load, const Store &store, bool rgbOrder) const noexcept;
 
         bool active_;
         bool hlg_;
@@ -158,8 +185,9 @@ namespace pvdkit::core::colour
         Primaries::Rgb sourceLuminance_;
         ToneMap::Eetf toneMap_;
         const SrgbOutputTables &outputTables_;
-        std::unique_ptr<Table> transferLut_;
-        std::unique_ptr<Table> toneGain_;
+        std::span<const float> transferLut_;
+        std::unique_ptr<const Table> ownedToneGain_;
+        std::span<const float> toneGain_;
     };
 
 } // namespace pvdkit::core::colour

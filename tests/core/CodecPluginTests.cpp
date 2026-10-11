@@ -33,8 +33,7 @@ namespace pvdkit::core
             test::FakeDecoderFactory factory;
             test::FakeImageDescriber describer{describerState};
             // Heap-held: 384 KiB does not belong on the test stack.
-            std::unique_ptr<const colour::SrgbOutputTables> outputTables =
-                std::make_unique<const colour::SrgbOutputTables>();
+            std::unique_ptr<const colour::ColourTables> outputTables = std::make_unique<const colour::ColourTables>();
             CodecPlugin plugin;
 
             explicit Harness(ImageMeta imageMeta = test::meta(), const DecoderOptions options = test::options())
@@ -141,9 +140,9 @@ namespace pvdkit::core
             const auto &firstSession = dynamic_cast<const FileSession &>(**first);
             const auto &secondSession = dynamic_cast<const FileSession &>(**second);
             const auto &thirdSession = dynamic_cast<const FileSession &>(**third);
-            CHECK(&firstSession.outputTables() == hdr.outputTables.get());
-            CHECK(&secondSession.outputTables() == hdr.outputTables.get());
-            CHECK(&thirdSession.outputTables() == sdr.outputTables.get());
+            CHECK(&firstSession.outputTables() == &hdr.outputTables->output());
+            CHECK(&secondSession.outputTables() == &hdr.outputTables->output());
+            CHECK(&thirdSession.outputTables() == &sdr.outputTables->output());
             CHECK(&firstSession.outputTables() != &thirdSession.outputTables());
 
             // Opening sessions built nothing of its own: the plugin's tables are the ones it was
@@ -172,6 +171,53 @@ namespace pvdkit::core
             CHECK(harness.fileState.dataDestructions == 0);
             opened->reset();
             CHECK(harness.fileState.dataDestructions == 1);
+        }
+
+        TEST_CASE("CodecPlugin wide disk mode selects UTF-16 without changing code units")
+        {
+            Harness harness;
+            harness.fileState.fileBytes = {std::byte{9}, std::byte{8}, std::byte{7}};
+            const std::vector head{std::byte{1}};
+            const std::wstring wideName =
+                L"C:/\u0444\u0430\u0439\u043b-\U0001F600-" + std::wstring(1, static_cast<wchar_t>(0xD800)) + L".bin";
+            auto opened = harness.plugin.open(pvd::OpenRequest{"must-not-open.bin", 3, head, wideName});
+
+            REQUIRE(opened.has_value());
+            CHECK(harness.fileState.openCalls == 1);
+            CHECK(harness.fileState.openedPath.empty());
+            REQUIRE(harness.fileState.openedWidePath.has_value());
+            CHECK(*harness.fileState.openedWidePath == wideName);
+            CHECK(harness.factoryState.lookedAt == head);
+            CHECK(harness.factoryState.createdFrom == harness.fileState.fileBytes);
+            CHECK(harness.fileState.dataDestructions == 0);
+            opened->reset();
+            CHECK(harness.fileState.dataDestructions == 1);
+        }
+
+        TEST_CASE("CodecPlugin wide memory mode ignores both paths")
+        {
+            Harness harness;
+            harness.fileState.throwOnOpen = true;
+            const std::vector wholeFile{std::byte{3}, std::byte{4}};
+            auto opened = harness.plugin.open(pvd::OpenRequest{"invalid", 0, wholeFile, L"invalid"});
+            REQUIRE(opened.has_value());
+            CHECK(harness.fileState.openCalls == 0);
+            CHECK(harness.factoryState.createdFrom == wholeFile);
+        }
+
+        TEST_CASE("CodecPlugin does not fall back to UTF-8 when a wide path is empty or fails")
+        {
+            Harness harness;
+            harness.fileState.openError = test::error(ErrorCode::FileOpenFailed, "wide open failed");
+            const std::vector head{std::byte{1}};
+            const auto opened = harness.plugin.open(pvd::OpenRequest{"fallback.bin", 10, head, L""});
+            REQUIRE_FALSE(opened.has_value());
+            CHECK(opened.error().detail == "wide open failed");
+            CHECK(harness.fileState.openCalls == 1);
+            CHECK(harness.fileState.openedPath.empty());
+            REQUIRE(harness.fileState.openedWidePath.has_value());
+            CHECK(harness.fileState.openedWidePath->empty());
+            CHECK(harness.factoryState.createCalls == 0);
         }
 
         TEST_CASE("CodecPlugin passes through file source errors without creating a "

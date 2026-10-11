@@ -179,8 +179,7 @@ namespace pvdkit::avif
     core::Result<void> detail::checkDestination(const core::ImageMeta &meta, const pvd::PixelFormat format,
                                                 const std::size_t dstSize, const std::uint32_t pitchBytes)
     {
-        const std::uint32_t bytesPerPixel =
-            format == pvd::PixelFormat::Bgra64 ? 8U : (format == pvd::PixelFormat::Bgra32 ? 4U : 3U);
+        const auto bytesPerPixel = pvd::pixelLayout(format).bytesPerPixel;
         const std::uint64_t minimumPitch = static_cast<std::uint64_t>(meta.width) * bytesPerPixel;
         if (pitchBytes < minimumPitch) {
             return std::unexpected(
@@ -199,8 +198,11 @@ namespace pvdkit::avif
     {
         avifRGBImage rgb{};
         avifRGBImageSetDefaults(&rgb, &image);
-        rgb.depth = format == pvd::PixelFormat::Bgra64 ? 16U : 8U;
-        rgb.format = format == pvd::PixelFormat::Bgr24 ? AVIF_RGB_FORMAT_BGR : AVIF_RGB_FORMAT_BGRA;
+        const auto layout = pvd::pixelLayout(format);
+        rgb.depth = layout.bytesPerPixel >= 6 ? 16U : 8U;
+        rgb.format = layout.bytesPerPixel == 3 || layout.bytesPerPixel == 6
+                         ? (layout.rgb ? AVIF_RGB_FORMAT_RGB : AVIF_RGB_FORMAT_BGR)
+                         : (layout.rgb ? AVIF_RGB_FORMAT_RGBA : AVIF_RGB_FORMAT_BGRA);
         rgb.alphaPremultiplied = AVIF_FALSE;
         rgb.chromaUpsampling = AVIF_CHROMA_UPSAMPLING_AUTOMATIC;
         rgb.maxThreads = maxThreads;

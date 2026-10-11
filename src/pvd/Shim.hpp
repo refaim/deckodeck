@@ -30,6 +30,8 @@ namespace pvdkit::pvd
         void pluginInfo(pvdInfoPlugin *output) noexcept;
         [[nodiscard]] BOOL fileOpen(const char *fileName, INT64 fileSize, const BYTE *head, UINT32 headSize,
                                     pvdInfoImage *output, void **context) noexcept;
+        [[nodiscard]] BOOL fileOpenW(const wchar_t *fileName, INT64 fileSize, const BYTE *head, UINT32 headSize,
+                                     pvdInfoImage *output, void **context) noexcept;
         [[nodiscard]] BOOL pageInfo(void *context, UINT32 page, pvdInfoPage *output) noexcept;
         [[nodiscard]] BOOL pageDecode(void *context, UINT32 page, pvdInfoDecode *output, pvdDecodeCallback callback,
                                       void *callbackContext) noexcept;
@@ -37,6 +39,9 @@ namespace pvdkit::pvd
         void fileClose(void *context) noexcept;
 
       private:
+        [[nodiscard]] BOOL openFile(const char *utf8FileName, const wchar_t *wideFileName, INT64 fileSize,
+                                    const BYTE *head, UINT32 headSize, pvdInfoImage *output, void **context,
+                                    bool nativeRgb);
         IPlugin &plugin_;
         PluginIdentity identity_;
     };

@@ -44,30 +44,42 @@ pvdkit/
 Every plugin is one DLL `<NAME>.pvd` = the shared `Exports.cpp` + `Plugin.def` + `Plugin.rc`
 compiled against the plugin's generated identity, linked with `pvdkit_pvd` and the plugin's
 composition root. Every plugin ships x64 and x86 with the same guarantees: static CRT,
-`KERNEL32.dll` as the only import, the eight bare exports, 100 % line and branch coverage of
+`KERNEL32.dll` as the only import, the nine bare exports, 100 % line and branch coverage of
 `src/**` and `plugins/*/src/**`, a VERSIONINFO resource, a zip per architecture.
 
-## 1. What the host expects (PVD interface v1, summary)
+## 1. What the host expects (PVD interface v1.1, numeric version 1, summary)
 
 Source of truth: `third_party/pvd/PictureViewPlugin.h`. Key semantics:
 
-- Eight `extern "C" __stdcall` exports: `pvdInit`, `pvdExit`, `pvdPluginInfo`, `pvdFileOpen`,
+- Nine `extern "C" __stdcall` exports: `pvdInit`, `pvdExit`, `pvdPluginInfo`, `pvdFileOpen`, `pvdFileOpenW`,
   `pvdPageInfo`, `pvdPageDecode`, `pvdPageFree`, `pvdFileClose`. Listed in `src/pvd/Plugin.def`,
   identical for every plugin.
-- All strings are UTF-8. Strings we hand to the host must stay valid: plugin-info strings for the
+- All `char` strings are UTF-8; `pvdFileOpenW` accepts UTF-16. Strings we hand to the host must stay valid: plugin-info strings for the
   process lifetime, file-info strings until `pvdFileClose`.
 - `pvdInit` returns `PVD_CURRENT_INTERFACE_VERSION` (1), or 0 on failure.
-- `pvdFileOpen(pFileName, lFileSize, pBuf, lBuf, pImageInfo, ppContext)`:
+- `pvdFileOpen` / `pvdFileOpenW(pFileName, lFileSize, pBuf, lBuf, pImageInfo, ppContext)`:
   `pBuf`/`lBuf` is the head of the file (usually ≥ 16 KiB). If `lFileSize == 0` the file does not
   exist on disk (archive / virtual panel): `pBuf` is the **whole** file and stays valid until
   `pvdFileClose`. Otherwise open the file ourselves by name. Return `TRUE` only if we will decode it.
   Several files may be open at once in one plugin instance: all state lives in the context.
+  The SDK prefers the wide entry point; we retain both for older hosts. UTF-16 code units
+  reach Win32 without a UTF-8 round trip, including filenames containing lone surrogates.
 - `pvdPageInfo(ctx, iPage, pPageInfo)`: width, height, informational bpp, frame time in ms for
   animations. Page index is 0-based; out of range → `FALSE`.
-- `pvdPageDecode(ctx, iPage, pDecodeInfo, callback, cbCtx)`: fill `pImage` (BGR 24, BGRA 32, or
-  BGRA 64 with little-endian 16-bit samples), `nBPP`, `lImagePitch` (positive = top-down rows),
-  `pPalette = nullptr`, `nColorsUsed = 0`, `Flags` (`PVD_IDF_ALPHA`, the host's undocumented bit 2,
-  when alpha is meaningful; never `PVD_IDF_READONLY`, because the buffer is ours and writable).
+- `pvdPageDecode(ctx, iPage, pDecodeInfo, callback, cbCtx)`: fill `pImage` (BGR/RGB 24, BGRA/RGBA 32,
+  RGB 48 or BGRA/RGBA 64 with little-endian 16-bit samples), `nBPP`, `lImagePitch` (positive = top-down rows),
+  `pPalette = nullptr`, `nColorsUsed = 0`, `Flags` (`PVD_IDF_ALPHA`, SDK mask `0x2`,
+  when alpha is meaningful). The obsolete `PVD_IDF_READONLY` flag is absent from SDK v1.1.
+  Write only the original prefix through `lImagePitch`; leave the optional `pICC`/`lICC` tail
+  untouched and never set `PVD_IDF_ICC`. This also preserves old callers' smaller structures.
+  The 2026.09.30 x64 host ignores ICC transport, as does the 2021.4.19 host; see
+  [the binary-specific analysis](host/pictureview-2026-09-30-abi.md).
+  AVIF, EXR and RPGMVP opt in to native RGB through `pvdFileOpenW`: `nBPP` codes 25/33/49/65 mean
+  RGB8/RGBA8/RGB16/RGBA16, occupying 3/4/6/8 bytes per pixel. Opaque deep or colour-presented
+  sources use RGB48; sources with alpha use RGBA64. `pvdFileOpen` retains BGR codes 24/32/64.
+  This compatibility policy follows the examined 2021 and 2026 hosts' entry-point selection;
+  numeric interface version 1 provides no capability query. See the binary-specific note above.
+  Grayscale and indexed output are not emitted.
   `callback` may be `NULL`; if it returns `FALSE` we stop and return `FALSE`.
   PictureView testing on 2026-09-13 established that `nBPP == 64` is accepted and rendered like
   the 8-bit path; its 10-bit output, spatial dithering, gamma-correct scaling and auto-levels can
@@ -84,9 +96,9 @@ only (static CRT).
 
 ```
 host (0PictureView.dll)
-   │ C ABI (8 exports)
+   │ C ABI (9 exports)
    ▼
-src/pvd/Exports.cpp ── composition root + 8 one-line forwards (raw pointers allowed here);
+src/pvd/Exports.cpp ── composition root + 9 one-line forwards (raw pointers allowed here);
                        compiled once per plugin against that plugin's pvd/PluginConstants.hpp
 src/pvd/Shim        ── marshalling C structs ⇄ C++ values, firewall, ContextHandle
    │ IPlugin / IFileSession (C++ values only)
@@ -94,7 +106,7 @@ src/pvd/Shim        ── marshalling C structs ⇄ C++ values, firewall, Conte
 src/core            ── all format-neutral decisions: CodecPlugin, FileSession, Transform, PixelBuffer
    │ IFileSource / IDecoderFactory / IDecoder / IImageDescriber (C++ values only)
    ▼
-src/adapters/win    ── FileMapping over CreateFileW/CreateFileMappingW/MapViewOfFile, Utf8→wide
+src/adapters/win    ── FileMapping over CreateFileW/CreateFileMappingW/MapViewOfFile, UTF-8 or UTF-16
 plugins/<id>/src/core      ── the plugin's decisions without its library (IImageDescriber, ...)
 plugins/<id>/src/adapters  ── the codec adapter (IDecoderFactory/IDecoder), one-to-one, no decisions
 plugins/<id>/src/DefaultPlugin.cpp ── pvd::makePlugin(): owns FileSource, the factory, the
@@ -117,7 +129,7 @@ build enforces the ownership (the shared libraries do not see the plugin roots) 
 enforces it independently by resolving every include against the source roots (§5).
 
 Everything is a value or a `std::unique_ptr`. Objects that are injected by reference (`IFileSource&`,
-`IDecoderFactory&`, `const IImageDescriber&`, `const colour::SrgbOutputTables&`) outlive their users
+`IDecoderFactory&`, `const IImageDescriber&`, `const colour::ColourTables&`) outlive their users
 by construction (the composition root owns them in declaration order). Classes holding references
 delete copy and move. There is no other way to hold state across sessions: no function-local
 static, no namespace-scope object with a constructor or destructor (§7).
@@ -156,10 +168,13 @@ std::string_view name(ErrorCode);   // for diagnostics/tests
 struct PluginInfo { std::uint32_t priority = 0; std::string name, version, comments; };
 struct ImageInfo  { std::uint32_t pageCount = 0; bool animated = false; std::string formatName, compression, comments; };
 struct PageInfo   { std::uint32_t width, height, bitsPerPixel, frameTimeMs; };
-enum class PixelFormat : std::uint8_t { Bgr24, Bgra32, Bgra64 }; // Bgra64 = LE 16-bit samples, straight alpha
+enum class PixelFormat : std::uint8_t { Bgr24, Bgra32, Bgra64, Rgb24, Rgba32, Rgba64, Rgb48 };
+struct PixelLayout { std::uint32_t bytesPerPixel, pvdCode; bool rgb; };
+constexpr PixelLayout pixelLayout(PixelFormat); // valid enum -> 3/4/6/8 bytes, 24/32/64 or 25/33/49/65
+// Alpha is straight; 16-bit samples are LE. Enum values are internal indices, not wire codes.
 struct DecodedPage {                     // a view; pixel memory is owned by the session
   std::span<const std::byte> pixels;     // top-down rows
-  std::uint32_t bitsPerPixel = 0;        // 24, 32 or 64
+  std::uint32_t bitsPerPixel = 0;        // PVD format code, not storage bits: 24/32/64 or 25/33/49/65
   std::uint32_t pitchBytes = 0;          // width * bytesPerPixel, no padding
   bool hasAlpha = false;                 // alpha carries information, rather than being fully opaque
   std::uint8_t hostOrientation = 0;      // 0..7, PictureView's orientation code
@@ -168,6 +183,8 @@ struct OpenRequest {
   std::string_view utf8FileName;
   std::uint64_t fileSize = 0;            // 0 → `head` is the whole file and outlives the session
   std::span<const std::byte> head;
+  std::optional<std::wstring_view> wideFileName{}; // present → use this name, even if empty
+  bool nativeRgb = false;              // output policy, independent of filename encoding
 };
 class Progress {                         // wraps the host callback; no callback → always continue
  public:
@@ -216,6 +233,7 @@ class IPlugin {
   non-copyable):
   `UINT32 init()`, `void exit()`, `void pluginInfo(pvdInfoPlugin*)`,
   `BOOL fileOpen(const char*, INT64, const BYTE*, UINT32, pvdInfoImage*, void**)`,
+  `BOOL fileOpenW(const wchar_t*, INT64, const BYTE*, UINT32, pvdInfoImage*, void**)`,
   `BOOL pageInfo(void*, UINT32, pvdInfoPage*)`,
   `BOOL pageDecode(void*, UINT32, pvdInfoDecode*, pvdDecodeCallback, void*)`,
   `void pageFree(void*, pvdInfoDecode*)`, `void fileClose(void*)`.
@@ -223,14 +241,15 @@ class IPlugin {
   `pluginInfo` first writes the identity (`fillDefaultPluginInfo(output, identity)`: priority,
   name, version, empty comments) and only then consults `IPlugin::info()`, so a throwing `info()`
   leaves the host with the constant identity.
-  `fileOpen` builds `OpenRequest`, calls `IPlugin::open`, on success fills `pvdInfoImage` from
+  `fileOpen` / `fileOpenW` build `OpenRequest`, call `IPlugin::open`, on success fill `pvdInfoImage` from
   `ImageInfo` (strings via `c_str()` of strings owned by the session) and stores the context.
   `pageDecode` builds a `Progress` capturing the raw callback + context in a lambda, then fills
-  `pvdInfoDecode` from `DecodedPage`, including undocumented `PVD_IDF_ALPHA` bit 2 when `hasAlpha`
+  `pvdInfoDecode` from `DecodedPage`, including SDK `PVD_IDF_ALPHA` mask `0x2` when `hasAlpha`
   is true and `DecodedPage::hostOrientation << PVD_IDF_ORIENTATION_SHIFT` in the high nibble.
-  `PvdApi.hpp` owns both declarations and records their provenance; the recovered host behaviour and
-  EXIF-to-code table live in [`docs/host/pictureview-abi.md`](host/pictureview-abi.md). The shim writes
-  only the documented `pvdInfoDecode` fields.
+  `PvdApi.hpp` declares only the observed orientation shift; the SDK declares alpha. The recovered
+  host behaviour and EXIF-to-code table live in [`docs/host/pictureview-abi.md`](host/pictureview-abi.md).
+  The shim writes only the original `pvdInfoDecode` prefix; no aggregate assignment or writes to
+  its new ICC tail are permitted until a separate compatibility strategy is designed.
   `pageFree` calls `freePage(span over pImage)` — the span length
   is unknown to the host, so the session matches by `data()` only.
 - `Exports.cpp`: the shared composition root, compiled once into every plugin DLL (and into
@@ -241,16 +260,16 @@ class IPlugin {
   Everything is a one-line forward wrapped in `guarded`. It is the only shared file that may
   include the generated `pvd/PluginConstants.hpp` (guard rule).
 - `PvdApi.hpp` includes `<Windows.h>` (lean, `NOMINMAX`) and the SDK header inside `extern "C"`
-  exactly once, for `Shim`, `Exports.cpp` and the tests. It also declares the two observed decode
-  flag conventions used by the shim: alpha bit 2 and the PictureView orientation code beginning at
-  bit 4. Their binary provenance is recorded in [`docs/host/pictureview-abi.md`](host/pictureview-abi.md).
-- Exports on x86: the eight functions are `__stdcall`, so their symbols are `_pvdInit@0`,
-  `_pvdFileOpen@28`, ... while the host resolves the bare names. `Plugin.def` lists the bare names
+  exactly once, for `Shim`, `Exports.cpp` and the tests. It also declares the observed PictureView
+  orientation shift of 4. Its binary provenance is recorded in
+  [`docs/host/pictureview-abi.md`](host/pictureview-abi.md).
+- Exports on x86: the nine functions are `__stdcall`, so their symbols are `_pvdInit@0`,
+  `_pvdFileOpen@28`, `_pvdFileOpenW@28`, ... while the host resolves the bare names. `Plugin.def` lists the bare names
   and is the one source of truth for both architectures: lld-link (like link.exe) resolves an
   undecorated `.def` name to the decorated `__stdcall` symbol itself, so the x86 export table
   reads `pvdInit`, `pvdFileOpen`, ... with no alias lines, no `#ifdef _M_IX86` and no
   `/EXPORT` pragmas. `scripts/check-exports.ps1` (ctest `<id>_check_exports`, Release) pins the
-  export table to exactly those eight bare names on both architectures; the e2e host driver
+  export table to exactly those nine bare names on both architectures; the e2e host driver
   (`GetProcAddress` by bare name) is the behavioural acceptance test.
 
 ### 3.4a Plugin identity: one source of truth per plugin
@@ -297,7 +316,12 @@ project-wide version: the kit has none, each plugin has its own.
 
 ```cpp
 class IFileData { public: virtual ~IFileData() = default; [[nodiscard]] virtual std::span<const std::byte> bytes() const = 0; };
-class IFileSource { public: virtual ~IFileSource() = default; [[nodiscard]] virtual Result<std::unique_ptr<IFileData>> open(std::string_view utf8Path) = 0; };
+class IFileSource {
+ public:
+  virtual ~IFileSource() = default;
+  [[nodiscard]] virtual Result<std::unique_ptr<IFileData>> open(std::string_view utf8Path) = 0;
+  [[nodiscard]] virtual Result<std::unique_ptr<IFileData>> open(std::wstring_view widePath) = 0;
+};
 ```
 
 ### 3.6 `src/core/IDecoder.hpp`, `src/core/IImageDescriber.hpp`
@@ -319,7 +343,7 @@ struct ImageMeta {                    // every scalar has a default: an empty Im
   bool hasAlpha = false, alphaPremultiplied = false;
   Cicp cicp{};
   std::uint32_t frameCount = 0;       // ≥ 1 once parsed
-  bool animated = false;              // frameCount > 1 (image sequence)
+  bool animated = false;              // timed sequence; independent still pages remain false
   Transforms transforms;
   bool hasIcc = false, hasExif = false, hasXmp = false;
   bool indexed = false;                 // source stores palette indices; depth is the index width (1/2/4/8)
@@ -332,19 +356,31 @@ struct ImageMeta {                    // every scalar has a default: an empty Im
                                          // plugin's describer; empty where the shared fields say it all
 };
 struct FrameTiming { std::uint32_t durationMs; };
+struct PageMeta {
+  ImageMeta image;                    // page geometry, alpha, transforms and source precision
+  bool forceHighPrecision = false;    // true when colour is resolved only after decoding
+};
+struct ColourEncoding {
+  Cicp cicp;
+  std::optional<float> masteringPeakNits;
+  std::optional<colour::Primaries::Chromaticities> chromaticities;
+};
 struct DecoderOptions {
   unsigned maxThreads = 0;
   bool strict = false;
   std::uint64_t maxPixels = 0;
   std::uint32_t maxDimension = 0;
-  bool deepOutput = false; // deep source (>8 bits/sample) -> Bgra64 instead of 8-bit reduction
+  bool deepOutput = false; // deep source (>8 bits/sample) -> 16-bit samples instead of 8-bit reduction
+  bool nativeRgbOutput = false; // decoder opt-in, ANDed with OpenRequest::nativeRgb per session
 };
 class IDecoder {
  public:
   virtual ~IDecoder() = default;
   [[nodiscard]] virtual const ImageMeta& meta() const = 0;
+  [[nodiscard]] virtual Result<PageMeta> pageMeta(std::uint32_t page) const;
+  [[nodiscard]] virtual ColourEncoding decodedColour() const;
   [[nodiscard]] virtual Result<FrameTiming> frameTiming(std::uint32_t frame) const = 0;
-  // Decodes frame `frame` and converts it to `format` (Bgra64 uses 16-bit little-endian samples)
+  // Decodes frame `frame` and converts it to `format` (Rgb48/Bgra64/Rgba64 use little-endian 16-bit samples)
   // into `dst` with `pitchBytes` per row (rows top-down, coded size).
   // dst.size() must be ≥ pitchBytes * height, else Internal.
   [[nodiscard]] virtual Result<void> decodeFrame(std::uint32_t frame, pvd::PixelFormat format,
@@ -396,9 +432,10 @@ Decisions (Task 7, open point 1):
   collinear, finite matrices) and falls back to its coded default otherwise; the presentation
   ignores a set that fails the check as well. `compression` and
   `sourceDetail` (Task 26) let a plugin whose container facts the shared fields cannot express
-  (an EXR's compression scheme, its tiling, parts and windows) hand the describer what it read;
+  (an EXR's compression scheme and concise source summary) hand the describer file-wide facts;
   the adapter fills them from the plugin's own core formatting functions and AVIF/RPGMVP leave
-  them empty. A float-valued source (EXR) delivers its pixels to the core as 16-bit PQ codes of
+  them empty. EXR multipage titles summarize the page count and structure rather than page zero
+  colour or channels; their compression field is empty because parts may differ. A float-valued source (EXR) delivers its pixels to the core as 16-bit PQ codes of
   absolute nits with `cicp.transfer = 16` and its tone-mapping peak in `masteringPeakNits`, so the
   one presentation path serves AVIF HDR and EXR alike (`plugins/exr/DESIGN.md` §4).
 - The host-facing words (`formatName`, `compression`, `comments`) are produced by the plugin's
@@ -418,7 +455,7 @@ Decisions (Task 7, open point 1):
   (`GetFileSizeEx`) go through it, so on the 32-bit build a picture or file beyond 4 GiB is
   refused instead of wrapped; there is no `#ifdef` on the architecture anywhere in `src/`. Frame
   times use `std::llround` (`long` is 32 bits on Windows).
-- `colour` (`src/core/colour/`): a float presentation pipeline over BGRA64.
+- `colour` (`src/core/colour/`): a float presentation pipeline over RGB48, BGRA64 or RGBA64.
   `Transfer` implements the H.273 sRGB, BT.1886, gamma 2.2/2.8, linear, PQ and HLG functions;
   code 2 and unknown transfers fall back to sRGB. `Primaries` derives the H.273 RGB-to-BT.709
   matrices at compile time from chromaticities, using Bradford adaptation where the white is not
@@ -436,8 +473,8 @@ Decisions (Task 7, open point 1):
   chromaticities `needed()` is always true and the coded primaries are ignored (a set that is not
   usable is ignored by `needed()` too, so a session over sRGB signalling plus an unusable set
   builds no presentation at all). `ToneMap` applies the BT.2390 Hermite-knee EETF to maxRGB so
-  one ratio scales all three channels and preserves hue. `Presentation` caches a 65,536-entry
-  input-transfer LUT for its session (it depends on the CICP transfer code), applies HLG's
+  one ratio scales all three channels and preserves hue. `Presentation` borrows a 65,536-entry
+  immutable input-transfer LUT from the plugin's `ColourTables` (keyed by the CICP transfer class), applies HLG's
   1000-nit/1.2-gamma OOTF where needed, tone-maps PQ/HLG to the 100-nit/0.005-nit SDR reference
   display, converts the primaries, applies the exact sRGB OETF, clamps, rounds, and preserves
   alpha. **Where the tone map runs** (Task 27) depends on the session: for PQ over any *coded*
@@ -478,10 +515,14 @@ Decisions (Task 7, open point 1):
   beyond 1000 codes, never darker; on the saturated synthetic patches of `colors_hdr_rec2020.avif`
   (Rec.2020/PQ, 470 nit): mean 780 codes (1.19 %), worst 5681, 42.7 % beyond 1000 codes, saturated
   reds clipped at 65535 with green raised. The gain table costs 65,536 EETF evaluations (four
-  `pow` each), built with the transfer LUT on the calling thread in the constructor: ≈ 9 ms on
-  x64 and ≈ 21 ms on x86 for a PQ session in Release (≈ 0.6 / 2.3 ms for a LUT-only session),
-  paid once per `pvdFileOpen` of such a file, and 512 KiB per live session instead of 256 KiB. A
-  session starts no thread at construction (a first attempt that split the build into code bands
+  `pow` each). Historically, building both LUTs cost ≈ 9 ms on x64 and ≈ 21 ms on x86 for a
+  PQ session in Release (≈ 0.6 / 2.3 ms for a transfer LUT alone). `ColourTables` now pays
+  that cost on the calling thread only on a cold cache entry: subsequent sessions borrow
+  the immutable transfer and gain tables without rebuilding them (§7). The cache holds
+  seven transfer classes and eight exact normalized PQ peak keys, at most 3.75 MiB plus
+  the 384 KiB output quantizer per plugin instance. Once all gain slots are occupied, an
+  additional peak uses a session-owned 256 KiB gain table, rebuilt for that presentation;
+  cached entries are never evicted. A session starts no thread at construction (a first attempt that split the build into code bands
   on `std::thread` workers left per-thread heap structures behind in the DLL that the leak gate
   charged to the "N sessions at once" scenario, deterministically, in the coverage build); the
   band workers of `applyImage` are the only threads a session ever starts, for pictures of at
@@ -500,7 +541,7 @@ Decisions (Task 7, open point 1):
   compares and a popcount; no OETF value is ever interpolated, and the result is proven equal to
   the former per-pixel `pow` path over every float in [0, 1] on both architectures
   (`tests/core/colour/PipelineTests.cpp`, the skipped exhaustive diagnostic). Those tables depend
-  on no `Cicp`, so the composition root builds one `SrgbOutputTables` per plugin instance (in
+  on no `Cicp`, so the composition root builds one `ColourTables` owner, containing the `SrgbOutputTables`, per plugin instance (in
   `pvdInit`, ≈ 5 ms on x64 / 15 ms on x86 in Release) and every `Presentation` of that plugin
   borrows it by `const&` through `CodecPlugin` and `FileSession` (§7) instead of building 384 KiB
   per session; `Presentation::outputTables()` and `FileSession::outputTables()` expose the
@@ -510,7 +551,9 @@ Decisions (Task 7, open point 1):
   existing SDR byte stream is unchanged; conversion is selected for any other primaries or
   transfer 4, 5, 8, 16 or 18. Unknown codes never reject a viewer input and are named as fallbacks
   in the plugin's image comments. `Presentation::applyImage` converts a whole tightly packed
-  BGRA64 image: below 256 Ki pixels on the calling thread, otherwise in
+  RGB48, BGRA64 or RGBA64 image: explicit `rgbOrder` and `channels` arguments select channel
+  order and stride (3 or 4 samples), defaulting to BGRA64 for existing callers. Alpha, when
+  present, is untouched. No packing buffer is needed. Below 256 Ki pixels it runs on the calling thread, otherwise in
   `min(clamp(maxThreads, 1, 4), height)` disjoint row bands (`maxThreads == 0`, the
   `DecoderOptions` default, means one band), the last band on the calling thread and the others
   on `std::thread` workers that a scope-bound joiner (`BandWorkers`, private to `Pipeline.cpp`)
@@ -535,42 +578,46 @@ Decisions (Task 7, open point 1):
   `imir` semantics follow the installed `avif.h` comment for `axis`; the adapter maps the number to
   `MirrorAxis`. Unit tests use 2×3 / 3×2 synthetic images with hand-derived expected outputs.
 - `CodecPlugin : pvd::IPlugin` (`src/core/CodecPlugin.hpp/.cpp`), ctor
-  `(IFileSource&, IDecoderFactory&, const IImageDescriber&, const colour::SrgbOutputTables&,
+  `(IFileSource&, IDecoderFactory&, const IImageDescriber&, const colour::ColourTables&,
   const DecoderOptions&, PluginInfo)` (the options are copied into the member; `FileSession` takes
   them the same way; the tables are borrowed and handed to every session).
   `open()`: `recognises(head)` else `NotRecognised`; if `fileSize == 0` data = `head`, else
-  `fileSource.open(name)` → `IFileData` owned by the session; `factory.create(data, options)`;
+  `fileSource.open(wideFileName)` when present, otherwise `fileSource.open(utf8FileName)` →
+  `IFileData` owned by the session; copy options and set
+  `sessionOptions.nativeRgbOutput = options.nativeRgbOutput && request.nativeRgb`;
+  `factory.create(data, sessionOptions)`;
   `describer.describe(meta)`; build `ImageInfo{frameCount, animated, formatName, compression,
   comments}`; return `FileSession`. It is the same class for every plugin.
-- `FileSession : pvd::IFileSession` (`src/core/FileSession.hpp/.cpp`): owns
-  `std::unique_ptr<IFileData>` (null in memory mode), `std::unique_ptr<IDecoder>`, `ImageInfo`,
-  `std::vector<std::unique_ptr<PixelBuffer>> outstanding_`, `DecoderOptions`, the borrowed
-  `const colour::SrgbOutputTables&` (ctor parameter, exposed by `outputTables()`), and one immutable
-  `Presentation` over those tables for the session when colour conversion is needed.
-  - `pageInfo(p)`: range check; `displaySize(meta)`;
-    `bitsPerPixel = indexed ? depth : depth × (hasAlpha ? 4 : 3)` (informational, so indexed4
-    reports 4 and 10-bit RGBA reports 40); `frameTimeMs` = `frameTiming(p)` when animated else 0.
-    EXIF orientation does not alter these dimensions because PictureView applies that rotation.
-  - `decodePage(p, progress)`: range check; `progress.report(0, 3)`; allocate `PixelBuffer` at coded
-    size (`Bgra64` with 8 bytes/pixel when colour presentation is needed, or when
-    `deepOutput && depth > 8`; otherwise `Bgra32` if `hasAlpha`, else `Bgr24`); `decodeFrame`;
-    `Presentation::applyImage` in place before any geometric transform, with
-    `options_.maxThreads` as its band budget (so images below 256 Ki pixels stay on the calling
-    thread and larger ones use `min(clamp(maxThreads, 1, 4), height)` row bands, `maxThreads == 0`
-    meaning one band, as described under `colour` above);
-    propagate `meta.hasAlpha` independently of layout; `progress.report(1, 3)`;
-    if any transform present → `Transform::apply` into a new buffer; `progress.report(2, 3)`;
-    move buffer into `outstanding_`; return the view with the EXIF-to-PictureView orientation code,
-    gated off whenever a shared transform is present. Any `false` from `report` → `Aborted`.
-  - `freePage(span)`: erase the buffer whose `bytes().data() == span.data()`; return whether found.
+- `FileSession : pvd::IFileSession` (`src/core/FileSession.hpp/.cpp`): owns the file data,
+  decoder, file-level `ImageInfo`, independently retained `PixelBuffer` pages and decoder options;
+  borrows the plugin's `const colour::ColourTables&`. `outputTables()` observes its sRGB quantizer.
+  - `pageInfo(p)` validates the file-level page range and obtains `decoder.pageMeta(p)`. Display
+    dimensions, source depth, alpha and indexed status belong to that page. Only animated files
+    consult `frameTiming`; independent still pages report zero duration.
+  - `decodePage(p, progress)` copies the page metadata before allocation. Its dimensions, alpha,
+    transforms and precision choose the buffer and native RGB or legacy BGR layout. Presentation
+    requirements known from the header, `forceHighPrecision`, or deep source output select 16-bit
+    storage. The decoder must set `forceHighPrecision` if late colour may require presentation.
+  - After successful `decodeFrame`, `decodedColour()` describes the actual samples and measured
+    page peak. A local `Presentation` uses those facts and the shared cached tables. Late colour
+    never changes allocated geometry, alpha, transforms or orientation. Failed decoding never
+    consumes stale colour. Presentation precedes geometric transformation.
+  - Progress reports remain `(0,3)`, `(1,3)`, `(2,3)`; a false callback returns `Aborted`. The final
+    buffer is retained independently until `freePage` or session destruction, so navigating or
+    replacing a decoder cache cannot invalidate an outstanding host page.
+  - The default `IDecoder::pageMeta` range-checks and returns the file metadata; default
+    `decodedColour` derives its colour fields. AVIF sequences and single-page RPGMVP keep their
+    existing behaviour without implementing the extensions.
 - A plugin's composition root (`plugins/<id>/src/DefaultPlugin.cpp`) defines `pvd::makePlugin()`
   returning an object that owns `win::FileSource`, the plugin's `IDecoderFactory`, its
-  `IImageDescriber`, the `core::colour::SrgbOutputTables` and a `core::CodecPlugin` (declared in
+  `IImageDescriber`, the `core::colour::ColourTables` and a `core::CodecPlugin` (declared in
   that order) and forwards `IPlugin`.
   It chooses the `DecoderOptions` and builds `PluginInfo` from `kPluginIdentity` plus run-time
   library versions. Every production composition sets `deepOutput = true`, so sources deeper than
-  8 bits are delivered as BGRA64 without a build switch; 8-bit-and-shallower sources keep their
-  BGR24/BGRA32 layouts unless colour presentation requires BGRA64 headroom. Plugin-specific values
+  8 bits are delivered as BGRA64/RGB48/RGBA64 without a build switch; 8-bit-and-shallower sources use
+  BGR24/BGRA32 or RGB24/RGBA32 unless colour presentation requires 16-bit headroom.
+  AVIF, EXR and RPGMVP also set `nativeRgbOutput = true`; defaulted compositions retain BGR.
+  Plugin-specific values
   are recorded in each `plugins/<id>/DESIGN.md`.
 
 ### 3.8 Shared adapter
@@ -580,7 +627,8 @@ Decisions (Task 7, open point 1):
   `MapViewOfFile(FILE_MAP_READ)`; each handle in a `std::unique_ptr` with a stateless deleter;
   implements `IFileData`. Zero-length file → `FileOpenFailed` (mapping of 0 bytes is illegal).
   `win::FileSource : IFileSource` converts UTF-8 → UTF-16 with `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS)`
-  and prefixes `\\?\` **only for long paths**: paths shorter than `MAX_PATH` are passed to
+  and delegates to the UTF-16 overload. That overload preserves code units and prefixes `\\?\`
+  **only for long paths**: paths shorter than `MAX_PATH` are passed to
   `CreateFileW` unchanged (Win32 normalisation of `/`, `.`, `..` stays active); at or above
   `MAX_PATH` the path is first normalised with `GetFullPathNameW` and then prefixed (`\\?\X:\...`,
   UNC → `\\?\UNC\server\share\...`); paths already starting with `\\?\` or `\\.\` (either slash
@@ -667,7 +715,7 @@ Decisions (Task 7, open point 1):
   `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`; the top level globs `plugins/*/CMakeLists.txt` the
   same way, so a new plugin is a new directory and nothing else.
 - `scripts/check-imports.ps1`: fails unless the import table of the given DLL is exactly `KERNEL32.dll`
-  (`llvm-readobj --coff-imports`). `scripts/check-exports.ps1`: exactly the eight bare `pvd*` names.
+  (`llvm-readobj --coff-imports`). `scripts/check-exports.ps1`: exactly the nine bare `pvd*` names.
   Both are registered per plugin as ctest tests in the release presets.
 - `scripts/lint.ps1 -BuildDir <configured build> -ReleaseDir <release build> [-Tools ...] [-Jobs n]`
   (Task 9): the static-analysis gate, run once per architecture and not part of ctest. clang-format
@@ -740,7 +788,7 @@ Decisions (Task 7, open point 1):
   gets `clang_rt.asan-x86_64.lib` and `clang_rt.asan_cxx-x86_64.lib` as `/wholearchive:` inputs, a
   DLL gets `clang_rt.asan_dll_thunk-x86_64.lib` (it forwards to the executable's runtime through
   `GetProcAddress`, so the instrumented `.pvd` still imports only `KERNEL32.dll` and exports the
-  eight names) - the `197611TARGET_PROPERTY:TYPE>` of the target being linked selects the set. The
+  nine names) - the `197611TARGET_PROPERTY:TYPE>` of the target being linked selects the set. The
   test preset sets `ASAN_OPTIONS=halt_on_error=1:abort_on_error=0:allocator_may_return_null=0`;
   `detect_stack_use_after_return` stays off (its fake stack is incompatible with SEH-based C++
   unwinding here and wants 11 MB per thread). Three toolchain facts, each verified with a probe on
@@ -792,7 +840,7 @@ Decisions (Task 7, open point 1):
 - `tests/adapters`: `FileMapping`/`FileSource` on temp files (normal, empty, missing, non-ASCII
   name, long path).
 - `tests/e2e`: not an executable but the shared host driver (`PluginHost.hpp/.cpp`: `LoadLibraryW`,
-  `GetProcAddress` of all eight, open in disk and memory mode, decode helpers) and
+  `GetProcAddress` of all nine, UTF-8/UTF-16 open in disk and memory mode, decode helpers) and
   `VersionResourceTests.cpp` (VERSIONINFO vs generated identity vs `pvdPluginInfo`), compiled
   into every plugin's `<id>_e2e_tests` with `PVDKIT_PLUGIN_PATH` / `PVDKIT_FIXTURE_DIR` set for
   that plugin. The plugin adds its own `E2eTests.cpp` (fixture expectations, pixel checks, the
@@ -1044,22 +1092,16 @@ Decisions (Task 7, open point 1):
   them. What to use instead: `std::thread` plus `join` (`_beginthreadex`/`WaitForSingleObjectEx`),
   the SRWLOCK-backed `std::mutex` if a lock is ever needed, plain atomics without
   `wait`/`notify`, and composition-root ownership instead of statics.
-- The sRGB output tables (`colour::SrgbOutputTables`, `src/core/colour/Pipeline.cpp`) are the
-  case in point: pure math (the decision thresholds of the sRGB OETF and their bucket index) that
-  depends on no host call, file, option or `Cicp`, so it is built once per plugin instance - by
-  the composition root, in `pvdInit`, ≈ 5 ms on x64 and ≈ 15 ms on x86 in Release (12 / 25 ms in
-  Debug) - and borrowed by `const&` through `CodecPlugin` and `FileSession` by every
-  `Presentation` of that plugin (`Presentation::outputTables()` and `FileSession::outputTables()`
-  expose the borrowed object so a test can pin that every session of one plugin shares one
-  instance and that a second plugin has its own). Building it at construction rather than lazily
-  on the first HDR session is what keeps it free of synchronisation: `pvdFileOpen` may run on
-  several threads at once (the 8-thread leak scenario and the four-thread e2e case do exactly
-  that), so a lazily built member would need a lock, and a function-local static would need the
-  runtime's guard - the import this section forbids. The price is paid once per `pvdInit`, which
-  the host calls once per plugin load; only the leak scenarios that cycle `pvdInit` (init/exit
-  cycle, the disk and memory round trips, LoadLibrary/FreeLibrary) see it, ≈ +7 s per plugin in
-  Debug x64. The tables are immutable after construction and live in the composition root, which
-  outlives every session by construction (§2).
+- `colour::ColourTables` is owned by the composition root and outlives every session. Its
+  `SrgbOutputTables` output quantizer is built once at plugin initialization. Source transfer
+  tables are lazy and immutable: seven slots represent the existing transfer equivalence classes.
+  Eight additional slots retain PQ tone-gain tables keyed by the exact normalized source peak,
+  without rounding. Table construction and publication use a member `std::mutex`; readers borrow
+  stable spans. Entries are never evicted or modified. Once the gain cache is full, a presentation
+  owns its overflow table, preserving both bounded plugin storage and the lifetime of prior spans.
+  The maximum source-table cache is 15 x 65,536 floats (3.75 MiB), plus the output quantizer.
+  Different plugin instances have separate owners. Reuse changes neither transfer functions nor
+  pixel arithmetic; existing exact output/reference tests remain the colour contract.
 - A `DecodedPage` view is valid until `freePage` or session destruction, whichever comes first.
 - In memory mode the file bytes belong to the host and are valid until `pvdFileClose` (SDK
   guarantee); the session stores only a `std::span` and no `IFileData`.

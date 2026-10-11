@@ -209,7 +209,7 @@ namespace pvdkit::sequence
     TEST_CASE("row spans address top-down and bottom-up image buffers without escaping their bounds")
     {
         std::array<BYTE, 24> pixels{};
-        pvdInfoDecode decoded{pixels.data(), nullptr, 0, 24, 0, 8};
+        pvdInfoDecode decoded{pixels.data(), nullptr, 0, 24, 0, 8, nullptr, 0};
 
         const auto topFirst = rowSpan(decoded, 3, 0);
         const auto topLast = rowSpan(decoded, 3, 2);
@@ -232,7 +232,7 @@ namespace pvdkit::sequence
     TEST_CASE("row spans reject invalid rows and overflowing buffer bounds")
     {
         std::array<BYTE, 8> pixels{};
-        pvdInfoDecode decoded{pixels.data(), nullptr, 0, 24, 0, 8};
+        pvdInfoDecode decoded{pixels.data(), nullptr, 0, 24, 0, 8, nullptr, 0};
         test::check(!rowSpan(decoded, 0, 0).has_value());
         test::check(!rowSpan(decoded, 1, 1).has_value());
         test::check(!rowSpan(decoded, 1, 0, 7).has_value());
@@ -299,7 +299,7 @@ namespace pvdkit::sequence
 
         std::array<BYTE, 48> pixels{};
         page.lHeight = 3;
-        pvdInfoDecode decoded{pixels.data(), nullptr, 0, 24, 0, 8};
+        pvdInfoDecode decoded{pixels.data(), nullptr, 0, 24, 0, 8, nullptr, 0};
         test::check(!checkDecoded(page, decoded).has_value());
         decoded.pImage = nullptr;
         test::check(checkDecoded(page, decoded).has_value());
@@ -320,6 +320,42 @@ namespace pvdkit::sequence
         decoded.pImage = pixels.data();
         decoded.lImagePitch = -8;
         test::check(!checkDecoded(page, decoded).has_value());
+    }
+
+    TEST_CASE("the sequence driver validates native RGB wire codes using stored pixel sizes")
+    {
+        std::array<BYTE, 48> pixels{};
+        const pvdInfoPage page{2, 3, 24, 0};
+        for (const auto bitsPerPixel : {UINT32{25}, UINT32{33}, UINT32{65}}) {
+            CAPTURE(bitsPerPixel);
+            const auto rowBytes = static_cast<INT32>(page.lWidth * (bitsPerPixel / 8U));
+            pvdInfoDecode decoded{pixels.data(), nullptr, 0, bitsPerPixel, 0, rowBytes, nullptr, 0};
+            test::check(!checkDecoded(page, decoded).has_value());
+            ++decoded.lImagePitch;
+            test::check(!checkDecoded(page, decoded).has_value());
+            decoded.lImagePitch = -rowBytes;
+            test::check(!checkDecoded(page, decoded).has_value());
+            decoded.lImagePitch = rowBytes - 1;
+            test::check(checkDecoded(page, decoded).has_value());
+            decoded.lImagePitch = 0;
+            test::check(checkDecoded(page, decoded).has_value());
+        }
+    }
+
+    TEST_CASE("the sequence driver validates native RGB48 with six-byte row storage")
+    {
+        std::array<BYTE, 48> pixels{};
+        const pvdInfoPage page{2, 3, 48, 0};
+        pvdInfoDecode decoded{pixels.data(), nullptr, 0, 49, 0, 12, nullptr, 0};
+        test::check(!checkDecoded(page, decoded).has_value());
+        decoded.lImagePitch = 13;
+        test::check(!checkDecoded(page, decoded).has_value());
+        decoded.lImagePitch = -12;
+        test::check(!checkDecoded(page, decoded).has_value());
+        decoded.lImagePitch = 11;
+        test::check(checkDecoded(page, decoded).has_value());
+        decoded.lImagePitch = 0;
+        test::check(checkDecoded(page, decoded).has_value());
     }
 
     TEST_CASE("sequence invariant violation child")

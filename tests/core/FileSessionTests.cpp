@@ -321,8 +321,8 @@ namespace pvdkit::core
             // The tables are owned by the plugin's composition root and injected by reference
             // (docs/ARCHITECTURE.md section 7); a session with or without colour presentation
             // reports exactly the injected instance, and two sessions over one instance share it.
-            const auto tables = std::make_unique<const colour::SrgbOutputTables>();
-            const auto otherTables = std::make_unique<const colour::SrgbOutputTables>();
+            const auto tables = std::make_unique<const colour::ColourTables>();
+            const auto otherTables = std::make_unique<const colour::ColourTables>();
             DecoderState state;
             auto hdrMeta = test::meta(3, 2, false, 10);
             hdrMeta.cicp = Cicp{12, 16, 12, true};
@@ -333,9 +333,9 @@ namespace pvdkit::core
             FileSession other(nullptr, decoder(hdrMeta, state), test::imageInfo(hdrMeta), test::options(),
                               *otherTables);
 
-            CHECK(&hdr.outputTables() == tables.get());
-            CHECK(&sdr.outputTables() == tables.get());
-            CHECK(&other.outputTables() == otherTables.get());
+            CHECK(&hdr.outputTables() == &tables->output());
+            CHECK(&sdr.outputTables() == &tables->output());
+            CHECK(&other.outputTables() == &otherTables->output());
             CHECK(&hdr.outputTables() != &other.outputTables());
 
             // The presentation built over the borrowed tables converts exactly like one built

@@ -104,7 +104,7 @@ namespace pvdkit::exr
 
         struct Cache
         {
-            std::span<std::uint16_t> bgra;
+            std::span<std::uint16_t> pixels;
             Box overlap;
             LuminanceHistogram histogram;
         };
@@ -121,15 +121,16 @@ namespace pvdkit::exr
                              std::min(chunk.xMax, cache.overlap.xMax), std::min(chunk.yMax, cache.overlap.yMax)};
             const auto columns = static_cast<std::size_t>(region.width());
             const auto overlapWidth = static_cast<std::size_t>(cache.overlap.width());
+            const auto channels = pvd::pixelLayout(params.format).bytesPerPixel / sizeof(std::uint16_t);
             for (std::int32_t y = region.yMin; y <= region.yMax; ++y) {
                 const auto sourceOffset = (static_cast<std::size_t>(y - chunk.yMin) * chunkWidth +
                                            static_cast<std::size_t>(region.xMin - chunk.xMin)) *
                                           kFloatsPerPixel;
                 const auto targetOffset = (static_cast<std::size_t>(y - cache.overlap.yMin) * overlapWidth +
                                            static_cast<std::size_t>(region.xMin - cache.overlap.xMin)) *
-                                          4;
+                                          channels;
                 encodePixels(scratch.subspan(sourceOffset, columns * kFloatsPerPixel), params,
-                             cache.bgra.subspan(targetOffset, columns * 4), cache.histogram);
+                             cache.pixels.subspan(targetOffset, columns * channels), cache.histogram);
             }
         }
 
@@ -289,11 +290,12 @@ namespace pvdkit::exr
             return cached;
         }
         const auto codeCount = static_cast<std::uint64_t>(layout.overlap->width()) *
-                               static_cast<std::uint64_t>(layout.overlap->height()) * 4;
+                               static_cast<std::uint64_t>(layout.overlap->height()) *
+                               (pvd::pixelLayout(params.format).bytesPerPixel / sizeof(std::uint16_t));
         return core::narrow<std::size_t>(codeCount, "cached pixel codes").and_then([&](const std::size_t codes) {
-            cached.bgra = std::make_unique_for_overwrite<std::uint16_t[]>(codes);
+            cached.pixels = std::make_unique_for_overwrite<std::uint16_t[]>(codes);
             cached.codes = codes;
-            Cache cache{std::span{cached.bgra.get(), codes}, *layout.overlap, {}};
+            Cache cache{std::span{cached.pixels.get(), codes}, *layout.overlap, {}};
             const auto read = selection.kind == ChannelKind::LuminanceChroma
                                   ? readLuminanceChroma(context, partIndex, stream, header, selection, params, cache)
                               : header.tiled

@@ -39,7 +39,7 @@ namespace pvdkit::exr
         Ripmap
     };
 
-    /// Everything the info line says about the file, as the adapter read it from the header.
+    /// Header facts used for decode metadata and the concise file-wide title summary.
     struct SourceFacts
     {
         ChannelSelection selection;
@@ -56,6 +56,7 @@ namespace pvdkit::exr
         Box data;
         std::optional<float> whiteLuminance;
         std::size_t partCount = 1;
+        std::uint32_t pageCount = 1; ///< Displayable pages, which can differ from the file's part count.
         std::size_t partIndex = 0;
         std::string partName;
         std::string view;    ///< The chosen part's `view` attribute, or the view its channels belong to.
@@ -64,16 +65,15 @@ namespace pvdkit::exr
     };
 
     [[nodiscard]] std::string_view compressionName(Compression compression) noexcept;
-    /// The source half of the comments line, e.g.
-    /// `half RGBA, linear Rec.709, ZIP, scanline, display 1920x1080, data 1920x1080 at 0,0, 100 nit white`.
+    /// Single-page channels and colour, e.g. `half RGBA, linear Rec.709`; multipage structure only,
+    /// e.g. `2 pages, multipart, multiview`, because PVD comments belong to the whole file.
     [[nodiscard]] std::string describeSource(const SourceFacts &facts);
-    /// The presentation half, from what the decoder handed the shared core:
-    /// `→ sRGB (BT.2390 tone map from 1250 nit)` or `→ sRGB (SDR range, no tone map)`.
+    /// The common output presentation: `→ sRGB`.
     [[nodiscard]] std::string presentationNote(const core::ImageMeta &meta);
     /// `meta.sourceDetail` followed by the presentation note.
     [[nodiscard]] std::string describe(const core::ImageMeta &meta);
 
-    /// The OpenEXR `IImageDescriber`: format "OpenEXR", compression from the meta, comments from `describe`.
+    /// Format "OpenEXR", single-page compression from the meta, file-wide comments from `describe`.
     class Describer final : public core::IImageDescriber
     {
       public:

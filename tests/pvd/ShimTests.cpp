@@ -68,6 +68,7 @@ namespace pvdkit::pvd
             openSession(shim, imageInfo, context);
             REQUIRE(context != nullptr);
             CHECK(state.openedName == "sample.avif");
+            CHECK_FALSE(state.openedWideName.has_value());
             CHECK(state.openedFileSize == 123);
             CHECK(state.openedHead == std::vector<std::byte>{std::byte{0x01}, std::byte{0x02}, std::byte{0x03}});
 
@@ -216,7 +217,7 @@ namespace pvdkit::pvd
             shim.fileClose(context);
         }
 
-        TEST_CASE("Shim writes only the documented decode fields")
+        TEST_CASE("Shim decode accepts the legacy prefix without writing the ICC extension")
         {
             test::FakeState state;
             test::FakePlugin plugin{state};
@@ -227,14 +228,42 @@ namespace pvdkit::pvd
 
             struct DecodeWithCanary
             {
-                pvdInfoDecode decoded{};
+                alignas(pvdInfoDecode) std::array<std::byte, offsetof(pvdInfoDecode, pICC)> legacyPrefix{};
                 std::array<std::byte, 16> canary{};
             } storage;
+            static_assert(offsetof(DecodeWithCanary, canary) == offsetof(pvdInfoDecode, pICC));
+            auto *decoded = reinterpret_cast<pvdInfoDecode *>(storage.legacyPrefix.data());
             std::ranges::fill(storage.canary, std::byte{0xA5});
-            REQUIRE(shim.pageDecode(context, 0, &storage.decoded, nullptr, nullptr) == TRUE);
+            REQUIRE(shim.pageDecode(context, 0, decoded, nullptr, nullptr) == TRUE);
+            CHECK(decoded->pImage != nullptr);
+            CHECK(decoded->nBPP == 32);
+            CHECK(decoded->lImagePitch == 8);
             CHECK(std::ranges::all_of(storage.canary, [](const std::byte value) { return value == std::byte{0xA5}; }));
 
-            shim.pageFree(context, &storage.decoded);
+            shim.pageFree(context, decoded);
+            shim.fileClose(context);
+        }
+
+        TEST_CASE("Shim decode preserves caller ICC fields and leaves the ICC flag clear")
+        {
+            test::FakeState state;
+            state.decodedHasAlpha = true;
+            state.decodedHostOrientation = 7;
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            pvdInfoImage image{};
+            void *context = nullptr;
+            openSession(shim, image, context);
+
+            BYTE profile = 0xA5;
+            pvdInfoDecode decoded{};
+            decoded.pICC = &profile;
+            decoded.lICC = 0x12345678;
+            REQUIRE(shim.pageDecode(context, 0, &decoded, nullptr, nullptr) == TRUE);
+            CHECK(decoded.pICC == &profile);
+            CHECK(decoded.lICC == 0x12345678);
+            CHECK((decoded.Flags & PVD_IDF_ICC) == 0);
+            shim.pageFree(context, &decoded);
             shim.fileClose(context);
         }
 
@@ -256,6 +285,116 @@ namespace pvdkit::pvd
             shim.fileClose(context);
         }
 
+        TEST_CASE("fileOpenW preserves UTF-16 names and marshals disk and memory inputs")
+        {
+            test::FakeState state;
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            const std::wstring name = L"folder/\u0444\u0430\u0439\u043b-\U0001F600-" +
+                                      std::wstring(1, static_cast<wchar_t>(0xD800)) + L".avif";
+            constexpr std::array bytes{std::byte{0x11}, std::byte{0x22}};
+            for (const INT64 fileSize : {INT64{0}, INT64{123}}) {
+                CAPTURE(fileSize);
+                pvdInfoImage image{};
+                void *context = nullptr;
+                REQUIRE(shim.fileOpenW(name.c_str(), fileSize, reinterpret_cast<const BYTE *>(bytes.data()),
+                                       static_cast<UINT32>(bytes.size()), &image, &context) == TRUE);
+                CHECK(state.openedName.empty());
+                REQUIRE(state.openedWideName.has_value());
+                CHECK(*state.openedWideName == name);
+                CHECK(state.openedFileSize == static_cast<std::uint64_t>(fileSize));
+                CHECK(state.openedHead == std::vector<std::byte>{bytes.begin(), bytes.end()});
+                CHECK(image.nPages == 2);
+                CHECK(image.Flags == PVD_IIF_ANIMATED);
+                const auto &info = borrow(context)->imageInfo();
+                CHECK(image.pFormatName == info.formatName.c_str());
+                CHECK(image.pCompression == info.compression.c_str());
+                CHECK(image.pComments == info.comments.c_str());
+                shim.fileClose(context);
+                CHECK(state.liveSessions == 0);
+            }
+
+            state.imageInfo.animated = false;
+            pvdInfoImage image{};
+            void *context = nullptr;
+            REQUIRE(shim.fileOpenW(L"", 0, nullptr, 0, &image, &context) == TRUE);
+            REQUIRE(state.openedWideName.has_value());
+            CHECK(state.openedWideName->empty());
+            CHECK(state.openedHead.empty());
+            CHECK(image.Flags == 0);
+            shim.fileClose(context);
+        }
+
+        TEST_CASE("fileOpenW rejects invalid host inputs before asking the plugin")
+        {
+            test::FakeState state;
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            pvdInfoImage image{};
+            void *const sentinel = reinterpret_cast<void *>(1);
+            void *context = sentinel;
+            CHECK(shim.fileOpenW(nullptr, 0, nullptr, 0, &image, &context) == FALSE);
+            CHECK(context == sentinel);
+            CHECK(shim.fileOpenW(L"x", 0, nullptr, 0, nullptr, &context) == FALSE);
+            CHECK(context == sentinel);
+            CHECK(shim.fileOpenW(L"x", 0, nullptr, 0, &image, nullptr) == FALSE);
+            CHECK(shim.fileOpenW(L"x", 0, nullptr, 1, &image, &context) == FALSE);
+            CHECK(context == nullptr);
+            context = sentinel;
+            CHECK(shim.fileOpenW(L"x", -1, nullptr, 0, &image, &context) == FALSE);
+            CHECK(context == nullptr);
+            CHECK(state.openCalls == 0);
+        }
+
+        TEST_CASE("file opens validate output and sizes before reading the filename")
+        {
+            test::FakeState state;
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            pvdInfoImage image{};
+            void *context = nullptr;
+            const auto *narrow = reinterpret_cast<const char *>(1);
+            const auto *wide = reinterpret_cast<const wchar_t *>(1);
+            CHECK(shim.fileOpen(narrow, 0, nullptr, 0, nullptr, &context) == FALSE);
+            CHECK(shim.fileOpenW(wide, 0, nullptr, 0, nullptr, &context) == FALSE);
+            CHECK(shim.fileOpen(narrow, 0, nullptr, 0, &image, nullptr) == FALSE);
+            CHECK(shim.fileOpenW(wide, 0, nullptr, 0, &image, nullptr) == FALSE);
+            CHECK(shim.fileOpen(narrow, 0, nullptr, 1, &image, &context) == FALSE);
+            CHECK(shim.fileOpenW(wide, 0, nullptr, 1, &image, &context) == FALSE);
+            CHECK(shim.fileOpen(narrow, -1, nullptr, 0, &image, &context) == FALSE);
+            CHECK(shim.fileOpenW(wide, -1, nullptr, 0, &image, &context) == FALSE);
+            CHECK(state.openCalls == 0);
+        }
+
+        TEST_CASE("fileOpenW firewalls failures and destroys unreturned sessions")
+        {
+            test::FakeState state;
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            pvdInfoImage image{};
+            void *context = reinterpret_cast<void *>(1);
+            for (const auto code : test::allErrorCodes) {
+                CAPTURE(core::name(code));
+                state.openError = code;
+                CHECK(shim.fileOpenW(L"bad.avif", 1, nullptr, 0, &image, &context) == FALSE);
+                CHECK(context == nullptr);
+                CHECK(state.liveSessions == 0);
+            }
+            state.openError.reset();
+            state.returnNullSession = true;
+            CHECK(shim.fileOpenW(L"null.avif", 1, nullptr, 0, &image, &context) == FALSE);
+            CHECK(context == nullptr);
+            state.returnNullSession = false;
+            state.throwOpen = true;
+            CHECK(shim.fileOpenW(L"throw.avif", 1, nullptr, 0, &image, &context) == FALSE);
+            CHECK(context == nullptr);
+            state.throwOpen = false;
+            state.throwImageInfo = true;
+            CHECK(shim.fileOpenW(L"throw.avif", 1, nullptr, 0, &image, &context) == FALSE);
+            CHECK(context == nullptr);
+            CHECK(state.liveSessions == 0);
+        }
+
         TEST_CASE("callback return value reaches the session progress object")
         {
             test::FakeState state;
@@ -272,6 +411,22 @@ namespace pvdkit::pvd
             CHECK(callback.step == 4);
             CHECK(callback.steps == 8);
             shim.fileClose(context);
+        }
+
+        TEST_CASE("open entry points pass an explicit RGB policy for each session")
+        {
+            test::FakeState state;
+            test::FakePlugin plugin{state};
+            Shim shim{plugin, kIdentity};
+            pvdInfoImage info{};
+            void *legacy = nullptr;
+            void *native = nullptr;
+            REQUIRE(shim.fileOpenW(L"memory", 0, nullptr, 0, &info, &native) != FALSE);
+            CHECK(state.openedNativeRgb);
+            REQUIRE(shim.fileOpen("memory", 0, nullptr, 0, &info, &legacy) != FALSE);
+            CHECK_FALSE(state.openedNativeRgb);
+            shim.fileClose(native);
+            shim.fileClose(legacy);
         }
 
         TEST_CASE("each expected open error maps to FALSE without a session leak")

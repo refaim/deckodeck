@@ -94,8 +94,10 @@ namespace pvdkit::exr
     }
 
     void encodePixels(const std::span<const float> rgba, const EncodeParams &params,
-                      const std::span<std::uint16_t> bgra, LuminanceHistogram &histogram) noexcept
+                      const std::span<std::uint16_t> codes, LuminanceHistogram &histogram) noexcept
     {
+        const auto output = pvd::pixelLayout(params.format);
+        const auto channels = output.bytesPerPixel / sizeof(std::uint16_t);
         const auto pixelCount = rgba.size() / 4;
         for (std::size_t pixel = 0; pixel < pixelCount; ++pixel) {
             const auto source = rgba.subspan(pixel * 4, 4);
@@ -114,11 +116,13 @@ namespace pvdkit::exr
                 }
                 alpha = alphaCode(source[3]);
             }
-            const auto target = bgra.subspan(pixel * 4, 4);
-            target[0] = params.tables.encode(blue);
+            const auto target = codes.subspan(pixel * channels, channels);
+            target[output.rgb ? 0 : 2] = params.tables.encode(red);
             target[1] = params.tables.encode(green);
-            target[2] = params.tables.encode(red);
-            target[3] = alpha;
+            target[output.rgb ? 2 : 0] = params.tables.encode(blue);
+            if (channels == 4) {
+                target[3] = alpha;
+            }
             histogram.add(params.tables.encode(params.luminance[0] * red + params.luminance[1] * green +
                                                params.luminance[2] * blue));
         }

@@ -16,17 +16,17 @@ namespace pvdkit::core
 
     namespace colour
     {
-        class Presentation;
+        class ColourTables;
         class SrgbOutputTables;
     } // namespace colour
 
     class FileSession final : public pvd::IFileSession
     {
       public:
-        /// `outputTables` is the plugin-wide instance the composition root owns (ARCHITECTURE section 7);
-        /// it is borrowed here and by the session's Presentation, and outlives the session by construction.
+        /// `tables` is the plugin-wide instance the composition root owns (ARCHITECTURE section 7);
+        /// it is borrowed here and by each page presentation, and outlives the session by construction.
         FileSession(std::unique_ptr<IFileData> fileData, std::unique_ptr<IDecoder> decoder, pvd::ImageInfo imageInfo,
-                    const DecoderOptions &options, const colour::SrgbOutputTables &outputTables);
+                    const DecoderOptions &options, const colour::ColourTables &tables);
         ~FileSession() override;
 
         FileSession(const FileSession &) = delete;
@@ -47,8 +47,7 @@ namespace pvdkit::core
         pvd::ImageInfo imageInfo_;
         std::vector<std::unique_ptr<PixelBuffer>> outstanding_;
         DecoderOptions options_;
-        const colour::SrgbOutputTables &outputTables_;
-        std::unique_ptr<colour::Presentation> presentation_;
+        const colour::ColourTables &tables_;
     };
 
 } // namespace pvdkit::core
