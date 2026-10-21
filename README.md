@@ -14,7 +14,7 @@ Each release has a zip per architecture, x64 for 64-bit Far and x86 for 32-bit.
 | AVIF.pvd | 1.2.0 | [avif/v1.2.0](https://github.com/refaim/deckodeck/releases/tag/avif/v1.2.0) | Photos, HDR and animation | [libavif](https://github.com/AOMediaCodec/libavif), [dav1d](https://code.videolan.org/videolan/dav1d), [libyuv](https://chromium.googlesource.com/libyuv/libyuv) |
 | EXR.pvd | 1.0.0 | [exr/v1.0.0](https://github.com/refaim/deckodeck/releases/tag/exr/v1.0.0) | HDR renders, layers and views | [OpenEXR](https://github.com/AcademySoftwareFoundation/openexr), [Imath](https://github.com/AcademySoftwareFoundation/Imath), [libdeflate](https://github.com/ebiggers/libdeflate), [OpenJPH](https://github.com/aous72/OpenJPH) |
 | RPGMVP.pvd | 1.2.0 | [rpgmvp/v1.2.0](https://github.com/refaim/deckodeck/releases/tag/rpgmvp/v1.2.0) | Encrypted RPG Maker MV/MZ PNG | [libspng](https://github.com/randy408/libspng), [zlib](https://www.zlib.net/) |
-| SVG.pvd | 1.0.0 | Unreleased, [plugin details](plugins/svg/README.md) | SVG/SVGZ, text and filters | [resvg](https://github.com/linebender/resvg), [YY-Thunks](https://github.com/Chuyu-Team/YY-Thunks) |
+| SVG.pvd | 1.0.0 | [svg/v1.0.0](https://github.com/refaim/deckodeck/releases/tag/svg/v1.0.0) | SVG/SVGZ, text and filters | [resvg](https://github.com/linebender/resvg), [YY-Thunks](https://github.com/Chuyu-Team/YY-Thunks) |
 <!-- downloads:end -->
 
 ## Install
