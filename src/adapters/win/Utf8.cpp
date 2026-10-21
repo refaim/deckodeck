@@ -24,6 +24,12 @@ namespace pvdkit::win
                     std::string{operation} + " (Win32 error " + std::to_string(error) + ")"};
         }
 
+        core::Error conversionError(const std::string_view operation, const DWORD error)
+        {
+            return {core::ErrorCode::ConversionFailed,
+                    std::string{operation} + " (Win32 error " + std::to_string(error) + ")"};
+        }
+
         // Absolute, backslash-separated form of `path` with `.`/`..` segments and trailing dots/spaces
         // resolved exactly as Win32 would resolve them for a short path.
         core::Result<std::wstring> fullPathName(const std::wstring_view path)
@@ -54,6 +60,14 @@ namespace pvdkit::win
             return std::wstring{kExtendedPrefix} + std::move(full);
         }
 
+        std::wstring absoluteExtended(std::wstring full)
+        {
+            if (full.size() >= MAX_PATH) {
+                return extended(std::move(full));
+            }
+            return full;
+        }
+
     } // namespace
 
     core::Result<int> detail::utf8Length(const std::size_t size)
@@ -61,6 +75,15 @@ namespace pvdkit::win
         if (size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
             return std::unexpected(
                 core::Error{core::ErrorCode::FileOpenFailed, "the UTF-8 path is longer than INT_MAX bytes"});
+        }
+        return static_cast<int>(size);
+    }
+
+    core::Result<int> detail::wideLength(const std::size_t size)
+    {
+        if (size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+            return std::unexpected(
+                core::Error{core::ErrorCode::ConversionFailed, "the UTF-16 path is longer than INT_MAX code units"});
         }
         return static_cast<int>(size);
     }
@@ -89,12 +112,43 @@ namespace pvdkit::win
         });
     }
 
+    core::Result<std::string> wideToUtf8(const std::wstring_view wide)
+    {
+        if (wide.empty()) {
+            return std::string{};
+        }
+
+        return detail::wideLength(wide.size()).and_then([&](const int wideSize) -> core::Result<std::string> {
+            // wideSize is wide.size() checked by wideLength; clang-tidy only matches literal size().
+            const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                                                     wide.data(), // NOLINT(*-stringview-data-usage)
+                                                     wideSize, nullptr, 0, nullptr, nullptr);
+            if (required == 0) {
+                return std::unexpected(conversionError("WideCharToMultiByte rejected the UTF-16 path", GetLastError()));
+            }
+
+            std::string utf8(static_cast<std::size_t>(required), '\0');
+            static_cast<void>(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                                                  wide.data(), // NOLINT(*-stringview-data-usage)
+                                                  wideSize, utf8.data(), required, nullptr, nullptr));
+            return utf8;
+        });
+    }
+
     core::Result<std::wstring> toWin32Path(const std::wstring_view path)
     {
         if (path.size() < MAX_PATH || path.starts_with(kExtendedPrefix) || path.starts_with(kDevicePrefix)) {
             return std::wstring{path};
         }
         return fullPathName(path).transform(extended);
+    }
+
+    core::Result<std::wstring> toAbsoluteWin32Path(const std::wstring_view path)
+    {
+        if (path.starts_with(kExtendedPrefix) || path.starts_with(kDevicePrefix)) {
+            return std::wstring{path};
+        }
+        return fullPathName(path).transform(absoluteExtended);
     }
 
 } // namespace pvdkit::win

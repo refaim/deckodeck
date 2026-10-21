@@ -25,6 +25,7 @@
 #include <deque>
 #include <filesystem>
 #include <latch>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -252,6 +253,23 @@ namespace pvdkit::leak
             return failure.empty() ? failure : failure + " for " + file.utf8Path;
         }
 
+        // The whole lifecycle the unload scenario measures, without doctest assertions: the CPU
+        // warm-up calls it from its own temporary thread, so a failure comes back as text.
+        std::string warmUnloadCycle(const Fixture &fixture)
+        {
+            auto loaded = PluginLibrary::load(e2e::pluginPath());
+            if (!loaded) {
+                return loaded.error();
+            }
+            const auto &exports = loaded->exports();
+            if (exports.init() != PVD_CURRENT_INTERFACE_VERSION) {
+                return "pvdInit answered FALSE";
+            }
+            const auto failure = workerRoundTrip(exports, fixture, alternate(0));
+            exports.exit();
+            return failure;
+        }
+
     } // namespace
 
     TEST_CASE("leak: init, open from disk, page info, decode, free, close, exit")
@@ -332,8 +350,11 @@ namespace pvdkit::leak
             void *context = nullptr;
             CHECK(exports.fileOpen(valid.utf8Path.c_str(), size, nullptr, 0, &info, &context) == FALSE);
             CHECK(exports.fileOpen(valid.utf8Path.c_str(), 0, nullptr, 0, &info, &context) == FALSE);
-            CHECK(exports.fileOpen(valid.utf8Path.c_str(), size, head, 11, &info, &context) == FALSE);
-            CHECK(exports.fileOpen(valid.utf8Path.c_str(), 0, head, 11, &info, &context) == FALSE);
+            // A single byte cannot identify any supported container: SVG needs four ("<svg"),
+            // gzip two, and the raster signatures more. Eleven bytes would already contain an
+            // entire SVG root prolog and legitimately open by name in disk mode.
+            CHECK(exports.fileOpen(valid.utf8Path.c_str(), size, head, 1, &info, &context) == FALSE);
+            CHECK(exports.fileOpen(valid.utf8Path.c_str(), 0, head, 1, &info, &context) == FALSE);
             CHECK(context == nullptr);
             // A valid head whose file does not exist on disk.
             CHECK_FALSE(e2e::openImage(exports, missing, OpenMode::Disk).has_value());
@@ -432,6 +453,12 @@ namespace pvdkit::leak
         const auto &fixtures = corpus().accepted;
         const auto plugin = e2e::loadInitializedPlugin();
         const auto &exports = plugin.exports();
+        test::warmEveryAllowedCpu([&] {
+            const auto failure = workerRoundTrip(exports, cycle(fixtures, 0), alternate(0));
+            if (!failure.empty()) {
+                throw std::runtime_error{failure};
+            }
+        });
         const auto perThread = std::max<std::size_t>(1, iterations() / kThreads);
         const auto report = measureLeaks("8 threads x " + std::to_string(perThread), 1, 1, [&](const std::size_t) {
             std::latch start{kThreads};
@@ -461,6 +488,12 @@ namespace pvdkit::leak
     TEST_CASE("leak: LoadLibrary / FreeLibrary cycled")
     {
         const auto &fixtures = corpus().accepted;
+        test::warmEveryAllowedCpu([&] {
+            const auto failure = warmUnloadCycle(cycle(fixtures, 0));
+            if (!failure.empty()) {
+                throw std::runtime_error{failure};
+            }
+        });
         const auto report = measureLeaks("LoadLibrary/FreeLibrary", 1, kLibraryCycles, [&](const std::size_t i) {
             const auto plugin = loadPlugin();
             const auto &exports = plugin.exports();

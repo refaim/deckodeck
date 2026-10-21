@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
+  <defs>
+    <mask id="right-half" maskUnits="userSpaceOnUse" x="0" y="0" width="4" height="2">
+      <rect x="0" y="0" width="4" height="2" fill="#000000"/>
+      <rect x="2" y="0" width="2" height="2" fill="#ffffff"/>
+    </mask>
+  </defs>
+  <rect x="0" y="0" width="4" height="2" fill="#00ff00" mask="url(#right-half)"/>
+</svg>

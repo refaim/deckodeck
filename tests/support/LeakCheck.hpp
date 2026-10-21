@@ -18,19 +18,22 @@
 //    containers are heap-internal, not busy user blocks).
 // 2. Handles: GetProcessHandleCount.
 // 3. Mapped views (count and bytes): the committed MEM_MAPPED regions of the address space,
-//    enumerated with VirtualQuery. A view of a file mapping is neither a heap block nor a handle,
-//    and a leaked one hardly moves the commit charge either (file-backed pages are shared, not
-//    private), so without this counter a FileMapping that never unmapped would pass every other
-//    check - proven with an injected no-op UnmapViewOfFile before this counter existed. Image
-//    sections (MEM_IMAGE: the DLLs) and private memory (heap segments, stacks, ASan's shadow) are
-//    not counted, so the view count is stable after warm-up, under ASan too; the bytes are not
-//    under ASan (see below). Every region is recorded (base, size, the file behind it as
-//    GetMappedFileNameW names it - K32GetMappedFileNameW of kernel32 under PSAPI_VERSION 2, an
-//    import of the test executables only) so that a change is reported as the regions that
-//    appeared and vanished, by name: the CRT and the OS map system sections lazily (an NLS
-//    table on the first locale-aware call, the sorting tables on the first CompareString), once
-//    per process, and a warm-up that did not reach that first call leaves it to the measured
-//    pass - the name tells such a mapping from a FileMapping of the plugin's own.
+//    enumerated with VirtualQuery. The view count is logical: one per distinct AllocationBase,
+//    so a protection split or a reserved gap inside one mapped allocation does not turn it into
+//    several views. The byte count sums every committed region, and every region is kept as a raw
+//    diagnostic record (base, size, the file behind it as GetMappedFileNameW names it -
+//    K32GetMappedFileNameW of kernel32 under PSAPI_VERSION 2, an import of the test executables
+//    only). A view of a file mapping is neither a heap block nor a handle, and a leaked one hardly
+//    moves the commit charge either (file-backed pages are shared, not private), so without this
+//    counter a FileMapping that never unmapped would pass every other check - proven with an
+//    injected no-op UnmapViewOfFile before this counter existed. Image sections (MEM_IMAGE: the
+//    DLLs) and private memory (heap segments, stacks, ASan's shadow) are not counted, so the view
+//    count is stable after warm-up, under ASan too; the bytes are not under ASan (see below). A
+//    change is reported as the raw regions that appeared and vanished, by name: the CRT and the
+//    OS map system sections lazily (an NLS table on the first locale-aware call, the sorting
+//    tables on the first CompareString), once per process, and a warm-up that did not reach that
+//    first call leaves it to the measured pass - the name tells such a mapping from a FileMapping
+//    of the plugin's own.
 // 4. The commit charge (PrivateUsage) is the coarse cross-check for whatever is none of the above
 //    - thread stacks, VirtualAlloc - and coarse it is: measured on the AVIF plugin it wanders by
 //    up to +-9 MiB between two quiescent snapshots with the process heap's own committed size
@@ -71,12 +74,14 @@ namespace pvdkit::test
         std::array<std::byte, 16> head{};
     };
 
-    /// One committed MEM_MAPPED region as the walk saw it: where, how big, and the file behind it
-    /// (GetMappedFileNameW: an NT device path such as \Device\HarddiskVolume3\Windows\System32\
-    /// locale.nls; empty for a pagefile-backed section), so a region that appears or vanishes
-    /// between two snapshots can be recognised in the log. The name is UTF-8 in a fixed buffer
-    /// (nothing may be allocated per record: the record buffers are reserved once, like the
-    /// blocks'); a longer name keeps its tail behind "...", which is where the file name is.
+    /// One committed MEM_MAPPED VirtualQuery region as the walk saw it, not one logical view: a
+    /// protection change or a reserved gap can split one mapped allocation into several of these.
+    /// It records where, how big, and the file behind it (GetMappedFileNameW: an NT device path
+    /// such as \Device\HarddiskVolume3\Windows\System32\locale.nls; empty for a pagefile-backed
+    /// section), so a region that appears or vanishes between two snapshots can be recognised in
+    /// the log. The name is UTF-8 in a fixed buffer (nothing may be allocated per record: the
+    /// record buffers are reserved once, like the blocks'); a longer name keeps its tail behind
+    /// "...", which is where the file name is.
     struct MappedRegion
     {
         std::uintptr_t base = 0;
@@ -93,8 +98,9 @@ namespace pvdkit::test
         std::uint64_t heapBlocks = 0;    // busy blocks in the process heap
         std::uint64_t heapBytes = 0;     // their payload bytes (cbData)
         std::uint64_t handles = 0;       // GetProcessHandleCount
-        std::uint64_t mappedViews = 0;   // committed MEM_MAPPED regions (VirtualQuery)
-        std::uint64_t mappedBytes = 0;   // their size
+        std::uint64_t mappedViews = 0;   // logical views: distinct AllocationBase values
+        std::uint64_t mappedBytes = 0;   // committed bytes of those MEM_MAPPED regions
+        std::uint64_t mappedRegions = 0; // committed MEM_MAPPED VirtualQuery regions, one raw record each
         std::uint64_t privateBytes = 0;  // PROCESS_MEMORY_COUNTERS_EX::PrivateUsage
         std::uint64_t heapCommitted = 0; // bytes committed to the process heap's regions (part of privateBytes)
         /// Every busy block, sorted by address, in one of two static buffers the accounting owns:
@@ -109,8 +115,8 @@ namespace pvdkit::test
         std::int64_t heapBlocks = 0; // new minus vanished busy blocks, critical-section debug blocks excluded
         std::int64_t heapBytes = 0;  // likewise
         std::int64_t handles = 0;
-        std::int64_t mappedViews = 0;
-        std::int64_t mappedBytes = 0;
+        std::int64_t mappedViews = 0; // logical views; one per distinct AllocationBase
+        std::int64_t mappedBytes = 0; // committed MEM_MAPPED region bytes
         std::int64_t privateBytes = 0;
         std::int64_t heapCommitted = 0;
         /// New RTL_CRITICAL_SECTION_DEBUG blocks (see the header comment): reported, not charged.
@@ -340,5 +346,38 @@ namespace pvdkit::test
     /// The iteration count the leak scenarios use: PVDKIT_LEAK_ITERATIONS if set to a positive
     /// number, else `defaultIterations`. A soak run is `PVDKIT_LEAK_ITERATIONS=5000 ctest ...`.
     [[nodiscard]] std::size_t leakIterations(std::size_t defaultIterations);
+
+    /// Test-only knobs for warmEveryAllowedCpu, so the self-tests can drive the failure paths a
+    /// normal machine does not produce. An empty function means "call the real Win32 API".
+    struct CpuWarmupHooks
+    {
+        std::function<std::uint32_t()> activeGroupCount;           // GetActiveProcessorGroupCount
+        std::function<std::uintptr_t()> processMask;               // GetProcessAffinityMask, process part
+        std::function<std::uintptr_t(std::uintptr_t)> setAffinity; // SetThreadAffinityMask on the warm-up thread
+    };
+
+    /// Runs `operation()` once for every CPU in the process affinity mask, each time from its own
+    /// fresh short-lived thread whose own affinity is set to exactly that CPU, then joins that
+    /// thread before starting the next. The caller, the process and every thread this test later
+    /// starts keep their own affinity: only the temporary threads are pinned. This is for state
+    /// the OS and the libraries build lazily per CPU or per thread and keep (bcryptprimitives'
+    /// ProcessPrng cache and Rust's std RandomState keys are the measured ones); exercising the
+    /// real operation once on every allowed CPU before a leak baseline makes those one-time nodes
+    /// visible to the recovery pass instead of the measured pass, without weakening any allowance
+    /// or threshold.
+    ///
+    /// `SetThreadAffinityMask` addresses CPUs in one processor group, so this limited helper
+    /// requires exactly one active processor group in the system (`GetActiveProcessorGroupCount`
+    /// returns 1). That system-wide count is the contract, not `GetProcessGroupAffinity`: the
+    /// process-group query only says which groups this process may use, and Windows 11 and Windows
+    /// Server 2022 can make a process eligible across groups by default. Any active-group count
+    /// other than one is rejected with an exception before anything is called. The count is read
+    /// again after the join and a change is rejected before the caller can take a baseline; the
+    /// process affinity mask and the caller thread's group affinity are read and compared the same
+    /// way. Every Win32 result is checked. A callback exception or a Win32 failure stops the warm-up
+    /// immediately, is carried out of the thread through std::exception_ptr, and is rethrown here
+    /// after the join; the thread is joined on every path. This helper deliberately supports only
+    /// the single-SYSTEM-group case and makes no claim to multi-group support. Test support only.
+    void warmEveryAllowedCpu(const std::function<void()> &operation, const CpuWarmupHooks &hooks = {});
 
 } // namespace pvdkit::test

@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "core/Error.hpp"
 #include "core/colour/Primaries.hpp"
@@ -118,6 +119,10 @@ namespace pvdkit::core
         bool deepOutput = false;
         /// Opt in to native RGB when the open request permits it. Defaults preserve legacy codecs.
         bool nativeRgbOutput = false;
+        /// The stable absolute native on-disk path when the host opened one, so a format that
+        /// resolves relative references can use its directory. Borrowed from the IFileData that
+        /// produced it and valid while that owner is alive; nullopt for archive and virtual input.
+        std::optional<std::wstring_view> sourcePath{};
     };
 
     /// Decodes frames from one parsed file.

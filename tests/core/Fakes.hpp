@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -160,6 +161,7 @@ namespace pvdkit::core::test
         int dataDestructions = 0;
         std::string openedPath;
         std::optional<std::wstring> openedWidePath;
+        std::optional<std::filesystem::path> sourcePath;
         std::vector<std::byte> fileBytes;
         std::optional<Error> openError;
         bool throwOnOpen = false;
@@ -168,8 +170,9 @@ namespace pvdkit::core::test
     class FakeFileData final : public IFileData
     {
       public:
-        FakeFileData(std::vector<std::byte> bytes, int &destructions)
-            : bytes_(std::move(bytes)), destructions_(destructions)
+        FakeFileData(std::vector<std::byte> bytes, int &destructions,
+                     std::optional<std::filesystem::path> sourcePath = {})
+            : bytes_(std::move(bytes)), sourcePath_(std::move(sourcePath)), destructions_(destructions)
         {
         }
         ~FakeFileData() override
@@ -182,8 +185,17 @@ namespace pvdkit::core::test
             return bytes_;
         }
 
+        [[nodiscard]] std::optional<std::wstring_view> sourcePath() const override
+        {
+            if (!sourcePath_) {
+                return std::nullopt;
+            }
+            return std::wstring_view{sourcePath_->native()};
+        }
+
       private:
         std::vector<std::byte> bytes_;
+        std::optional<std::filesystem::path> sourcePath_;
         std::reference_wrapper<int> destructions_;
     };
 
@@ -217,7 +229,8 @@ namespace pvdkit::core::test
             if (state.openError) {
                 return std::unexpected(*state.openError);
             }
-            return std::unique_ptr<IFileData>{std::make_unique<FakeFileData>(state.fileBytes, state.dataDestructions)};
+            return std::unique_ptr<IFileData>{
+                std::make_unique<FakeFileData>(state.fileBytes, state.dataDestructions, state.sourcePath)};
         }
 
         std::reference_wrapper<FileSourceState> state_;

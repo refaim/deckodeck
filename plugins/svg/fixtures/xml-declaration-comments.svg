@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- A comment before the root element. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="3" height="1">
+  <!-- Comments inside the document are not painted. -->
+  <rect x="0" y="0" width="3" height="1" fill="#123456"/>
+</svg>
+<!-- A comment after the root element. -->

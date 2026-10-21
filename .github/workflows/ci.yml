@@ -28,6 +28,74 @@ jobs:
     with:
       arch: x86
 
+  script-regression:
+    needs: [build-x64, build-x86]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Toolchain (vcpkg at the baseline, LLVM)
+        uses: ./repo/.github/actions/toolchain
+        with:
+          arch: x64
+
+      - name: Download the x64 release build and metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: plugins-x64
+          path: repo/build/release/plugins
+
+      - name: Download the x86 release build and metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: plugins-x86
+          path: repo/build/release-x86/plugins
+
+      - name: Download x64 build metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: build-metadata-x64
+          path: repo/build/release
+
+      - name: Download x86 build metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: build-metadata-x86
+          path: repo/build/release-x86
+
+      - name: Download the authoritative public RPGMVP archives
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP "legacy-package-inputs"
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          gh release download rpgmvp/v1.2.0 --pattern "RPGMVP-1.2.0-*.zip" --dir $destination
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed with exit code $LASTEXITCODE" }
+          Get-ChildItem -LiteralPath $destination | Format-Table Name, Length
+
+      - name: Run the Pester infrastructure regressions
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -eq [version]"3.4.0" })) {
+            Install-Module Pester -RequiredVersion 3.4.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+          $root = (Resolve-Path .).Path
+          & .\tests\scripts\Run-InfrastructureTests.ps1 `
+            -RepositoryRoot $root `
+            -BuildDirX64 (Join-Path $root "build/release") `
+            -BuildDirX86 (Join-Path $root "build/release-x86") `
+            -LegacyPackageInputDir (Join-Path $env:RUNNER_TEMP "legacy-package-inputs") `
+            -SelectedToolchain "1.99.1"
+
   lint:
     needs: build-x64
     runs-on: windows-latest

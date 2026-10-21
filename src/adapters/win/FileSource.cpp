@@ -17,7 +17,7 @@ namespace pvdkit::win
 
     core::Result<std::unique_ptr<core::IFileData>> FileSource::open(const std::wstring_view widePath)
     {
-        return toWin32Path(widePath)
+        return toAbsoluteWin32Path(widePath)
             .and_then([](const std::wstring &path) { return FileMapping::open(path); })
             // By reference on purpose: for i686-pc-windows-msvc, clang 19 splits a captureless lambda
             // that takes a non-trivially-copyable parameter by value into an `__impl` body plus a

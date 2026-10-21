@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "core/IFileSource.hpp"
@@ -43,6 +45,7 @@ namespace pvdkit::win
             UniqueHandle mapping;
             UniqueView view;
             std::size_t size = 0;
+            std::wstring sourcePath;
         };
 
         explicit FileMapping(State state) noexcept;
@@ -55,12 +58,14 @@ namespace pvdkit::win
 
         [[nodiscard]] static core::Result<std::unique_ptr<FileMapping>> open(std::wstring_view path);
         [[nodiscard]] std::span<const std::byte> bytes() const override;
+        [[nodiscard]] std::optional<std::wstring_view> sourcePath() const override;
 
       private:
         UniqueHandle file_;
         UniqueHandle mapping_;
         UniqueView view_;
         std::size_t size_;
+        std::wstring sourcePath_;
     };
 
 } // namespace pvdkit::win

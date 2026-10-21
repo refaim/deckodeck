@@ -1,11 +1,13 @@
 # deckodeck — build
 
 **deckodeck** (repository: <https://github.com/refaim/deckodeck>) is a set of decoder plugins for
-PictureView 3, the image viewer plugin for Far Manager 3 by Pavel Skakov: `AVIF.pvd`, `EXR.pvd`
-and `RPGMVP.pvd`, built for both the x64 and the x86 (32-bit) Far Manager. All implement
+PictureView 3, the image viewer plugin for Far Manager 3 by Pavel Skakov: `AVIF.pvd`, `EXR.pvd`,
+`RPGMVP.pvd` and `SVG.pvd`, built for both the x64 and the x86 (32-bit) Far
+Manager. All implement
 PictureView's PVD decoder interface v1 (`third_party/pvd/PictureViewPlugin.h`) over shared
-libraries, and every plugin is a single statically linked `<NAME>.pvd` that imports `KERNEL32.dll`
-and nothing else, so it needs no runtime, no WIC codec and no GDI+. New releases are published as
+libraries, and every plugin is a single statically linked `<NAME>.pvd`. AVIF, EXR and RPGMVP
+import `KERNEL32.dll` only; SVG imports only `KERNEL32.dll`, `ntdll.dll` and `ole32.dll`. None
+needs a runtime, a WIC codec or GDI+. New releases are published as
 GitHub Releases on the repository above and announced in the PictureView forum thread; that is
 this project's release channel. The shared libraries underneath the plugins (`src/`, the
 `pvdkit_core`/`pvdkit_pvd`/`pvdkit_win` targets, the `pvdkit::` C++ namespace, the
@@ -24,6 +26,10 @@ Plugins:
 - `plugins/rpgmvp` — `RPGMVP.pvd`, decoder for RPG Maker MV/MZ encrypted PNG images
   (`.rpgmvp`/`.png_`) over libspng + zlib. See `plugins/rpgmvp/README.md` for what it supports and
   how to install it.
+- `plugins/svg` — `SVG.pvd`, still SVG/SVGZ renderer over the unmodified resvg 0.48.1 C API,
+  built as a static Rust library with YY-Thunks 1.2.3. See `plugins/svg/README.md` for support
+  and installation, and
+  `plugins/svg/DESIGN.md` for the boundary.
 
 ## Build
 
@@ -40,9 +46,37 @@ order), then `clang-cl` on PATH; vcpkg is `VCPKG_ROOT` or the reference machine'
 every dependency with the same toolchain and the static CRT; `ports/` holds overlay ports (today
 `libavif`, patched for clang-cl's static-library merge; `libspng`, `openjph` and `imath`, each
 with one build change, and `openexr` with two patches, every change documented in its
-`portfile.cmake`). Each plugin's libraries are a vcpkg
-manifest feature named after the plugin (`vcpkg.json`). Generating the EXR fixtures
+`portfile.cmake`). The vcpkg-managed plugins have a manifest feature named after the plugin
+(`vcpkg.json`); SVG has no vcpkg feature because its renderer is built by Cargo. Generating the EXR fixtures
 (`plugins/exr/scripts/make-synthetic-fixtures.ps1`) needs `uv` on PATH; building does not.
+
+SVG adds a pinned Rust 1.99.1 MSVC build toolchain to these requirements, with the
+`x86_64-pc-windows-msvc` and `i686-pc-windows-msvc` targets. A builder without it can install the
+minimal toolchain with:
+
+```powershell
+rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc,i686-pc-windows-msvc
+```
+
+The plugin's `CMakeLists.txt` selects the toolchain named `1.99.1` by default. An existing local
+Rust installation can instead be selected with
+`-DPVDKIT_RESVG_RUST_TOOLCHAIN=<absolute toolchain directory>`; CMake accepts that path only when
+the compiler it actually selects reports `release: 1.99.1` from `rustc -vV`. The build invokes
+Cargo through `rustup run` with the selected toolchain, and the selected `rustc` is a configure
+dependency, so changing the compiler re-runs configuration.
+
+The plugin also pins resvg 0.48.1 source commit
+`68b14c4c3bccdb60344c777406486b54c36ec1a4` (v0.48.1 tag archive SHA-256
+`40dafea6b4b9d01e9d28b6d49f1e912daf3e9055676ad9179a5a2db6e7386945`) and the official
+YY-Thunks 1.2.3 `YY-Thunks-Lib.zip` (SHA-256
+`8d2417cea1914a678f766c73fd458bb85dfd6057878f8d1d87ddcfc370a42ef9`; commit
+`b41fb80b8d316581eec0959600aeb0e7339d0e5e`). Cargo builds `resvg-capi` with its default `svgz`,
+`text`, `system-fonts`, `memmap-fonts` and `raster-images` features, `--locked` against the
+upstream `Cargo.lock`, and `RUSTFLAGS=-C target-feature=+crt-static`, for the two MSVC targets
+above. The finished plugin needs no Rust runtime and no Rust DLL. These checks were static
+inspections of the pins; this file does not claim a fresh build.
+The YY-Thunks recipe is verified for the current Windows x64 and x86 builds only, Windows 7
+runtime behaviour has not been tested, and the x64 and x86 binaries were checked manually in Far.
 
 ```powershell
 cmake --preset release
@@ -67,7 +101,8 @@ ctest --preset release-x86      # the same tests, run as 32-bit processes, plus 
 ```
 
 The DLLs land in `build/release-x86$env:PVDKIT_BUILD_SUFFIX/plugins/<id>/<NAME>.pvd`
-(`IMAGE_FILE_MACHINE_I386`, imports `KERNEL32.dll` only, exports the nine bare `pvd*` names).
+(`IMAGE_FILE_MACHINE_I386`, imports matching the per-plugin policy, exports the nine bare `pvd*`
+names). SVG's x86 target is `i686-pc-windows-msvc`, built by the same Cargo invocation.
 `debug-x86` and `coverage-x86` mirror `debug` and `coverage`. The x86 presets use the triplet
 `triplets/x86-windows-static-clang.cmake`: the same x64-hosted clang-cl cross-compiles for
 `i686-pc-windows-msvc`, and the triplet loads the x86 Visual Studio library environment for the
@@ -91,17 +126,45 @@ It discovers every `build/release<Suffix>/plugins/<id>/package/manifest.json` an
 counterpart (a plugin missing on either architecture is an error), runs `check-imports.ps1` and
 `check-exports.ps1` on each DLL, checks that the DLL's `FileVersion` equals the manifest
 version, and writes `<DistDir>/<NAME>-<version>-<arch>.zip` holding exactly `<NAME>.pvd`,
-`readme_en.txt`, `readme_ru.txt`, `ChangeLog` and `LICENSES.txt` (`manifest.json` is build
-metadata and stays out). A zip of the same name is overwritten, other zips are left alone; every
-zip path is printed with its SHA-256, and one object per zip (Name, Version, Architecture, Zip,
-Sha256) goes to the pipeline. `-DistDir` defaults to `dist/`; a relative path is resolved against
-the repository root.
+`readme_en.txt`, `readme_ru.txt`, `ChangeLog`, `LICENSES.txt` and any plain-leaf documents listed
+in the package manifest's `extra_documents` (`manifest.json` is build metadata and stays out).
+A zip of the same name is overwritten, other zips are left alone; every zip path is printed with
+its SHA-256, and one object per zip (Name, Version, Architecture, Zip, Sha256) goes to the
+pipeline. `-DistDir` defaults to `dist/`; a relative path is resolved against the repository root.
 
 `scripts/package.ps1` is the whole release pipeline on one machine: `build-all.ps1 -Clean` (suffix
 `-pkg`), `lint.ps1` on both release directories, the `asan` preset from scratch, then `pack.ps1`
 into `dist/` (previous release zips are removed first, so a failed gate leaves no stale
 archive). The GitHub release workflow runs `pack.ps1` on the CI build artifacts instead (see
 "Continuous integration and releases").
+
+### SVG third-party notices
+
+SVG's package staging copies the reviewed plaintext aggregate byte-for-byte to `LICENSES.txt`
+with `LICENSES_COPYONLY`, and declares the two HTML notices as `EXTRA_DOCUMENTS`. CMake copies
+those files under their original names beside the staged documents and lists them in the build
+manifest's `extra_documents`; `pack.ps1` copies every declared extra into the archive. The
+reviewed notice files are:
+
+- `LICENSES.txt` - the reviewed plaintext `LICENSES-resvg.txt`, 197,864 bytes, SHA-256
+  `195E6D92BC40D6276DA2722A160D5973967CCA14F06B904EF66022E68C536518`. It contains the
+  61-crate/29-body Cargo inventory for both MSVC targets, the embedded ego-tree ISC notice,
+  the Getreuer Simplified BSD notice and the YY-Thunks MIT notice.
+- `RUST-COPYRIGHT-library.html` - byte-identical Rust 1.99.1 standard-library copyright
+  notice, 1,499,465 bytes, SHA-256
+  `5647BE074C8EDF7339FD863055923A8FC80BC5610A8D4661EC3B767B9D392C27`.
+- `RUST-COPYRIGHT.html` - byte-identical broader Rust toolchain copyright notice,
+  14,423,589 bytes, SHA-256
+  `D518AE2D76BC7A1F0CBF0069B8DEAFB56EFC39C2614CAB74A859EF0B467F8373`. This file covers
+  more than the library and does not imply that every listed toolchain component is linked
+  into the plugin.
+
+Both HTML files ship beside `LICENSES.txt`, unchanged; the plaintext by itself is not the
+complete Rust-toolchain notice set. An SVG archive therefore contains seven entries: `SVG.pvd`,
+`readme_en.txt`, `readme_ru.txt`, `ChangeLog`, `LICENSES.txt` and the two HTML notices. The
+other plugins keep their five-entry archives (`<NAME>.pvd` and the four documents) and have no
+`extra_documents` key in their package metadata; `manifest.json` itself never enters an archive.
+These are packaging facts, not a legal opinion.
 
 Every DLL carries a VERSIONINFO resource (version, author, copyright, library versions). A
 plugin's name, version and priority are declared once, in `pvdkit_plugin_identity(...)` in its
@@ -115,6 +178,7 @@ Checks that are part of the definition of done:
 ./scripts/coverage.ps1                                  # 100 % lines and branches on src/** and plugins/*/src/**
 ./scripts/coverage.ps1 -Preset coverage-x86             # the same gate for the 32-bit build
 ./scripts/check-imports.ps1 -Path build/release/plugins/avif/AVIF.pvd   # imports == KERNEL32.dll only
+./scripts/check-imports.ps1 -Path build/release/plugins/svg/SVG.pvd -AllowedModules "KERNEL32.dll,ntdll.dll,ole32.dll"
 ./scripts/check-exports.ps1 -Path build/release/plugins/avif/AVIF.pvd   # exports == the nine bare pvd* names
 ./scripts/lint.ps1 -BuildDir build/release -ReleaseDir build/release          # static analysis, zero findings (x64)
 ./scripts/lint.ps1 -BuildDir build/release-x86 -ReleaseDir build/release-x86  # the same for the 32-bit build
@@ -179,8 +243,11 @@ action `.github/actions/toolchain`: it checks out `microsoft/vcpkg` at the `buil
 restores vcpkg's binary cache from `actions/cache` (keyed by the hash of `vcpkg.json`, `ports/`,
 `triplets/`, `cmake/` and the runner image, with partial-match restore keys), and sets
 `PVDKIT_LLVM_DIR` to the runner's Visual Studio LLVM (the VS 2022 layout first, any VS major as
-the fallback) so the CMake toolchains and the scripts use one and the same clang-cl. The release
-workflow's `verify` and `release` jobs build nothing and skip the action; the table gates
+the fallback) so the CMake toolchains and the scripts use one and the same clang-cl. It also
+installs the pinned Rust 1.99.1 toolchain, minimally, with both
+`x86_64-pc-windows-msvc` and `i686-pc-windows-msvc` targets, so every building job uses the
+compiler that CMake validates. The release workflow's `verify` and `release` jobs build nothing
+and skip the action; the table gates
 `pack.ps1` runs there find the runner's LLVM through the fallback order of `scripts/llvm-dir.ps1`
 (the VS 2022 layouts, then the same any-Visual-Studio glob the action uses - which is what the
 VS 2026 image resolves to - then PATH; `cmake/find-llvm.cmake` has the same order). Every
@@ -198,7 +265,7 @@ workflow declares `permissions: contents: read`; only the `release` job holds `c
   -BinSkimDir ...`); `coverage` (`scripts/coverage.ps1 -Preset coverage`, fails below 100 %). No
   ASan job: that preset stays a local gate (`scripts/package.ps1`). One run per ref at a time;
   every job has a timeout.
-- `.github/workflows/release.yml` runs on the tags `avif/vX.Y.Z`, `exr/vX.Y.Z` and `rpgmvp/vX.Y.Z`: `verify`
+- `.github/workflows/release.yml` runs on the tags `avif/vX.Y.Z`, `exr/vX.Y.Z`, `rpgmvp/vX.Y.Z` and `svg/vX.Y.Z`: `verify`
   (`scripts/release-tag.ps1`: the tag names a plugin directory, `plugins/<id>/CMakeLists.txt`
   declares exactly that `VERSION`, and `plugins/<id>/package/ChangeLog` opens with
   `<NAME> <version>`), the two build jobs from `build.yml`, then `release`: `scripts/pack.ps1
@@ -212,10 +279,10 @@ workflow declares `permissions: contents: read`; only the `release` job holds `c
   and finally `scripts/update-readme-downloads.ps1` on `master`: the plugin's row of the
   "Downloads" table in `README.md` (between the `<!-- downloads:begin -->` / `<!-- downloads:end -->`
   anchors) is pointed at the new release and committed as `README: <NAME> <version> released`
-  with the workflow's `GITHUB_TOKEN`. The push retries up to five times from a freshly fetched
-  `origin/master` (two tags pushed together run two release jobs that both push to `master`);
-  a row that is already current, or that names a newer version, is left alone and nothing is
-  committed.
+with the workflow's `GITHUB_TOKEN`. The push retries up to five times from a freshly fetched
+`origin/master` (two tags pushed together run two release jobs that both push to `master`);
+a row that is already current, or that names a newer version, is left alone and nothing is
+committed. SVG 1.0.0 uses the same tag list and release pipeline.
 
 To cut a release of one plugin: bump `VERSION` in `pvdkit_plugin_identity(...)` of
 `plugins/<id>/CMakeLists.txt`, add the entry at the top of `plugins/<id>/package/ChangeLog`

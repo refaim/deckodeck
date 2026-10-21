@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -102,6 +103,26 @@ namespace
         std::vector<fs::path> created_;
     };
 
+    class CurrentDirectoryGuard
+    {
+      public:
+        CurrentDirectoryGuard() : previous_(fs::current_path())
+        {
+        }
+
+        ~CurrentDirectoryGuard()
+        {
+            std::error_code ignored;
+            fs::current_path(previous_, ignored);
+        }
+
+        CurrentDirectoryGuard(const CurrentDirectoryGuard &) = delete;
+        CurrentDirectoryGuard &operator=(const CurrentDirectoryGuard &) = delete;
+
+      private:
+        fs::path previous_;
+    };
+
     void writeBytes(const fs::path &path, const std::span<const std::byte> bytes)
     {
         std::ofstream stream{extended(path), std::ios::binary};
@@ -159,6 +180,42 @@ TEST_CASE("UTF-8 inputs longer than INT_MAX bytes are refused before MultiByteTo
     REQUIRE_FALSE(tooLong.has_value());
     CHECK(tooLong.error().code == ErrorCode::FileOpenFailed);
     CHECK(tooLong.error().detail == "the UTF-8 path is longer than INT_MAX bytes");
+}
+
+TEST_CASE("UTF-16 paths convert to UTF-8 and reject lone surrogates")
+{
+    const auto empty = pvdkit::win::wideToUtf8(L"");
+    REQUIRE(empty.has_value());
+    CHECK(empty->empty());
+
+    const auto converted = pvdkit::win::wideToUtf8(L"folder/\u0444\u0430\u0439\u043b-\U0001F600.avif");
+    REQUIRE(converted.has_value());
+    CHECK(*converted == "folder/\xD1\x84\xD0\xB0\xD0\xB9\xD0\xBB-\xF0\x9F\x98\x80.avif");
+
+    for (const auto surrogate : {static_cast<wchar_t>(0xD800), static_cast<wchar_t>(0xDC00)}) {
+        std::wstring path = L"C:\\pvdkit-surrogate-";
+        path.push_back(surrogate);
+        path += L"\\image.svg";
+        CAPTURE(static_cast<std::uint32_t>(surrogate));
+        std::optional<pvdkit::core::Result<std::string>> result;
+        CHECK_NOTHROW([&] { result.emplace(pvdkit::win::wideToUtf8(path)); }());
+        REQUIRE(result.has_value());
+        REQUIRE_FALSE((*result).has_value());
+        CHECK((*result).error().code == ErrorCode::ConversionFailed);
+        CHECK_FALSE((*result).error().detail.empty());
+    }
+}
+
+TEST_CASE("UTF-16 inputs longer than INT_MAX code units are refused before WideCharToMultiByte")
+{
+    constexpr auto intMax = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    CHECK(pvdkit::win::detail::wideLength(0) == 0);
+    CHECK(pvdkit::win::detail::wideLength(intMax) == std::numeric_limits<int>::max());
+
+    const auto tooLong = pvdkit::win::detail::wideLength(intMax + 1);
+    REQUIRE_FALSE(tooLong.has_value());
+    CHECK(tooLong.error().code == ErrorCode::ConversionFailed);
+    CHECK(tooLong.error().detail == "the UTF-16 path is longer than INT_MAX code units");
 }
 
 TEST_CASE("Win32 paths below MAX_PATH are passed through untouched")
@@ -285,6 +342,49 @@ TEST_CASE("file source supports Unicode and extended-length paths")
     REQUIRE_FALSE(tooLong.has_value());
     CHECK(tooLong.error().code == ErrorCode::FileOpenFailed);
     CHECK(tooLong.error().detail.starts_with("GetFullPathNameW"));
+}
+
+TEST_CASE("file source exposes the exact Unicode source path for UTF-8 and UTF-16 opens")
+{
+    TempTree tree{L"pvdkit-adapter-source-path"};
+    pvdkit::win::FileSource source;
+    const auto path = tree.file(L"\u65e5\u672c\u8a9e-\u0444\u0430\u0439\u043b.svg");
+    writeBytes(path, kPayload);
+
+    const auto fromUtf8 = source.open(utf8Path(path));
+    REQUIRE(fromUtf8.has_value());
+    REQUIRE((*fromUtf8)->sourcePath().has_value());
+    CHECK(fs::path{*(*fromUtf8)->sourcePath()} == path);
+
+    const auto fromWide = source.open(std::wstring_view{path.native()});
+    REQUIRE(fromWide.has_value());
+    REQUIRE((*fromWide)->sourcePath().has_value());
+    CHECK(fs::path{*(*fromWide)->sourcePath()} == path);
+}
+
+TEST_CASE("file source keeps a source path that resolves after the current directory changes")
+{
+    TempTree first{L"pvdkit-adapter-relative-a"};
+    TempTree second{L"pvdkit-adapter-relative-b"};
+    const auto openedFile = first.file(L"source.svg");
+    writeBytes(openedFile, kPayload);
+    const auto sameNameElsewhere = second.file(L"source.svg");
+    writeBytes(sameNameElsewhere, kPayload);
+
+    CurrentDirectoryGuard restoreCurrentDirectory;
+    fs::current_path(first.path());
+    pvdkit::win::FileSource source;
+    const auto opened = source.open(std::wstring_view{L"source.svg"});
+    REQUIRE(opened.has_value());
+
+    fs::current_path(second.path());
+    const auto sourcePath = (*opened)->sourcePath();
+    REQUIRE(sourcePath.has_value());
+    const fs::path decodedPath{*sourcePath};
+    CHECK(decodedPath.is_absolute());
+    std::error_code equivalentError;
+    CHECK(fs::equivalent(decodedPath, openedFile, equivalentError));
+    CHECK_FALSE(equivalentError);
 }
 
 TEST_CASE("file source opens short absolute paths that rely on Win32 normalisation")

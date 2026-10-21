@@ -5,9 +5,9 @@ turned it into this monorepo). Owner: orchestrator. Implementers: Codex/Claude a
 Opus agents. Rules that constrain this design live in `AGENTS.md`. Interface declarations below
 are canonical: implement them as written; if something is genuinely impossible, report instead
 of improvising. Plugin-specific design (what AVIF.pvd does with libavif, its fixtures, its
-limitations) lives next to the plugin: `plugins/avif/DESIGN.md`. "deckodeck" names the product and
+limitations) lives next to each plugin under `plugins/<id>/DESIGN.md`. "deckodeck" names the product and
 the repository (`https://github.com/refaim/deckodeck`); `pvdkit`, used throughout this document,
-names the shared PVD kit layer underneath both plugins (`docs/BUILD.md` explains the split).
+names the shared PVD kit layer underneath the plugins (`docs/BUILD.md` explains the split).
 
 ## 0. Shape of the repository
 
@@ -19,7 +19,8 @@ pvdkit/
   src/core/           shared: Error, Narrow, PixelBuffer, Transform, IDecoder, IFileSource,
                       IImageDescriber, CodecPlugin, FileSession                → pvdkit_core
   src/adapters/win/   shared: FileMapping, FileSource, Utf8                    → pvdkit_win
-  plugins/<id>/       one directory per plugin (today: avif → AVIF.pvd, exr → EXR.pvd, rpgmvp → RPGMVP.pvd)
+  plugins/<id>/       one directory per plugin (today: avif → AVIF.pvd, exr → EXR.pvd,
+                      rpgmvp → RPGMVP.pvd, svg → SVG.pvd)
     CMakeLists.txt    identity (name, version, priority), libraries, composition, packaging
     src/core/         plugin decisions without the codec library (e.g. the describer)  → <id>_core
     src/adapters/     the codec adapter(s)                                     → <id>_adapter
@@ -44,8 +45,11 @@ pvdkit/
 Every plugin is one DLL `<NAME>.pvd` = the shared `Exports.cpp` + `Plugin.def` + `Plugin.rc`
 compiled against the plugin's generated identity, linked with `pvdkit_pvd` and the plugin's
 composition root. Every plugin ships x64 and x86 with the same guarantees: static CRT,
-`KERNEL32.dll` as the only import, the nine bare exports, 100 % line and branch coverage of
-`src/**` and `plugins/*/src/**`, a VERSIONINFO resource, a zip per architecture.
+the nine bare exports, 100 % line and branch coverage of `src/**` and `plugins/*/src/**`, a
+VERSIONINFO resource, and a zip per architecture. AVIF, EXR and RPGMVP import `KERNEL32.dll`
+only; SVG imports only `KERNEL32.dll`, `ntdll.dll` and `ole32.dll`, its documented exception for
+the static Rust/resvg library. SVG uses the unmodified upstream resvg 0.48.1 C API through
+YY-Thunks and contains no Rust code of its own.
 
 ## 1. What the host expects (PVD interface v1.1, numeric version 1, summary)
 
@@ -74,9 +78,10 @@ Source of truth: `third_party/pvd/PictureViewPlugin.h`. Key semantics:
   untouched and never set `PVD_IDF_ICC`. This also preserves old callers' smaller structures.
   The 2026.09.30 x64 host ignores ICC transport, as does the 2021.4.19 host; see
   [the binary-specific analysis](host/pictureview-2026-09-30-abi.md).
-  AVIF, EXR and RPGMVP opt in to native RGB through `pvdFileOpenW`: `nBPP` codes 25/33/49/65 mean
+  AVIF, EXR, RPGMVP and SVG opt in to native RGB through `pvdFileOpenW`: `nBPP` codes 25/33/49/65 mean
   RGB8/RGBA8/RGB16/RGBA16, occupying 3/4/6/8 bytes per pixel. Opaque deep or colour-presented
-  sources use RGB48; sources with alpha use RGBA64. `pvdFileOpen` retains BGR codes 24/32/64.
+  sources use RGB48; sources with alpha use RGBA64. SVG is an 8-bit renderer, so it emits only
+  RGB24/RGBA32 through this path. `pvdFileOpen` retains BGR codes 24/32/64 (SVG: BGR24/BGRA32).
   This compatibility policy follows the examined 2021 and 2026 hosts' entry-point selection;
   numeric interface version 1 provides no capability query. See the binary-specific note above.
   Grayscale and indexed output are not emitted.
@@ -87,10 +92,14 @@ Source of truth: `third_party/pvd/PictureViewPlugin.h`. Key semantics:
 - `pvdPageFree(ctx, pDecodeInfo)`: release that decoded page. Host may hold several decoded pages
   of one file at once; identify the page by `pImage`.
 - `pvdFileClose(ctx)`: destroy the context, including any pages not freed.
-- Nothing may ever propagate out of an export: no exceptions, no crashes on hostile input.
+- Nothing may ever propagate out of an export: no exceptions, no crashes on hostile input. The
+  SVG-only accepted limitation is process termination inside resvg's Rust allocator under memory
+  exhaustion, which is not a C++ exception and cannot be caught by the firewall (§7,
+  `plugins/svg/DESIGN.md`).
 
-Existing bundled decoders import only `KERNEL32.dll` and `msvcrt.dll`; ours import `KERNEL32.dll`
-only (static CRT).
+Existing bundled decoders import only `KERNEL32.dll` and `msvcrt.dll`; ours use a static CRT.
+AVIF, EXR and RPGMVP import only `KERNEL32.dll`; SVG imports only `KERNEL32.dll`, `ntdll.dll` and
+`ole32.dll`.
 
 ## 2. Layering
 
@@ -315,7 +324,13 @@ project-wide version: the kit has none, each plugin has its own.
 ### 3.5 `src/core/IFileSource.hpp`
 
 ```cpp
-class IFileData { public: virtual ~IFileData() = default; [[nodiscard]] virtual std::span<const std::byte> bytes() const = 0; };
+class IFileData {
+ public:
+  virtual ~IFileData() = default;
+  [[nodiscard]] virtual std::span<const std::byte> bytes() const = 0;
+  // Stable absolute native path while this IFileData is alive; nullopt for archive/virtual data.
+  [[nodiscard]] virtual std::optional<std::wstring_view> sourcePath() const { return std::nullopt; }
+};
 class IFileSource {
  public:
   virtual ~IFileSource() = default;
@@ -372,6 +387,7 @@ struct DecoderOptions {
   std::uint32_t maxDimension = 0;
   bool deepOutput = false; // deep source (>8 bits/sample) -> 16-bit samples instead of 8-bit reduction
   bool nativeRgbOutput = false; // decoder opt-in, ANDed with OpenRequest::nativeRgb per session
+  std::optional<std::wstring_view> sourcePath{}; // stable absolute path of the on-disk file; borrowed from IFileData
 };
 class IDecoder {
  public:
@@ -400,6 +416,16 @@ class IImageDescriber {
   [[nodiscard]] virtual ImageDescription describe(const ImageMeta& meta) const = 0;
 };
 ```
+
+`DecoderOptions::sourcePath` is a borrowed view, not an owning path and not a request field: an
+`IFileData` produced by the Win32 file source returns the stable absolute native path it opened,
+and `CodecPlugin` copies that view into the session options only while the file data is alive.
+Memory/archive opens leave it `nullopt` and explicitly clear any configured value. The path is
+absolute because the current directory can change after the open; it is also the document base a
+format such as SVG may use for relative resources. The optional default preserves every existing
+decoder and caller; `nullopt` means no reliable on-disk document path, not a filesystem sandbox
+or a prohibition on relative resolution. The exact lifetime and Windows path construction live in
+§3.8.
 
 `ImageMeta::hasIcc` records only whether the container carries an ICC profile: the adapter sets it
 from the codec library's own presence check (libavif's parsed `image.icc`; RPGMVP's
@@ -584,7 +610,9 @@ Decisions (Task 7, open point 1):
   `open()`: `recognises(head)` else `NotRecognised`; if `fileSize == 0` data = `head`, else
   `fileSource.open(wideFileName)` when present, otherwise `fileSource.open(utf8FileName)` →
   `IFileData` owned by the session; copy options and set
-  `sessionOptions.nativeRgbOutput = options.nativeRgbOutput && request.nativeRgb`;
+  `sessionOptions.nativeRgbOutput = options.nativeRgbOutput && request.nativeRgb`, then set
+  `sessionOptions.sourcePath` from the opened `IFileData::sourcePath()` (and leave it `nullopt`
+  for memory input);
   `factory.create(data, sessionOptions)`;
   `describer.describe(meta)`; build `ImageInfo{frameCount, animated, formatName, compression,
   comments}`; return `FileSession`. It is the same class for every plugin.
@@ -613,10 +641,14 @@ Decisions (Task 7, open point 1):
   `IImageDescriber`, the `core::colour::ColourTables` and a `core::CodecPlugin` (declared in
   that order) and forwards `IPlugin`.
   It chooses the `DecoderOptions` and builds `PluginInfo` from `kPluginIdentity` plus run-time
-  library versions. Every production composition sets `deepOutput = true`, so sources deeper than
-  8 bits are delivered as BGRA64/RGB48/RGBA64 without a build switch; 8-bit-and-shallower sources use
-  BGR24/BGRA32 or RGB24/RGBA32 unless colour presentation requires 16-bit headroom.
-  AVIF, EXR and RPGMVP also set `nativeRgbOutput = true`; defaulted compositions retain BGR.
+  library versions. AVIF, EXR and RPGMVP set `deepOutput = true`, so sources deeper than 8 bits are
+  delivered as BGRA64/RGB48/RGBA64 without a build switch; 8-bit-and-shallower sources use
+  BGR24/BGRA32 or RGB24/RGBA32 unless colour presentation requires 16-bit headroom. SVG sets
+  `deepOutput = false` and `nativeRgbOutput = true`; its 8-bit renderer emits RGB24/RGBA32 through
+  the native-RGB entry point and BGR24/BGRA32 through the legacy entry point. Defaulted
+  compositions retain BGR.
+  SVG's composition additionally owns its resvg state (the shared options, system-font load and
+  parse mutex); the plugin-specific lifetime and resource rules are in `plugins/svg/DESIGN.md`.
   Plugin-specific values
   are recorded in each `plugins/<id>/DESIGN.md`.
 
@@ -625,20 +657,21 @@ Decisions (Task 7, open point 1):
 - `win::FileMapping` (`src/adapters/win/FileMapping.hpp/.cpp`): RAII over `CreateFileW` (read,
   share read/write/delete, `FILE_FLAG_SEQUENTIAL_SCAN`), `CreateFileMappingW(PAGE_READONLY)`,
   `MapViewOfFile(FILE_MAP_READ)`; each handle in a `std::unique_ptr` with a stateless deleter;
-  implements `IFileData`. Zero-length file → `FileOpenFailed` (mapping of 0 bytes is illegal).
+  implements `IFileData`. It stores the exact path it opened and returns it from `sourcePath()`;
+  the view remains valid while the `FileMapping` is alive. Zero-length file → `FileOpenFailed`
+  (mapping of 0 bytes is illegal).
   `win::FileSource : IFileSource` converts UTF-8 → UTF-16 with `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS)`
-  and delegates to the UTF-16 overload. That overload preserves code units and prefixes `\\?\`
-  **only for long paths**: paths shorter than `MAX_PATH` are passed to
-  `CreateFileW` unchanged (Win32 normalisation of `/`, `.`, `..` stays active); at or above
-  `MAX_PATH` the path is first normalised with `GetFullPathNameW` and then prefixed (`\\?\X:\...`,
-  UNC → `\\?\UNC\server\share\...`); paths already starting with `\\?\` or `\\.\` (either slash
-  spelling) are never touched — a `\\.\` file path ≥ `MAX_PATH` will not open, that is the caller's
-  choice; and if `GetFullPathNameW` returns a path that already carries one of these prefixes it is
-  used as is.
+  and delegates to the UTF-16 overload. That overload resolves the name with
+  `win::toAbsoluteWin32Path` before opening: relative and drive-relative names are resolved
+  against the current directory, `/`, `.`, `..` and trailing dots/spaces are normalised as Win32
+  would, and paths at or above `MAX_PATH` receive the `\\?\` or `\\?\UNC\` prefix. Existing
+  `\\?\` and `\\.\` names pass through. The same absolute string is both passed to `CreateFileW`
+  and retained as `IFileData::sourcePath`, so a later change of the process current directory does
+  not change the document base. This is a path normalisation contract, not a filesystem sandbox.
 - The `file` span given to an `IDecoderFactory::create` must outlive the decoder (codec libraries
   keep pointers into it); `FileSession` guarantees this by declaring the file data before the decoder.
-- Codec adapters are one-to-one over their library and contain no decisions; the AVIF one is
-  described in `plugins/avif/DESIGN.md`.
+- Codec adapters are one-to-one over their library and contain no decisions; the AVIF and SVG
+  ones are described in `plugins/avif/DESIGN.md` and `plugins/svg/DESIGN.md`.
 
 ## 4. Build
 
@@ -687,6 +720,14 @@ Decisions (Task 7, open point 1):
   CMake policy level below 3.15 (OpenEXR, Imath, libdeflate, OpenJPH) honour the static CRT the
   toolchain selects instead of falling back to `/MD`. Changing a toolchain file
   changes every port's ABI hash, i.e. rebuilds the ports once.
+- SVG is the one plugin whose codec is not a vcpkg port. CMake fetches the pinned resvg 0.48.1
+  source and the official YY-Thunks 1.2.3 library archive, then builds the unmodified
+  `resvg-capi` static library with Cargo for `x86_64-pc-windows-msvc` or
+  `i686-pc-windows-msvc` (`--locked`, default features, `RUSTFLAGS=-C
+  target-feature=+crt-static`). The Rust build toolchain is a build-time requirement; the
+  finished `.pvd` needs no Rust runtime and ships no Rust DLL. The source and library pins,
+  default features, static-CRT rule and the narrow import list are recorded in
+  `plugins/svg/DESIGN.md`; Windows 7 run-time behaviour has not been verified.
 - Targets. Shared: `pvdkit_options` (INTERFACE flags), `pvdkit_core`, `pvdkit_pvd`,
   `pvdkit_win` (all static). Per plugin, from `cmake/pvdkit-plugin.cmake`:
   - `pvdkit_plugin_identity(<id> ...)` → `<id>_identity` (INTERFACE, generated header, §3.4a);
@@ -714,8 +755,10 @@ Decisions (Task 7, open point 1):
   `adapter_tests` (win), `guard_tests`. Per-directory `CMakeLists.txt` with
   `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`; the top level globs `plugins/*/CMakeLists.txt` the
   same way, so a new plugin is a new directory and nothing else.
-- `scripts/check-imports.ps1`: fails unless the import table of the given DLL is exactly `KERNEL32.dll`
-  (`llvm-readobj --coff-imports`). `scripts/check-exports.ps1`: exactly the nine bare `pvd*` names.
+- `scripts/check-imports.ps1`: fails unless the import table of the given DLL is exactly the
+  plugin's approved set (`KERNEL32.dll` by default; SVG passes `KERNEL32.dll`, `ntdll.dll` and
+  `ole32.dll` through `pvdkit_add_plugin(... IMPORTS ...)`) using
+  `llvm-readobj --coff-imports`. `scripts/check-exports.ps1`: exactly the nine bare `pvd*` names.
   Both are registered per plugin as ctest tests in the release presets.
 - `scripts/lint.ps1 -BuildDir <configured build> -ReleaseDir <release build> [-Tools ...] [-Jobs n]`
   (Task 9): the static-analysis gate, run once per architecture and not part of ctest. clang-format
@@ -787,8 +830,8 @@ Decisions (Task 7, open point 1):
   libraries clang-cl's own driver would add (LLVM 19 `lib/clang/19/lib/windows`): an executable
   gets `clang_rt.asan-x86_64.lib` and `clang_rt.asan_cxx-x86_64.lib` as `/wholearchive:` inputs, a
   DLL gets `clang_rt.asan_dll_thunk-x86_64.lib` (it forwards to the executable's runtime through
-  `GetProcAddress`, so the instrumented `.pvd` still imports only `KERNEL32.dll` and exports the
-  nine names) - the `197611TARGET_PROPERTY:TYPE>` of the target being linked selects the set. The
+  `GetProcAddress`, so the instrumented `.pvd` keeps its approved import set and exports the nine
+  names) - the `197611TARGET_PROPERTY:TYPE>` of the target being linked selects the set. The
   test preset sets `ASAN_OPTIONS=halt_on_error=1:abort_on_error=0:allocator_may_return_null=0`;
   `detect_stack_use_after_return` stays off (its fake stack is incompatible with SEH-based C++
   unwinding here and wants 11 MB per thread). Three toolchain facts, each verified with a probe on
@@ -972,15 +1015,26 @@ Decisions (Task 7, open point 1):
   to `%TEMP%/pvdkit-hostile-<pid>-<seed>-<n>/` and removed afterwards) opened in both modes, each
   refused or decoded to a page whose every byte is read. Fixtures are discovered through the DLL
   itself (every regular non-`.md` file under the fixture directory, opened once in both modes:
-  accepted with its page count, or rejected); a plugin must ship at least one of each. Unit-level
-  counterparts: `tests/adapters/LeakTests.cpp` (`FileMapping`/`FileSource` open and close, every
-  failure path) and `plugins/<id>/tests/adapters/LeakTests.cpp` (decoder create/decode/destroy on
-  every fixture with the error paths, refusals, the composed plugin). Cost: Task 10's "< 30 s per
-  architecture" budget applied to the plain presets, and `avif_leak_tests` met it on an unloaded
-  machine until Task 24: ~15 s in Release, ~24-27 s in Debug, x64 and x86 alike. Since Task 24
-  every `pvdInit` builds the plugin's `SrgbOutputTables` (§7: ≈ 5 / 12 ms per call on x64
-  Release / Debug, ≈ 15 / 25 ms on x86), and the scenarios that cycle `pvdInit` about 650 times
-  (the disk and memory round trips, init/exit cycle, LoadLibrary/FreeLibrary) pay ≈ 650 × that:
+  accepted with its page count, or rejected); a plugin must ship at least one of each.
+
+  The CPU warm-up before the 8-thread and `LoadLibrary`/`FreeLibrary` scenarios pins only its
+  temporary threads - a fresh short-lived thread per CPU, affinity set before that thread's
+  callback and the thread joined before the next - and requires `GetActiveProcessorGroupCount() ==
+  1` before the first starts and after the last is joined, deliberately rejecting every multi-group
+  system rather than claiming support.
+  `GetProcessGroupAffinity` is not that contract: on Windows 11 and Windows Server 2022 a process
+  can be eligible across processor groups by default, so a process confined to one group does not
+  prove that the system has one active group.
+
+  Unit-level counterparts: `tests/adapters/LeakTests.cpp` (`FileMapping`/`FileSource` open and
+  close, every failure path) and `plugins/<id>/tests/adapters/LeakTests.cpp` (decoder
+  create/decode/destroy on every fixture with the error paths, refusals, the composed plugin).
+  Cost: Task 10's "< 30 s per architecture" budget applied to the plain presets, and
+  `avif_leak_tests` met it on an unloaded machine until Task 24: ~15 s in Release, ~24-27 s in
+  Debug, x64 and x86 alike. Since Task 24 every `pvdInit` builds the plugin's `SrgbOutputTables`
+  (§7: ≈ 5 / 12 ms per call on x64 Release / Debug, ≈ 15 / 25 ms on x86), and the scenarios that
+  cycle `pvdInit` about 650 times (the disk and memory round trips, init/exit cycle,
+  LoadLibrary/FreeLibrary) pay ≈ 650 × that:
   the Debug budget is no longer met on either architecture (unloaded: Debug x64 ≈ 50 s, measured
   by the Task 24 review; Debug x86 ≈ 45 s by extrapolation), and Release is close to it (unloaded
   Release x64 ≈ 23 s, Release x86 ≈ 33 s, both measured by the review). The delta itself was
@@ -1102,6 +1156,19 @@ Decisions (Task 7, open point 1):
   The maximum source-table cache is 15 x 65,536 floats (3.75 MiB), plus the output quantizer.
   Different plugin instances have separate owners. Reuse changes neither transfer functions nor
   pixel arithmetic; existing exact output/reference tests remain the colour contract.
+- SVG's composition root also owns `SvgState`: one `resvg_options`, a one-time lazy system-font
+  load, and a `std::mutex` around parse because the C API mutates `resources_dir` in that shared
+  object. Sessions borrow the state; rendering happens after the parse lock is released. The
+  state is per plugin instance, not a namespace-scope object or a thread-safe function-local
+  static. A file opened by name supplies `DecoderOptions::sourcePath`, whose absolute parent
+  directory becomes `resources_dir`; memory input clears that field and therefore has no reliable
+  document-relative base (§3.8, `plugins/svg/DESIGN.md`).
+- SVG-only accepted limitation: unmodified resvg/Rust has no fallible-allocation C contract. An
+  allocation failure can abort the process (`0xC0000409` was observed in an isolated 64 MiB
+  allocation under a 192 MiB job cap), and neither C++ size checks nor the catch-all firewall can
+  turn that abort into an error. Roma accepted this on 2026-10-21 to keep resvg inside the PVD
+  process; Far may close under exhaustion. There is no helper process. Other expected failures
+  remain `std::expected` values and the C++ `std::bad_alloc` firewall is unchanged.
 - A `DecodedPage` view is valid until `freePage` or session destruction, whichever comes first.
 - In memory mode the file bytes belong to the host and are valid until `pvdFileClose` (SDK
   guarantee); the session stores only a `std::span` and no `IFileData`.

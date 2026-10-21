@@ -69,7 +69,7 @@ namespace pvdkit::win
 
     FileMapping::FileMapping(State state) noexcept
         : file_(std::move(state.file)), mapping_(std::move(state.mapping)), view_(std::move(state.view)),
-          size_(state.size)
+          size_(state.size), sourcePath_(std::move(state.sourcePath))
     {
     }
 
@@ -88,7 +88,7 @@ namespace pvdkit::win
         return detail::fileSize(file).and_then([&](const std::size_t size) {
             return detail::createReadOnlyMapping(file).and_then([&](UniqueHandle mapping) {
                 return detail::mapReadOnly(mapping).transform([&](UniqueView view) {
-                    State state{std::move(file), std::move(mapping), std::move(view), size};
+                    State state{std::move(file), std::move(mapping), std::move(view), size, std::wstring{path}};
                     return std::make_unique<FileMapping>(std::move(state));
                 });
             });
@@ -98,6 +98,11 @@ namespace pvdkit::win
     std::span<const std::byte> FileMapping::bytes() const
     {
         return {view_.get(), size_};
+    }
+
+    std::optional<std::wstring_view> FileMapping::sourcePath() const
+    {
+        return std::wstring_view{sourcePath_};
     }
 
 } // namespace pvdkit::win

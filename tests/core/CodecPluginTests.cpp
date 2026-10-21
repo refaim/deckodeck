@@ -1,7 +1,11 @@
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <doctest/doctest.h>
@@ -20,6 +24,22 @@ namespace pvdkit::core
         {
             return pvd::PluginInfo{10, "Fake", "1.1.0", "static decoder"};
         }
+
+        class LegacyFileData final : public IFileData
+        {
+          public:
+            explicit LegacyFileData(std::vector<std::byte> bytes) : bytes_(std::move(bytes))
+            {
+            }
+
+            [[nodiscard]] std::span<const std::byte> bytes() const override
+            {
+                return bytes_;
+            }
+
+          private:
+            std::vector<std::byte> bytes_;
+        };
 
         // The collaborators every test wires into a CodecPlugin, declared in dependency order so the
         // plugin (last) is destroyed first.
@@ -88,6 +108,39 @@ namespace pvdkit::core
             CHECK(harness.factoryState.receivedOptions.maxPixels == 77);
             CHECK((*opened)->imageInfo().pageCount == 3);
             CHECK((*opened)->imageInfo().animated);
+        }
+
+        TEST_CASE("DecoderOptions copies remain noexcept with a source path")
+        {
+            CHECK(std::is_nothrow_copy_constructible_v<DecoderOptions>);
+            CHECK(std::is_nothrow_copy_assignable_v<DecoderOptions>);
+        }
+
+        TEST_CASE("CodecPlugin memory mode clears a configured source path")
+        {
+            const std::wstring configuredPath = L"C:/configured/entry.svg";
+            auto configuredOptions = test::options();
+            configuredOptions.sourcePath = std::wstring_view{configuredPath};
+            REQUIRE(configuredOptions.sourcePath.has_value());
+            CHECK(std::filesystem::path{*configuredOptions.sourcePath} == std::filesystem::path{configuredPath});
+
+            Harness harness(test::meta(), configuredOptions);
+            const std::vector wholeFile{std::byte{3}, std::byte{4}, std::byte{5}};
+            auto opened = harness.plugin.open(pvd::OpenRequest{"archive-entry.svg", 0, wholeFile});
+
+            REQUIRE(opened.has_value());
+            CHECK(harness.fileState.openCalls == 0);
+            CHECK(harness.factoryState.createdFrom == wholeFile);
+            CHECK_FALSE(harness.factoryState.receivedOptions.sourcePath.has_value());
+        }
+
+        TEST_CASE("legacy IFileData source path defaults to empty")
+        {
+            const std::vector bytes{std::byte{1}, std::byte{2}};
+            const LegacyFileData legacy{bytes};
+
+            CHECK(legacy.bytes().size() == bytes.size());
+            CHECK_FALSE(legacy.sourcePath().has_value());
         }
 
         TEST_CASE("CodecPlugin builds the image information from the decoder's "
@@ -171,6 +224,32 @@ namespace pvdkit::core
             CHECK(harness.fileState.dataDestructions == 0);
             opened->reset();
             CHECK(harness.fileState.dataDestructions == 1);
+        }
+
+        TEST_CASE("CodecPlugin passes the opened file's decoded source path to the decoder factory")
+        {
+            Harness harness;
+            harness.fileState.fileBytes = {std::byte{9}, std::byte{8}};
+            const std::vector head{std::byte{1}};
+            const auto utf8Source = std::filesystem::path{L"C:/images/\u65e5\u672c\u8a9e/\u0444\u0430\u0439\u043b.svg"};
+            const auto wideSource = std::filesystem::path{L"C:/images/\u0444\u0430\u0439\u043b.svg"};
+
+            harness.fileState.sourcePath = utf8Source;
+            auto fromUtf8 = harness.plugin.open(pvd::OpenRequest{"C:/images/raw-utf8.svg", 2, head});
+            REQUIRE(fromUtf8.has_value());
+            REQUIRE(harness.factoryState.receivedOptions.sourcePath.has_value());
+            CHECK(std::filesystem::path{*harness.factoryState.receivedOptions.sourcePath} == utf8Source);
+
+            harness.fileState.sourcePath = wideSource;
+            auto fromWide = harness.plugin.open(pvd::OpenRequest{"unused.svg", 2, head, L"C:/images/wide.svg"});
+            REQUIRE(fromWide.has_value());
+            REQUIRE(harness.factoryState.receivedOptions.sourcePath.has_value());
+            CHECK(std::filesystem::path{*harness.factoryState.receivedOptions.sourcePath} == wideSource);
+
+            const std::vector wholeFile{std::byte{3}};
+            auto fromMemory = harness.plugin.open(pvd::OpenRequest{"memory.svg", 0, wholeFile});
+            REQUIRE(fromMemory.has_value());
+            CHECK_FALSE(harness.factoryState.receivedOptions.sourcePath.has_value());
         }
 
         TEST_CASE("CodecPlugin wide disk mode selects UTF-16 without changing code units")

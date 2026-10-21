@@ -1,6 +1,7 @@
 #include "core/CodecPlugin.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -42,6 +43,10 @@ namespace pvdkit::core
 
         auto sessionOptions = options_;
         sessionOptions.nativeRgbOutput = options_.nativeRgbOutput && request.nativeRgb;
+        sessionOptions.sourcePath = std::nullopt;
+        if (fileData) {
+            sessionOptions.sourcePath = fileData->sourcePath();
+        }
         auto decoder = decoderFactory_.create(bytes, sessionOptions);
         if (!decoder) {
             return std::unexpected(decoder.error());
