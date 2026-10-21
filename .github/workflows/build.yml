@@ -84,4 +84,5 @@ jobs:
           path: |
             repo/build/${{ env.PRESET }}/build.ninja
             repo/build/${{ env.PRESET }}/CMakeCache.txt
+            repo/build/${{ env.PRESET }}/CMakeFiles/rules.ninja
             repo/build/${{ env.PRESET }}/**/CTestTestfile.cmake

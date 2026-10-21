@@ -118,15 +118,19 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_pvdkit_rustc}
 
 set(PVDKIT_RESVG_CARGO_TARGET_DIR "${svg_resvg_source_SOURCE_DIR}/target"
     CACHE PATH "Cargo target directory holding the cached resvg static library")
+# Upstream resvg 0.48.1 declares [profile.production] as a release-derived LTO profile; Cargo
+# names the output directory after the profile, so the command and the archive path share it.
+set(SVG_RESVG_CARGO_PROFILE "production")
 set(SVG_RESVG_LIBRARY
-    "${PVDKIT_RESVG_CARGO_TARGET_DIR}/${SVG_RUST_TARGET}/release/resvg.lib")
+    "${PVDKIT_RESVG_CARGO_TARGET_DIR}/${SVG_RUST_TARGET}/${SVG_RESVG_CARGO_PROFILE}/resvg.lib")
 add_custom_command(
   OUTPUT "${SVG_RESVG_LIBRARY}"
   COMMAND
     "${CMAKE_COMMAND}" -E env "RUSTFLAGS=-C target-feature=+crt-static"
     "${PVDKIT_RUSTUP_EXECUTABLE}" run "${PVDKIT_RESVG_RUST_TOOLCHAIN}"
     cargo rustc -p resvg-capi --manifest-path "${svg_resvg_source_SOURCE_DIR}/Cargo.toml"
-    --lib --release --locked --target "${SVG_RUST_TARGET}" --target-dir "${PVDKIT_RESVG_CARGO_TARGET_DIR}"
+    --lib --profile ${SVG_RESVG_CARGO_PROFILE} --locked --target "${SVG_RUST_TARGET}"
+    --target-dir "${PVDKIT_RESVG_CARGO_TARGET_DIR}"
     --crate-type staticlib
   DEPENDS
     "${svg_resvg_source_SOURCE_DIR}/Cargo.toml"

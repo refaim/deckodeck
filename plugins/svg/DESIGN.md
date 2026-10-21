@@ -23,9 +23,12 @@ Feature coverage is resvg's, with no promise of complete browser SVG behaviour.
 
 The upstream v0.48.1 tag archive is downloaded through CMake's `FetchContent` and pinned by SHA-256
 `40dafea6b4b9d01e9d28b6d49f1e912daf3e9055676ad9179a5a2db6e7386945`. CMake invokes
-`cargo rustc -p resvg-capi --lib --release --locked --target <msvc-target> --crate-type
-staticlib` with `RUSTFLAGS=-C target-feature=+crt-static`; the targets are
-`x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`. The static CRT, static codec rule, C++23
+`cargo rustc -p resvg-capi --lib --profile production --locked --target <msvc-target>
+--crate-type staticlib` with `RUSTFLAGS=-C target-feature=+crt-static`; the targets are
+`x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`. The output is
+`target/<msvc-target>/production/resvg.lib`; the profile is resvg's upstream `production`, which
+inherits `release` and sets `opt-level = 3`, `debug = false`, `lto = true`,
+`codegen-units = 1`, `strip = true` and `incremental = false`. The static CRT, static codec rule, C++23
 rules and exactly nine PVD exports are the same as in the other plugins. CMake validates the
 selected Rust 1.99.1 toolchain and invokes Cargo through `rustup run`; `docs/BUILD.md` documents
 the builder installation and the absolute-toolchain override. No Rust runtime or codec DLL is
