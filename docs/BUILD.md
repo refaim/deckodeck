@@ -73,8 +73,11 @@ YY-Thunks 1.2.3 `YY-Thunks-Lib.zip` (SHA-256
 `b41fb80b8d316581eec0959600aeb0e7339d0e5e`). Cargo builds `resvg-capi` with its default `svgz`,
 `text`, `system-fonts`, `memmap-fonts` and `raster-images` features, `--locked` against the
 upstream `Cargo.lock`, and `RUSTFLAGS=-C target-feature=+crt-static`, for the two MSVC targets
-above. The finished plugin needs no Rust runtime and no Rust DLL. These checks were static
-inspections of the pins; this file does not claim a fresh build.
+above. It uses resvg's unchanged upstream `production` profile via `--profile production`; the
+profile inherits `release` and sets `opt-level = 3`, `debug = false`, `lto = true`,
+`codegen-units = 1`, `strip = true` and `incremental = false`. The library is
+`target/<msvc-target>/production/resvg.lib`. The finished plugin needs no Rust runtime and no Rust
+DLL. These checks were static inspections of the pins; this file does not claim a fresh build.
 The YY-Thunks recipe is verified for the current Windows x64 and x86 builds only, Windows 7
 runtime behaviour has not been tested, and the x64 and x86 binaries were checked manually in Far.
 

@@ -27,6 +27,30 @@ function Get-ReleaseWorkflowPushTagList {
       ForEach-Object { $_.Groups["tag"].Value })
 }
 
+function Get-MetadataUploadPathList {
+  param(
+    [Parameter(Mandatory = $true)][string]$WorkflowPath
+  )
+
+  # Anchored to the active metadata step, then to its block-scalar path list; other upload
+  # steps and commented-out entries cannot match.
+  $workflow = Get-Content -LiteralPath $WorkflowPath -Raw
+  $step = [regex]::Match(
+    $workflow,
+    "(?ms)^[ \t]*- name: Upload build metadata for script regression\r?\n(?<body>.*?)(?=^[ \t]*- name:|\z)")
+  if (-not $step.Success) {
+    throw "The workflow has no active 'Upload build metadata for script regression' step"
+  }
+  $path = [regex]::Match(
+    $step.Groups["body"].Value,
+    "(?ms)^[ \t]+path: \|\r?\n(?<body>(?:^[ \t]+\S.*(?:\r?\n|$))*)")
+  if (-not $path.Success) {
+    throw "The metadata upload step has no block-scalar path list"
+  }
+  return @([regex]::Matches($path.Groups["body"].Value, "(?m)^[ \t]+(?<path>[^\r\n]+?)[ \t]*\r?$") |
+      ForEach-Object { $_.Groups["path"].Value })
+}
+
 Describe "CI Rust provisioning" {
   It "provisions the reviewed Rust release in the common composite action" {
     $actionPath = Join-Path $SourceRoot ".github/actions/toolchain/action.yml"
@@ -51,6 +75,23 @@ Describe "CI Rust provisioning" {
 
     $build = Get-Content -LiteralPath (Join-Path $SourceRoot ".github/workflows/build.yml") -Raw
     ([regex]::Matches($build, "uses:\s*\./repo/\.github/actions/toolchain").Count) | Should Be 1
+  }
+}
+
+Describe "CI build metadata upload" {
+  It "uploads the Ninja rules file the script-regression compdb graph needs" {
+    $workflowPath = Join-Path $SourceRoot ".github/workflows/build.yml"
+    $paths = @(Get-MetadataUploadPathList -WorkflowPath $workflowPath)
+    $expected = @(
+      'repo/build/${{ env.PRESET }}/build.ninja'
+      'repo/build/${{ env.PRESET }}/CMakeCache.txt'
+      'repo/build/${{ env.PRESET }}/**/CTestTestfile.cmake'
+      'repo/build/${{ env.PRESET }}/CMakeFiles/rules.ninja'
+    )
+    $paths.Count | Should Be $expected.Count
+    foreach ($entry in $expected) {
+      ($paths -ccontains $entry) | Should Be $true
+    }
   }
 }
 
