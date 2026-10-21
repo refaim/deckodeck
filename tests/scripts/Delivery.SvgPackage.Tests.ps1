@@ -9,12 +9,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$expectedHashes = @{
-  "LICENSES-resvg.txt" = "195E6D92BC40D6276DA2722A160D5973967CCA14F06B904EF66022E68C536518"
-  "RUST-COPYRIGHT-library.html" = "5647BE074C8EDF7339FD863055923A8FC80BC5610A8D4661EC3B767B9D392C27"
-  "RUST-COPYRIGHT.html" = "D518AE2D76BC7A1F0CBF0069B8DEAFB56EFC39C2614CAB74A859EF0B467F8373"
+$roots = [pscustomobject]@{
+  Source = $SourceRoot
+  Build = $BuildDir
 }
-$expectedExtras = @("RUST-COPYRIGHT-library.html", "RUST-COPYRIGHT.html")
+
+$expectedHashes = @{
+  "LICENSES-resvg.txt" = "B8C9A959A777D76F37CCAE02B9FBA9C332F5DEB215993408D1700828B94FDDC4"
+}
+$expectedExtras = @()
+$expectedPackageEntries = @("ChangeLog", "LICENSES.txt", "readme_en.txt", "readme_ru.txt", "SVG.pvd")
 
 function Get-Sha256 {
   param([string]$Path)
@@ -44,34 +48,34 @@ function Assert-SvgStaging {
   if ((Get-Sha256 $license) -cne $expectedHashes["LICENSES-resvg.txt"]) {
     throw "$Context LICENSES.txt is not the reviewed aggregate"
   }
-  foreach ($name in $expectedExtras) {
-    $path = Join-Path $PackageDir $name
-    if ((Get-Sha256 $path) -cne $expectedHashes[$name]) {
-      throw "$Context $name is not byte-identical to the reviewed notice"
-    }
+  $unexpected = @(Get-ChildItem -LiteralPath $PackageDir -File |
+    Where-Object { $_.Name -cne "manifest.json" -and $_.Name -notin @("readme_en.txt", "readme_ru.txt", "ChangeLog", "LICENSES.txt") })
+  if ($unexpected.Count -ne 0) {
+    throw "$Context stages unexpected documents: $($unexpected.Name -join ', ')"
   }
 }
 
 Describe "SVG license staging" {
-  It "keeps the reviewed aggregate and Rust notice artifacts byte-identical" {
-    $noticeDir = Join-Path $SourceRoot "third_party/resvg"
+  It "keeps the reviewed aggregate byte-identical" {
+    $noticeDir = Join-Path $roots.Source "third_party/resvg"
     foreach ($name in $expectedHashes.Keys) {
       (Get-Sha256 (Join-Path $noticeDir $name)) | Should Be $expectedHashes[$name]
     }
   }
 
-  It "stages the reviewed aggregate and declares and stages both Rust notices" {
-    Assert-SvgStaging (Join-Path $BuildDir "plugins/svg/package")
+  It "stages the reviewed aggregate without separate Rust HTML notices" {
+    Assert-SvgStaging (Join-Path $roots.Build "plugins/svg/package")
   }
 
-  It "rejects a manifest that declares a notice missing from the staged package" {
-    $copy = Join-Path $TestDrive "missing-notice-package"
+  It "rejects a staged package with an unexpected extra notice" {
+    $copy = Join-Path $TestDrive "extra-notice-package"
     New-Item -ItemType Directory -Path $copy -Force | Out-Null
-    $noticeDir = Join-Path $SourceRoot "third_party/resvg"
+    $noticeDir = Join-Path $roots.Source "third_party/resvg"
     Copy-Item -LiteralPath (Join-Path $noticeDir "LICENSES-resvg.txt") -Destination (Join-Path $copy "LICENSES.txt")
-    foreach ($name in $expectedExtras) {
-      Copy-Item -LiteralPath (Join-Path $noticeDir $name) -Destination (Join-Path $copy $name)
-    }
+    Copy-Item -LiteralPath (Join-Path $roots.Source "plugins/svg/package/readme_en.txt") -Destination $copy
+    Copy-Item -LiteralPath (Join-Path $roots.Source "plugins/svg/package/readme_ru.txt") -Destination $copy
+    Copy-Item -LiteralPath (Join-Path $roots.Source "plugins/svg/package/ChangeLog") -Destination $copy
+    Copy-Item -LiteralPath (Join-Path $noticeDir "RUST-COPYRIGHT-library.html") -Destination $copy
     $manifest = [ordered]@{
       name = "SVG"
       version = "1.0.0"
@@ -79,13 +83,12 @@ Describe "SVG license staging" {
       file = "SVG.pvd"
       licenses = @("resvg")
       imports = @("KERNEL32.dll", "ntdll.dll", "ole32.dll")
-      extra_documents = $expectedExtras
+      extra_documents = @()
     }
     [IO.File]::WriteAllText(
       (Join-Path $copy "manifest.json"),
       ($manifest | ConvertTo-Json -Depth 4),
       [Text.UTF8Encoding]::new($false))
-    Remove-Item -LiteralPath (Join-Path $copy "RUST-COPYRIGHT.html") -Force
 
     $thrown = $false
     try {
@@ -94,5 +97,37 @@ Describe "SVG license staging" {
       $thrown = $true
     }
     $thrown | Should Be $true
+  }
+
+  It "packs exactly the plugin and the four standard documents on both architectures" {
+    $buildLeaf = Split-Path -Leaf $roots.Build
+    if ($buildLeaf -cnotmatch '^release(?<Suffix>.*)$') {
+      throw "Cannot derive the pack suffix from build directory '$($roots.Build)'"
+    }
+    $suffix = $Matches["Suffix"]
+    $buildRoot = Split-Path -Parent $roots.Build
+    $x86Build = Join-Path $buildRoot "release-x86$suffix"
+    if (-not (Test-Path -LiteralPath $x86Build -PathType Container)) {
+      throw "The x86 release build for packaging is missing: $x86Build"
+    }
+
+    $dist = Join-Path $TestDrive "svg-dist"
+    & (Join-Path $roots.Source "scripts/pack.ps1") `
+      -Plugins svg -Suffix $suffix -DistDir $dist *>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      throw "pack.ps1 failed with exit code $LASTEXITCODE"
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    foreach ($architecture in @("x64", "x86")) {
+      $zip = Join-Path $dist "SVG-1.0.0-$architecture.zip"
+      $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+      try {
+        $entries = @($archive.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+      } finally {
+        $archive.Dispose()
+      }
+      ($entries -join ",") | Should Be (($expectedPackageEntries | Sort-Object) -join ",")
+    }
   }
 }

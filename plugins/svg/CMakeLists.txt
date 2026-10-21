@@ -189,10 +189,7 @@ pvdkit_add_plugin(
   LINK svg_composition
   IMPORTS KERNEL32.dll ntdll.dll ole32.dll
   LICENSES_COPYONLY
-    "third_party/resvg/LICENSES-resvg.txt" "resvg 0.48.1 (MIT), YY-Thunks 1.2.3 (MIT)"
-  EXTRA_DOCUMENTS
-    "third_party/resvg/RUST-COPYRIGHT-library.html"
-    "third_party/resvg/RUST-COPYRIGHT.html")
+    "third_party/resvg/LICENSES-resvg.txt" "resvg 0.48.1 (MIT), YY-Thunks 1.2.3 (MIT)")
 
 
 target_link_options(
