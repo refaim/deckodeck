@@ -12,8 +12,8 @@ $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).ProviderPath
 $notices = @(
     @{
         Path = "third_party/resvg/LICENSES-resvg.txt"
-        Length = 197864
-        Sha256 = "195E6D92BC40D6276DA2722A160D5973967CCA14F06B904EF66022E68C536518"
+        Length = 1676441
+        Sha256 = "B8C9A959A777D76F37CCAE02B9FBA9C332F5DEB215993408D1700828B94FDDC4"
     }
     @{
         Path = "third_party/resvg/RUST-COPYRIGHT-library.html"
@@ -26,6 +26,39 @@ $notices = @(
         Sha256 = "D518AE2D76BC7A1F0CBF0069B8DEAFB56EFC39C2614CAB74A859EF0B467F8373"
     }
 )
+
+$requiredNoticeText = @(
+    "resvg 0.48.1 C API and Rust dependencies"
+    "kurbo 0.13.1"
+    "YY-Thunks 1.2.3"
+    "Copyright notices for The Rust Standard Library"
+    "library/compiler-builtins/LICENSE.txt"
+    "library/compiler-builtins/libm/LICENSE.txt"
+    "Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved."
+    "Copyright (C) 2004 by Sun Microsystems, Inc. All rights reserved."
+    "Copyright (c) 2005 David Schultz"
+    "compiler-rt/LICENSE.TXT"
+    "compiler-rt/CREDITS.TXT"
+    "Howard Hinnant"
+    "A351EAA4615A30F504778AE810290CE2725E21B54F85FC6F679CC6E80943B7FA"
+)
+
+function Assert-RequiredNoticeText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path
+    )
+
+    $text = [IO.File]::ReadAllText($Path)
+    foreach ($required in $requiredNoticeText) {
+        if (-not $text.Contains($required)) {
+            throw "The distribution notice aggregate is missing required text: $required"
+        }
+    }
+    if ($text -match "RUST-COPYRIGHT(?:-library)?\.html") {
+        throw "The distribution notice aggregate still requires a separate Rust HTML notice"
+    }
+}
 
 function Invoke-Git {
     param(
@@ -80,6 +113,36 @@ Describe "distribution notice checkout bytes" {
             (Get-Item -LiteralPath $actual).Length | Should Be $notice.Length
             (Get-FileHash -LiteralPath $actual -Algorithm SHA256).Hash | Should Be $notice.Sha256
         }
+    }
+}
+
+Describe "distribution notice content" {
+    It "contains every required plaintext notice and discloses its sources" {
+        Assert-RequiredNoticeText (Join-Path $RepositoryRoot "third_party/resvg/LICENSES-resvg.txt")
+    }
+
+    It "rejects an aggregate with the YY-Thunks notice removed" {
+        $copy = Join-Path $TestDrive "missing-yy-thunks.txt"
+        $text = [IO.File]::ReadAllText((Join-Path $RepositoryRoot "third_party/resvg/LICENSES-resvg.txt"))
+        [IO.File]::WriteAllText($copy, $text.Replace("YY-Thunks 1.2.3", "YY-Thunks omitted"), [Text.UTF8Encoding]::new($false))
+        { Assert-RequiredNoticeText $copy } | Should Throw
+    }
+
+    It "rejects an aggregate with the Sun libm permission notice removed" {
+        $copy = Join-Path $TestDrive "missing-sun-notice.txt"
+        $text = [IO.File]::ReadAllText((Join-Path $RepositoryRoot "third_party/resvg/LICENSES-resvg.txt"))
+        $changed = $text.Replace(
+            "Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.",
+            "Copyright (C) 1993 by Sun Microsystems, Inc.")
+        [IO.File]::WriteAllText($copy, $changed, [Text.UTF8Encoding]::new($false))
+        { Assert-RequiredNoticeText $copy } | Should Throw
+    }
+
+    It "rejects an aggregate with the compiler-rt contributors removed" {
+        $copy = Join-Path $TestDrive "missing-compiler-rt-credits.txt"
+        $text = [IO.File]::ReadAllText((Join-Path $RepositoryRoot "third_party/resvg/LICENSES-resvg.txt"))
+        [IO.File]::WriteAllText($copy, $text.Replace("Howard Hinnant", "contributor omitted"), [Text.UTF8Encoding]::new($false))
+        { Assert-RequiredNoticeText $copy } | Should Throw
     }
 }
 

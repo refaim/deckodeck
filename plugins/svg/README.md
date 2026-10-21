@@ -40,7 +40,7 @@ and the plugin converts it to straight alpha before handing the page to PictureV
 [YY-Thunks 1.2.3](https://github.com/Chuyu-Team/YY-Thunks) supplies the static Windows
 compatibility overlay. The plugin contains no custom SVG parser, font database or renderer, and
 downloads no font pack. Dependency notices are in the archive's `LICENSES.txt`; the Rust
-toolchain copyright notices are separate HTML files beside it.
+toolchain copyright notices are included in that same file.
 
 ## Changes
 

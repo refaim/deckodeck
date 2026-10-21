@@ -144,30 +144,28 @@ archive). The GitHub release workflow runs `pack.ps1` on the CI build artifacts 
 ### SVG third-party notices
 
 SVG's package staging copies the reviewed plaintext aggregate byte-for-byte to `LICENSES.txt`
-with `LICENSES_COPYONLY`, and declares the two HTML notices as `EXTRA_DOCUMENTS`. CMake copies
-those files under their original names beside the staged documents and lists them in the build
-manifest's `extra_documents`; `pack.ps1` copies every declared extra into the archive. The
-reviewed notice files are:
+with `LICENSES_COPYONLY`. An SVG archive contains the same five entries as every other plugin:
+`SVG.pvd`, `readme_en.txt`, `readme_ru.txt`, `ChangeLog` and `LICENSES.txt`; there are no
+`EXTRA_DOCUMENTS`. `manifest.json` itself never enters an archive. The reviewed aggregate is
+`LICENSES-resvg.txt`, 1,676,441 bytes, SHA-256
+`B8C9A959A777D76F37CCAE02B9FBA9C332F5DEB215993408D1700828B94FDDC4`. It contains:
 
-- `LICENSES.txt` - the reviewed plaintext `LICENSES-resvg.txt`, 197,864 bytes, SHA-256
-  `195E6D92BC40D6276DA2722A160D5973967CCA14F06B904EF66022E68C536518`. It contains the
-  61-crate/29-body Cargo inventory for both MSVC targets, the embedded ego-tree ISC notice,
-  the Getreuer Simplified BSD notice and the YY-Thunks MIT notice.
-- `RUST-COPYRIGHT-library.html` - byte-identical Rust 1.99.1 standard-library copyright
-  notice, 1,499,465 bytes, SHA-256
-  `5647BE074C8EDF7339FD863055923A8FC80BC5610A8D4661EC3B767B9D392C27`.
-- `RUST-COPYRIGHT.html` - byte-identical broader Rust toolchain copyright notice,
-  14,423,589 bytes, SHA-256
-  `D518AE2D76BC7A1F0CBF0069B8DEAFB56EFC39C2614CAB74A859EF0B467F8373`. This file covers
-  more than the library and does not imply that every listed toolchain component is linked
-  into the plugin.
+- the 61-crate/29-body Cargo inventory for both MSVC targets, the embedded ego-tree ISC notice,
+  the Getreuer Simplified BSD notice and the YY-Thunks MIT notice;
+- a readable plaintext conversion of the Rust 1.99.1 standard-library copyright HTML, retaining
+  its license and copyright inventory and link destinations;
+- the exact Rust 1.99.1 `library/compiler-builtins/LICENSE.txt` and
+  `library/compiler-builtins/libm/LICENSE.txt`, plus a conservative inventory of legal comment
+  sections from every architecture under `compiler-builtins/src/**` and `libm/src/**`;
+- the exact `compiler-rt/LICENSE.TXT` and `compiler-rt/CREDITS.TXT` from the `llvm-project`
+  submodule pinned by Rust 1.99.1.
 
-Both HTML files ship beside `LICENSES.txt`, unchanged; the plaintext by itself is not the
-complete Rust-toolchain notice set. An SVG archive therefore contains seven entries: `SVG.pvd`,
-`readme_en.txt`, `readme_ru.txt`, `ChangeLog`, `LICENSES.txt` and the two HTML notices. The
-other plugins keep their five-entry archives (`<NAME>.pvd` and the four documents) and have no
-`extra_documents` key in their package metadata; `manifest.json` itself never enters an archive.
-These are packaging facts, not a legal opinion.
+The upstream `RUST-COPYRIGHT-library.html` and broader 14 MB `RUST-COPYRIGHT.html` remain in
+`third_party/resvg/` unchanged as provenance, but neither is a package document. The source
+versions, hashes and conservative inventory scope are recorded in
+`third_party/resvg/RUST-NOTICE-SOURCES.md`. The compiler-builtins/libm inventory deliberately
+includes platform and build files that are not proven to be linked into SVG; it is not a Windows
+link inventory. These are packaging facts, not a legal opinion.
 
 Every DLL carries a VERSIONINFO resource (version, author, copyright, library versions). A
 plugin's name, version and priority are declared once, in `pvdkit_plugin_identity(...)` in its

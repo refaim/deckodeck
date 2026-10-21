@@ -31,10 +31,9 @@ Install:
   Take the x64 archive for 64-bit Far and the x86 one for 32-bit Far.
 
 License: MIT. The plugin bundles resvg 0.48.1 and YY-Thunks 1.2.3 (both
-MIT). Their notices and the notices of the Rust dependencies are in
-LICENSES.txt. The Rust toolchain copyright notices are separate HTML files
-beside LICENSES.txt. The PictureView plugin interface header is
-(c) Pavel Skakov.
+MIT). Their notices, the notices of the Rust dependencies, and the Rust
+toolchain copyright notices are in LICENSES.txt. The PictureView plugin
+interface header is (c) Pavel Skakov.
 
 Roman Kharitonov
   https://github.com/refaim/deckodeck

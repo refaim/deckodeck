@@ -25,7 +25,7 @@ Unpack the archive into PictureView's folder (the one with `0PictureView.dll`, u
 ## License
 
 MIT, see [LICENSE](LICENSE). The bundled libraries keep their own licenses, listed in each
-archive's `LICENSES.txt`; the SVG archive also carries the Rust toolchain copyright notices as
-separate HTML files. The PictureView plugin interface header is © Pavel Skakov.
+archive's `LICENSES.txt`; the SVG archive includes the Rust toolchain copyright notices in that
+same file. The PictureView plugin interface header is © Pavel Skakov.
 
 Building, packaging and CI: [docs/BUILD.md](docs/BUILD.md).
