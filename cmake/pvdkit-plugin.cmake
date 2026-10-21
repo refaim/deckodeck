@@ -7,13 +7,18 @@
 #        e2e version test) and the properties PVDKIT_PLUGIN_NAME / PVDKIT_PLUGIN_VERSION.
 #
 #   pvdkit_add_plugin(<id> LINK <composition libs...>
-#                     LICENSES <port> <display name> [<port> <display name> ...])
+#                     LICENSES <port> <display name> [<port> <display name> ...]
+#                     LICENSES_FILES <path> <display name> [...]
+#                     or LICENSES_COPYONLY <path> <display name>
+#                     [EXTRA_DOCUMENTS <path> ...]
+#                     [IMPORTS <module.dll> ...])
 #     -> SHARED target <id>_plugin (<Name>.pvd): the shared Exports.cpp, Plugin.def and Plugin.rc
 #        over the plugin's composition root, linked with pvdkit_pvd; plus the package staging
 #        directory <bindir>/package (the plugin's static readme_en.txt, readme_ru.txt and
 #        ChangeLog copied byte-for-byte, plus generated LICENSES.txt and manifest.json) that
 #        scripts/build-all.ps1 and scripts/package.ps1 consume; configure and CTest both validate
-#        the static documents' identity, encodings and line endings.
+#        the static documents' identity, encodings and line endings. EXTRA_DOCUMENTS copies
+#        plain-leaf files beside them and lists their leaf names in manifest.extra_documents.
 #
 #   pvdkit_add_plugin_e2e_tests(<id> FIXTURES <dir> SEQUENCE_EXPECTATIONS <source>
 #                                SOURCES <files...>)   (tests only)
@@ -35,6 +40,33 @@
 #        its shared doctest source, linked to this plugin's composition root with reduced limits.
 
 include("${CMAKE_CURRENT_LIST_DIR}/pvdkit-package-docs.cmake")
+
+# The optional extra-document feature accepts a deliberately small ASCII leaf grammar so CMake
+# and PowerShell agree on Windows' case-insensitive file names. It rejects separators, trailing
+# dots/spaces, non-ASCII text and DOS device aliases before any package file is written.
+function(pvdkit_validate_extra_document_leaf leaf reserved seen out_key)
+  if(NOT leaf MATCHES "^[A-Za-z0-9][A-Za-z0-9_-]*(\\.[A-Za-z0-9_-]+)*$")
+    message(FATAL_ERROR
+            "pvdkit extra document leaf '${leaf}' is not a plain ASCII file name")
+  endif()
+  string(TOLOWER "${leaf}" key)
+  if(key MATCHES "^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\.|$)")
+    message(FATAL_ERROR "pvdkit extra document leaf '${leaf}' is a Windows device alias")
+  endif()
+  foreach(item IN LISTS reserved)
+    string(TOLOWER "${item}" reserved_key)
+    if(key STREQUAL reserved_key)
+      message(FATAL_ERROR "pvdkit extra document leaf '${leaf}' collides with a package file")
+    endif()
+  endforeach()
+  foreach(item IN LISTS seen)
+    string(TOLOWER "${item}" seen_key)
+    if(key STREQUAL seen_key)
+      message(FATAL_ERROR "pvdkit extra document leaf '${leaf}' is declared more than once")
+    endif()
+  endforeach()
+  set(${out_key} "${key}" PARENT_SCOPE)
+endfunction()
 
 # Escapes a string for use inside a C string literal in a generated header (backslashes, quotes).
 function(_pvdkit_escape_literal out value)
@@ -92,7 +124,8 @@ function(pvdkit_plugin_identity id)
 endfunction()
 
 function(pvdkit_add_plugin id)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "LINK;LICENSES")
+  cmake_parse_arguments(
+    PARSE_ARGV 1 arg "" "" "LINK;LICENSES;LICENSES_FILES;LICENSES_COPYONLY;IMPORTS;EXTRA_DOCUMENTS")
   if(arg_UNPARSED_ARGUMENTS)
     message(FATAL_ERROR "pvdkit_add_plugin(${id}): unexpected arguments ${arg_UNPARSED_ARGUMENTS}")
   endif()
@@ -110,8 +143,28 @@ function(pvdkit_add_plugin id)
   endif()
   list(LENGTH arg_LICENSES license_count)
   math(EXPR license_remainder "${license_count} % 2")
-  if(license_count EQUAL 0 OR NOT license_remainder EQUAL 0)
+  if(NOT license_remainder EQUAL 0)
     message(FATAL_ERROR "pvdkit_add_plugin(${id}): LICENSES takes <port> <display name> pairs")
+  endif()
+  list(LENGTH arg_LICENSES_FILES license_file_count)
+  math(EXPR license_file_remainder "${license_file_count} % 2")
+  if(NOT license_file_remainder EQUAL 0)
+    message(FATAL_ERROR "pvdkit_add_plugin(${id}): LICENSES_FILES takes <path> <display name> pairs")
+  endif()
+  list(LENGTH arg_LICENSES_COPYONLY license_copyonly_count)
+  if(license_copyonly_count GREATER 0)
+    if(NOT license_copyonly_count EQUAL 2)
+      message(FATAL_ERROR "pvdkit_add_plugin(${id}): LICENSES_COPYONLY takes <path> <display name>")
+    endif()
+    if(NOT license_count EQUAL 0 OR NOT license_file_count EQUAL 0)
+      message(FATAL_ERROR
+              "pvdkit_add_plugin(${id}): LICENSES_COPYONLY cannot be combined with generated licenses")
+    endif()
+  elseif(license_count EQUAL 0 AND license_file_count EQUAL 0)
+    message(FATAL_ERROR "pvdkit_add_plugin(${id}): at least one license source is required")
+  endif()
+  if(NOT arg_IMPORTS)
+    set(arg_IMPORTS "KERNEL32.dll")
   endif()
 
   get_target_property(name ${id}_identity PVDKIT_PLUGIN_NAME)
@@ -127,6 +180,8 @@ function(pvdkit_add_plugin id)
   # symbol (`pvdInit` -> `_pvdInit@0`) itself, so the file needs no aliases.
   add_library(${id}_plugin SHARED ${export_sources} "${def_file}" "${rc_file}")
   set_target_properties(${id}_plugin PROPERTIES OUTPUT_NAME "${name}" PREFIX "" SUFFIX ".pvd")
+  string(JOIN "," allowed_imports ${arg_IMPORTS})
+  set_target_properties(${id}_plugin PROPERTIES PVDKIT_ALLOWED_IMPORTS "${allowed_imports}")
   target_link_libraries(${id}_plugin PRIVATE ${id}_identity pvdkit_pvd ${arg_LINK} pvdkit_options)
 
   # Package staging for scripts/package.ps1: the plugin's hand-written documents copied without
@@ -153,35 +208,93 @@ function(pvdkit_add_plugin id)
     set(PVDKIT_PLUGIN_ARCHITECTURE "x86")
   endif()
 
-  string(CONCAT licenses
-         "${name}.pvd bundles the libraries below, statically linked. Each section is\n"
-         "that library's own license text as installed by vcpkg (share/<port>/copyright);\n"
-         "where an upstream file also carries notices for components of its own source\n"
-         "tree that are not part of this plugin, only the library's own license is\n"
-         "reproduced here - see the upstream repository for the full file.\n\n\n")
   set(license_names "")
   string(REPEAT "=" 78 rule)
-  while(arg_LICENSES)
-    list(POP_FRONT arg_LICENSES port display)
-    # find_file searches CMAKE_PREFIX_PATH, which the vcpkg toolchain points at vcpkg_installed.
-    find_file(PVDKIT_${id}_${port}_COPYRIGHT NAMES copyright PATH_SUFFIXES "share/${port}" REQUIRED)
-    file(READ "${PVDKIT_${id}_${port}_COPYRIGHT}" text)
-    # Some upstream copyright files (e.g. libavif's) are Debian-style: their own license first,
-    # then "Files: <path>" sections documenting other components of the upstream source tree that
-    # are not part of this plugin. Keep only the text before the first such section, i.e. before
-    # the first standalone line of 10+ dashes (CMake's regex engine has no {n,m} interval syntax,
-    # hence the literal run below); ports with no such separator (dav1d, libyuv, libspng, zlib)
-    # keep their whole text.
-    string(REPLACE "\r\n" "\n" text "${text}")
-    string(REGEX REPLACE "\n----------[-]*\n.*" "" text "${text}")
-    string(REGEX REPLACE "[ \t\r\n]+$" "" text "${text}")
-    string(APPEND licenses "${rule}\n${display} - as installed by vcpkg in share/${port}/copyright\n${rule}\n\n${text}\n\n\n")
+  if(license_copyonly_count EQUAL 2)
+    list(GET arg_LICENSES_COPYONLY 0 license_path)
+    list(GET arg_LICENSES_COPYONLY 1 display)
+    if(NOT IS_ABSOLUTE "${license_path}")
+      set(license_path "${PROJECT_SOURCE_DIR}/${license_path}")
+    endif()
+    if(NOT EXISTS "${license_path}" OR IS_DIRECTORY "${license_path}")
+      message(FATAL_ERROR "pvdkit_add_plugin(${id}): LICENSES_COPYONLY path '${license_path}' does not exist")
+    endif()
+    configure_file("${license_path}" "${package_dir}/LICENSES.txt" COPYONLY)
     list(APPEND license_names "\"${display}\"")
-  endwhile()
-  file(WRITE "${package_dir}/LICENSES.txt" "${licenses}")
+  else()
+    string(CONCAT licenses
+           "${name}.pvd bundles the libraries below, statically linked. Each section is\n"
+           "that library's own license text as installed by vcpkg (share/<port>/copyright);\n"
+           "where an upstream file also carries notices for components of its own source\n"
+           "tree that are not part of this plugin, only the library's own license is\n"
+           "reproduced here - see the upstream repository for the full file.\n\n\n")
+    while(arg_LICENSES)
+      list(POP_FRONT arg_LICENSES port display)
+      # find_file searches CMAKE_PREFIX_PATH, which the vcpkg toolchain points at vcpkg_installed.
+      find_file(PVDKIT_${id}_${port}_COPYRIGHT NAMES copyright PATH_SUFFIXES "share/${port}" REQUIRED)
+      file(READ "${PVDKIT_${id}_${port}_COPYRIGHT}" text)
+      # Some upstream copyright files (e.g. libavif's) are Debian-style: their own license first,
+      # then "Files: <path>" sections documenting other components of the upstream source tree that
+      # are not part of this plugin. Keep only the text before the first such section, i.e. before
+      # the first standalone line of 10+ dashes (CMake's regex engine has no {n,m} interval syntax,
+      # hence the literal run below); ports with no such separator (dav1d, libyuv, libspng, zlib)
+      # keep their whole text.
+      string(REPLACE "\r\n" "\n" text "${text}")
+      string(REGEX REPLACE "\n----------[-]*\n.*" "" text "${text}")
+      string(REGEX REPLACE "[ \t\r\n]+$" "" text "${text}")
+      string(APPEND licenses "${rule}\n${display} - as installed by vcpkg in share/${port}/copyright\n${rule}\n\n${text}\n\n\n")
+      list(APPEND license_names "\"${display}\"")
+    endwhile()
+    while(arg_LICENSES_FILES)
+      list(POP_FRONT arg_LICENSES_FILES license_path display)
+      if(NOT IS_ABSOLUTE "${license_path}")
+        set(license_path "${PROJECT_SOURCE_DIR}/${license_path}")
+      endif()
+      if(NOT EXISTS "${license_path}" OR IS_DIRECTORY "${license_path}")
+        message(FATAL_ERROR "pvdkit_add_plugin(${id}): LICENSES_FILES path '${license_path}' does not exist")
+      endif()
+      file(READ "${license_path}" text)
+      string(REPLACE "\r\n" "\n" text "${text}")
+      string(REGEX REPLACE "[ \t\r\n]+$" "" text "${text}")
+      string(APPEND licenses "${rule}\n${display}\n${rule}\n\n${text}\n\n\n")
+      list(APPEND license_names "\"${display}\"")
+    endwhile()
+    file(WRITE "${package_dir}/LICENSES.txt" "${licenses}")
+  endif()
   list(JOIN license_names ", " license_names)
+  set(extra_document_names "")
+  set(extra_document_keys "")
+  set(extra_document_reserved "${name}.pvd;readme_en.txt;readme_ru.txt;ChangeLog;LICENSES.txt;manifest.json")
+  foreach(document IN LISTS arg_EXTRA_DOCUMENTS)
+    if(IS_ABSOLUTE "${document}")
+      set(document_path "${document}")
+    else()
+      set(document_path "${PROJECT_SOURCE_DIR}/${document}")
+    endif()
+    if(NOT EXISTS "${document_path}" OR IS_DIRECTORY "${document_path}")
+      message(FATAL_ERROR "pvdkit_add_plugin(${id}): EXTRA_DOCUMENTS path '${document_path}' does not exist")
+    endif()
+    get_filename_component(leaf "${document_path}" NAME)
+    pvdkit_validate_extra_document_leaf(
+      "${leaf}" "${extra_document_reserved}" "${extra_document_keys}" extra_document_key)
+    configure_file("${document_path}" "${package_dir}/${leaf}" COPYONLY)
+    list(APPEND extra_document_names "${leaf}")
+    list(APPEND extra_document_keys "${extra_document_key}")
+  endforeach()
+  set(import_names "")
+  foreach(module IN LISTS arg_IMPORTS)
+    if(import_names)
+      string(APPEND import_names ", ")
+    endif()
+    string(APPEND import_names "\"${module}\"")
+  endforeach()
+  set(extra_documents_json "")
+  if(extra_document_names)
+    string(REPLACE ";" "\", \"" extra_documents_json "${extra_document_names}")
+    set(extra_documents_json ",\n  \"extra_documents\": [\"${extra_documents_json}\"]")
+  endif()
   file(WRITE "${package_dir}/manifest.json"
-       "{\n  \"name\": \"${name}\",\n  \"version\": \"${version}\",\n  \"architecture\": \"${PVDKIT_PLUGIN_ARCHITECTURE}\",\n  \"file\": \"${name}.pvd\",\n  \"licenses\": [${license_names}]\n}\n")
+       "{\n  \"name\": \"${name}\",\n  \"version\": \"${version}\",\n  \"architecture\": \"${PVDKIT_PLUGIN_ARCHITECTURE}\",\n  \"file\": \"${name}.pvd\",\n  \"licenses\": [${license_names}],\n  \"imports\": [${import_names}]${extra_documents_json}\n}\n")
   if(BUILD_TESTING)
     add_test(
       NAME ${id}_package_docs
@@ -210,6 +323,10 @@ function(pvdkit_add_plugin_e2e_tests id)
     message(
       FATAL_ERROR
         "pvdkit_add_plugin_e2e_tests(${id}): SEQUENCE_EXPECTATIONS must name the plugin's expectation source")
+  endif()
+  get_target_property(allowed_imports ${id}_plugin PVDKIT_ALLOWED_IMPORTS)
+  if(NOT allowed_imports)
+    message(FATAL_ERROR "pvdkit_add_plugin_e2e_tests(${id}): ${id}_plugin carries no PVDKIT_ALLOWED_IMPORTS")
   endif()
 
   # The test loads the built DLL with LoadLibraryW and drives its nine exports like the host; it
@@ -242,16 +359,18 @@ function(pvdkit_add_plugin_e2e_tests id)
       PROPERTIES ENVIRONMENT "LLVM_PROFILE_FILE=${PROJECT_BINARY_DIR}/pvdkit-${id}-%p-%m.profraw")
   endif()
 
-  # The import-table policy is part of the Release definition of done (AGENTS.md): every plugin
-  # imports KERNEL32.dll and nothing else. CONFIGURATIONS (rather than a CMAKE_BUILD_TYPE test at
-  # configure time) keeps the test on the multi-config `Visual Studio 17 2022 -T ClangCL` fallback
-  # too; ctest selects it through `-C Release`, which the release test presets pass.
+  # The import-table policy is part of the Release definition of done (AGENTS.md): KERNEL32.dll by
+  # default, or the narrow per-plugin list passed as IMPORTS. CONFIGURATIONS (rather than a
+  # CMAKE_BUILD_TYPE test at configure time) keeps the test on the multi-config `Visual Studio 17
+  # 2022 -T ClangCL` fallback too; ctest selects it through `-C Release`, which the release test
+  # presets pass.
   find_program(PVDKIT_POWERSHELL NAMES pwsh powershell REQUIRED)
   add_test(
     NAME ${id}_check_imports
     CONFIGURATIONS Release
     COMMAND "${PVDKIT_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File
-            "${PROJECT_SOURCE_DIR}/scripts/check-imports.ps1" -Path "$<TARGET_FILE:${id}_plugin>")
+            "${PROJECT_SOURCE_DIR}/scripts/check-imports.ps1" -Path "$<TARGET_FILE:${id}_plugin>"
+            -AllowedModules "${allowed_imports}")
 
   # The export-table policy: exactly the nine PVD entry points under their bare names. On x86 the
   # __stdcall symbols are `_pvdInit@0` etc.; the .def file makes the linker export them undecorated,

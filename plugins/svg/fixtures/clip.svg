@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
+  <defs>
+    <clipPath id="left-half" clipPathUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="2" height="2"/>
+    </clipPath>
+  </defs>
+  <rect x="0" y="0" width="4" height="2" fill="#0000ff"/>
+  <rect x="0" y="0" width="4" height="2" fill="#ff0000" clip-path="url(#left-half)"/>
+</svg>

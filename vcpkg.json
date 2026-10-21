@@ -8,7 +8,8 @@
   "default-features": [
     "avif",
     "exr",
-    "rpgmvp"
+    "rpgmvp",
+    "svg"
   ],
   "features": {
     "avif": {
@@ -33,6 +34,10 @@
       "dependencies": [
         "libspng"
       ]
+    },
+    "svg": {
+      "description": "SVG.pvd: resvg and YY-Thunks are built outside vcpkg",
+      "dependencies": []
     }
   }
 }

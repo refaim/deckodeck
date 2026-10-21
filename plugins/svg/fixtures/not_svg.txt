@@ -1,0 +1,1 @@
+This file starts with text and is not an SVG document.

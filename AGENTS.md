@@ -18,10 +18,13 @@ The author's reference decoders (`third_party/pvd/examples/pvdBMP.cpp`,
 (`third_party/pvd/dist-docs/`) document how the host calls the exports and which priorities the
 built-in decoders use; read them before touching the pvd layer. Plugins today: `plugins/avif` →
 `AVIF.pvd` (libavif + dav1d + libyuv), `plugins/exr` → `EXR.pvd` (OpenEXRCore + Imath +
-libdeflate + OpenJPH), `plugins/rpgmvp` → `RPGMVP.pvd` (libspng + zlib).
+libdeflate + OpenJPH), `plugins/rpgmvp` → `RPGMVP.pvd` (libspng + zlib), `plugins/svg` →
+`SVG.pvd` (the unmodified resvg C API built as a static Rust library, plus YY-Thunks).
 
-Every plugin ships x64 and x86, links its codec libraries statically, and imports `KERNEL32.dll`
-only. No WIC, no GDI+, no system codecs.
+Every plugin ships x64 and x86 and links its codec libraries statically. AVIF, EXR and RPGMVP
+import `KERNEL32.dll` only. SVG has one narrow, human-approved import exception: it may import
+only `KERNEL32.dll`, `ntdll.dll` and `ole32.dll` (2026-10-21). No plugin imports WIC, GDI+ or a
+system codec. The SVG exception does not apply to any other plugin.
 
 ## Non-negotiable rules
 
@@ -50,7 +53,13 @@ only. No WIC, no GDI+, no system codecs.
    range, host abort, size limits, file cannot be opened) are `std::expected<T, Error>`. Exceptions
    are ON and reserved for OOM (`std::bad_alloc`) and broken invariants. Never throw for control
    flow. The 9 exports are wrapped in a catch-all firewall that turns any exception into `FALSE` /
-   no-op. Nothing ever propagates into the host.
+   no-op. Nothing ever propagates into the host. **SVG-only OOM exception:** an unmodified resvg
+   Rust allocation failure can terminate the process before C++ code can observe it; neither the
+   C++ firewall nor size preflights can guarantee that failure will be caught. Roma accepted this
+   on 2026-10-21 by keeping resvg inside the PVD process and documenting that Far may exit when
+   memory is exhausted. The isolated reproduction returned `0xC0000409`; the plugin has no helper
+   process. This is not an exception crossing the export boundary and not a general waiver: other
+   expected failures still return values, and the C++ `std::bad_alloc` firewall remains in force.
 6. **TDD.** Failing test first, then the minimal code that passes, then refactor. Tests and the code
    they cover land in the same unit of work. No "tests later".
 7. **Coverage.** 100% lines AND 100% branches on `src/**` and `plugins/*/src/**`, measured with
@@ -70,7 +79,7 @@ only. No WIC, no GDI+, no system codecs.
     vcpkg's own directories, and `%TEMP%`. Never touch `C:\Tools\FarManager`.
 12. **Report honestly.** Finish with: what was done, what was not, the exact commands run and their
     results (test counts, coverage numbers, import table). No claim without the output that proves it.
-13. **KERNEL32-only under every MSVC toolset.** No thread-safe statics (a function-local `static`
+13. **KERNEL32-only under every MSVC toolset, except SVG's stated list.** No thread-safe statics (a function-local `static`
     that is not `static constexpr`), no namespace-scope object with a constructor or destructor
     (the composition root's `processState` in `Exports.cpp` is the one exception), no
     `std::jthread`/`stop_token`/`stop_source`, no atomic `wait`/`notify_one`/`notify_all` (member
@@ -87,7 +96,9 @@ only. No WIC, no GDI+, no system codecs.
     the SRWLOCK-backed `std::mutex` if a lock is ever needed, plain atomics without
     `wait`/`notify`, and composition-root ownership instead of statics (`SrgbOutputTables` is the
     worked example, ARCHITECTURE §7). The guard test enforces the tokens; the CI build prints the
-    toolset it used.
+     toolset it used. The only import exception is SVG's `KERNEL32.dll`, `ntdll.dll` and
+     `ole32.dll`; AVIF, EXR and RPGMVP remain exactly `KERNEL32.dll`. It does not relax the
+     forbidden synchronisation constructs or any other rule.
 
 ## Toolchain (already installed, do not install other compilers)
 
@@ -108,8 +119,14 @@ only. No WIC, no GDI+, no system codecs.
   Dependencies: `doctest` for the kit, one manifest feature per plugin (`avif`: `libavif[dav1d]`,
   which pulls `libyuv`). Changing a file under `cmake/` or `triplets/` changes every port's ABI
   hash and rebuilds the ports once. A warm-up build may already be in vcpkg's binary cache.
+- SVG also needs a Rust MSVC toolchain: `cargo`/`rustc` with the
+  `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc` targets. CMake builds the unmodified
+  resvg 0.48.1 `resvg-capi` static library with Cargo's default features, `--locked` and
+  `RUSTFLAGS=-C target-feature=+crt-static`; no Rust runtime is shipped with the plugin. This
+  toolchain requirement applies only to SVG.
 - Static CRT: `/MT` (`CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>`).
-  Every final `.pvd` must import only `KERNEL32.dll`. Verify with
+  AVIF, EXR and RPGMVP must import only `KERNEL32.dll`; SVG must import only `KERNEL32.dll`,
+  `ntdll.dll` and `ole32.dll`. Verify with
   `objdump -p <NAME>.pvd | grep "DLL Name"` (Git Bash) or `dumpbin /dependents`.
 - Git Bash quirk: set `MSYS_NO_PATHCONV=1` when passing `/flags` to cl/clang-cl from bash, otherwise
   `/c` and `/nologo` become file paths. Prefer CMake presets over ad-hoc compiler invocations.
@@ -132,7 +149,7 @@ plugins/<id>/   one plugin: CMakeLists.txt (identity + targets), src/core/, src/
                 src/DefaultPlugin.cpp (composition root), tests/{core,adapters,e2e}/, fixtures/,
                 scripts/, package/{readme_en.txt,readme_ru.txt,ChangeLog}, README.md, DESIGN.md
                 (avif: libavif adapter; exr: OpenEXRCore adapter + tests/support/ with the
-                generated reference pixels; rpgmvp: libspng adapter)
+                generated reference pixels; rpgmvp: libspng adapter; svg: resvg C API adapter)
 tests/pvd/      shim, firewall, context handle, Progress, Exports with fakes (doctest)
 tests/core/     core logic with fake decoder / file source / describer (doctest)
 tests/adapters/ the win adapter on real files
@@ -157,5 +174,7 @@ tests/support/  the leak gate: heap/handle accounting, hostile corpus, the scena
   the newer version knows is either satisfied by the code or disabled in the `.clang-tidy` files
   with its reason - both the local run and the CI run must be clean, and the local run alone
   cannot prove the CI one.
-- The Release presets produce every `<NAME>.pvd` whose import table lists only `KERNEL32.dll` and
-  whose export table is exactly the nine bare `pvd*` names (`<id>_check_imports`, `<id>_check_exports`).
+- The Release presets produce every `<NAME>.pvd` whose import table matches the plugin's approved
+  list (`KERNEL32.dll` for AVIF, EXR and RPGMVP; `KERNEL32.dll`, `ntdll.dll` and `ole32.dll` for
+  SVG) and whose export table is exactly the nine bare `pvd*` names (`<id>_check_imports`,
+  `<id>_check_exports`).

@@ -1257,6 +1257,26 @@ namespace
         CHECK(scan("project/src/core/Sample.cpp", "// catch (...)").empty());
     }
 
+    TEST_CASE("every configured plugin test tree uses the canonical test-only lint policy")
+    {
+        const auto repository = std::filesystem::path{PVDKIT_SOURCE_DIR};
+        const auto canonical = readFile(repository / "tests" / ".clang-tidy");
+        REQUIRE_FALSE(canonical.empty());
+
+        std::size_t configured = 0;
+        for (const auto &entry : std::filesystem::directory_iterator{repository / "plugins"}) {
+            if (!entry.is_directory() || !std::filesystem::is_regular_file(entry.path() / "CMakeLists.txt")) {
+                continue;
+            }
+            ++configured;
+            const auto copy = entry.path() / "tests" / ".clang-tidy";
+            INFO(copy.generic_string());
+            REQUIRE(std::filesystem::is_regular_file(copy));
+            CHECK(readFile(copy) == canonical);
+        }
+        CHECK(configured > 0);
+    }
+
     TEST_CASE("the shared and every plugin source tree obey the ownership and layering rules")
     {
         const auto repository = std::filesystem::path{PVDKIT_SOURCE_DIR};

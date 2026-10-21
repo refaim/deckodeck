@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -16,6 +17,12 @@ namespace pvdkit::core
       public:
         virtual ~IFileData() = default;
         [[nodiscard]] virtual std::span<const std::byte> bytes() const = 0;
+        /// The stable absolute native path the adapter opened, decoded without narrowing. The view
+        /// remains valid while this IFileData is alive; archive and virtual sources return nullopt.
+        [[nodiscard]] virtual std::optional<std::wstring_view> sourcePath() const
+        {
+            return std::nullopt;
+        }
     };
 
     /// Opens UTF-8 or native UTF-16 paths as owned read-only file data.

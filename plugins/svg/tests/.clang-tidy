@@ -1,0 +1,26 @@
+# Test-only relaxations of the root .clang-tidy (everything else is inherited). Each plugin's
+# tests/.clang-tidy is a copy of this file: clang-tidy reads the nearest .clang-tidy above the
+# translation unit, and plugins/<id>/tests/ does not sit below this directory.
+#
+# - bugprone-unchecked-optional-access: doctest's REQUIRE(x.has_value()) is a do/while that logs
+#   and does not return in the check's flow model, so every guarded x-> afterwards is reported.
+# - clang-analyzer-optin.core.EnumCastOutOfRange: tests cast out-of-range integers on purpose to
+#   reach the default branch of every enum switch (ErrorCode 255, avifResult 999), and the check
+#   also fires inside the MSVC STL (<filesystem> bitmask enums) when a test calls file_size().
+# - bugprone-random-generator-seed (clang-tidy 22, the CI runner's version): a constant seed is the
+#   point of the hostile corpus and its self-tests - the same mutants on every run and every
+#   machine, so a finding is reproducible (tests/support/HostileCorpusTests.cpp seeds 42 and 7,
+#   the corpus itself 20260912).
+# - bugprone-bitwise-pointer-cast (clang-tidy 22): the e2e host driver turns GetProcAddress's FARPROC
+#   into the SDK's export signatures with std::bit_cast (tests/e2e/PluginHost.cpp), the host's own
+#   idiom; every other spelling is refused by something else - a direct reinterpret_cast by clang's
+#   -Wcast-function-type-mismatch (/WX), a void* intermediate by bugprone-casting-through-void, an
+#   integer intermediate by performance-no-int-to-ptr, memcpy by this very check.
+---
+InheritParentConfig: true
+Checks: >
+  -bugprone-unchecked-optional-access,
+  -clang-analyzer-optin.core.EnumCastOutOfRange,
+  -bugprone-random-generator-seed,
+  -bugprone-bitwise-pointer-cast
+...

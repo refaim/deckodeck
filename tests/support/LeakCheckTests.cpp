@@ -9,6 +9,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -34,6 +36,29 @@ namespace
     using pvdkit::test::ResourceDelta;
     using pvdkit::test::snapshotResources;
     using pvdkit::test::underAddressSanitizer;
+
+    GROUP_AFFINITY currentThreadAffinity()
+    {
+        GROUP_AFFINITY affinity{};
+        REQUIRE(GetThreadGroupAffinity(GetCurrentThread(), &affinity) != FALSE);
+        return affinity;
+    }
+
+    std::uintptr_t processAffinityMask()
+    {
+        DWORD_PTR process = 0;
+        DWORD_PTR system = 0;
+        REQUIRE(GetProcessAffinityMask(GetCurrentProcess(), &process, &system) != FALSE);
+        REQUIRE(process != 0);
+        return process;
+    }
+
+    void checkCallerAffinityUnchanged(const GROUP_AFFINITY &before)
+    {
+        const auto after = currentThreadAffinity();
+        CHECK(after.Group == before.Group);
+        CHECK(after.Mask == before.Mask);
+    }
 
     // Under ASan the process heap is not where malloc goes (LeakCheck.hpp), so a leaked block is
     // invisible to the walk there; the handle and view accounting is exact everywhere.
@@ -74,14 +99,28 @@ namespace
 
     // A 1 MiB view of a pagefile-backed section; the section handle is closed at once, so only the
     // view remains - exactly what a FileMapping that forgot UnmapViewOfFile would leave behind.
-    UniqueView mapView()
+    UniqueView mapView(const std::size_t bytes = kViewBytes)
     {
         const UniqueHandle section{
-            CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, kViewBytes, nullptr)};
+            CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, static_cast<DWORD>(bytes), nullptr)};
         REQUIRE(section);
         UniqueView view{MapViewOfFile(section.get(), FILE_MAP_ALL_ACCESS, 0, 0, 0)};
         REQUIRE(view);
         return view;
+    }
+
+    std::vector<MEMORY_BASIC_INFORMATION> queryRegions(void *base, const std::size_t bytes)
+    {
+        std::vector<MEMORY_BASIC_INFORMATION> regions;
+        auto *address = static_cast<const std::byte *>(base);
+        const auto *const end = address + bytes;
+        while (address < end) {
+            MEMORY_BASIC_INFORMATION region{};
+            REQUIRE(VirtualQuery(address, &region, sizeof(region)) == sizeof(region));
+            regions.push_back(region);
+            address = static_cast<const std::byte *>(region.BaseAddress) + region.RegionSize;
+        }
+        return regions;
     }
 
     // Whether the debug CRT (/MTd) is in: it wraps every block in a bookkeeping header of its own.
@@ -316,6 +355,265 @@ TEST_CASE("a leaked mapped view is charged exactly, even with its section handle
     }
     leaked.reset();
     CHECK(exactCountersZero(snapshotResources() - before));
+}
+
+TEST_CASE("a protection split inside one mapped view does not become a second and third view")
+{
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const auto pageBytes = static_cast<std::size_t>(system.dwPageSize);
+    constexpr std::size_t kPages = 3;
+    const std::size_t viewBytes = kPages * pageBytes;
+
+    // One real pagefile-backed view, three pages long. The protection change makes VirtualQuery
+    // report three regions under the same AllocationBase, but the mapping is still one view and
+    // its committed byte total is unchanged.
+    auto view = mapView(viewBytes);
+    {
+        const auto beforeRegions = queryRegions(view.get(), viewBytes);
+        REQUIRE(beforeRegions.size() == 1);
+        CHECK(beforeRegions.front().AllocationBase == view.get());
+    }
+    const auto before = snapshotResources();
+
+    DWORD oldProtect = 0;
+    auto *const middle = static_cast<std::byte *>(view.get()) + pageBytes;
+    REQUIRE(VirtualProtect(middle, pageBytes, PAGE_READONLY, &oldProtect) != FALSE);
+    CHECK(oldProtect == PAGE_READWRITE);
+
+    const auto after = snapshotResources();
+    const auto afterRegions = queryRegions(view.get(), viewBytes);
+
+    std::string queried;
+    for (const auto &region : afterRegions) {
+        queried += "base=" + std::to_string(reinterpret_cast<std::uintptr_t>(region.BaseAddress)) +
+                   " size=" + std::to_string(region.RegionSize) +
+                   " allocationBase=" + std::to_string(reinterpret_cast<std::uintptr_t>(region.AllocationBase)) +
+                   " protect=0x" + std::to_string(region.Protect) + "\n";
+    }
+    CAPTURE(queried);
+    REQUIRE(afterRegions.size() == kPages);
+    const void *const allocationBase = afterRegions.front().AllocationBase;
+    CHECK(allocationBase == view.get());
+    CHECK(std::ranges::all_of(afterRegions, [allocationBase](const MEMORY_BASIC_INFORMATION &region) {
+        return region.AllocationBase == allocationBase;
+    }));
+    CHECK(afterRegions[1].Protect == PAGE_READONLY);
+    const auto queriedBytes = std::ranges::fold_left(
+        afterRegions, std::uint64_t{0},
+        [](const std::uint64_t total, const MEMORY_BASIC_INFORMATION &region) { return total + region.RegionSize; });
+    CHECK(queriedBytes == viewBytes);
+
+    // The diagnostic records stay one per VirtualQuery region. The logical view counter must not
+    // follow them: one view was mapped before and after, and its committed bytes did not change.
+    const auto viewBegin = reinterpret_cast<std::uintptr_t>(view.get());
+    const auto viewEnd = viewBegin + viewBytes;
+    const auto recorded =
+        std::ranges::count_if(after.regions, [viewBegin, viewEnd](const pvdkit::test::MappedRegion &region) {
+            return region.base >= viewBegin && region.base < viewEnd;
+        });
+    CHECK(recorded == static_cast<std::ptrdiff_t>(afterRegions.size()));
+
+    const auto during = after - before;
+    LeakReport report;
+    report.scenario = "protection split";
+    report.delta = during;
+    CAPTURE(pvdkit::test::formatReport(report));
+    CHECK(during.mappedBytes == 0);
+    CHECK(during.mappedViews == 0);
+
+    // Control: a second genuine view is still charged, even while this one has three regions.
+    auto second = mapView();
+    const auto added = snapshotResources() - after;
+    CHECK(added.mappedViews == 1);
+    CHECK(added.mappedBytes == kViewBytes);
+    second.reset();
+    view.reset();
+}
+
+TEST_CASE("a committed island behind a SEC_RESERVE prefix stays one mapped view")
+{
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const auto pageBytes = static_cast<std::size_t>(system.dwPageSize);
+    constexpr std::size_t kPages = 5;
+    constexpr std::size_t kFirstIslandPage = 2;
+    constexpr std::size_t kSecondIslandPage = 4;
+    const std::size_t viewBytes = kPages * pageBytes;
+
+    // A real pagefile-backed view, all five pages reserved: every page below the first island is
+    // MEM_RESERVE, not a committed region the accounting could start a view with.
+    const UniqueHandle section{CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE | SEC_RESERVE, 0,
+                                                  static_cast<DWORD>(viewBytes), nullptr)};
+    REQUIRE(section);
+    UniqueView view{MapViewOfFile(section.get(), FILE_MAP_ALL_ACCESS, 0, 0, 0)};
+    REQUIRE(view);
+
+    auto *const viewBase = static_cast<std::byte *>(view.get());
+    auto *const firstIsland = viewBase + kFirstIslandPage * pageBytes;
+    auto *const secondIsland = viewBase + kSecondIslandPage * pageBytes;
+    auto *const reservedGap = viewBase + (kSecondIslandPage - 1) * pageBytes;
+    const auto firstIslandAddress = reinterpret_cast<std::uintptr_t>(firstIsland);
+    const auto secondIslandAddress = reinterpret_cast<std::uintptr_t>(secondIsland);
+    const auto gapAddress = reinterpret_cast<std::uintptr_t>(reservedGap);
+
+    {
+        const auto reserved = queryRegions(view.get(), viewBytes);
+        REQUIRE_FALSE(reserved.empty());
+        std::string queried;
+        for (const auto &region : reserved) {
+            queried += "base=" + std::to_string(reinterpret_cast<std::uintptr_t>(region.BaseAddress)) +
+                       " size=" + std::to_string(region.RegionSize) +
+                       " allocationBase=" + std::to_string(reinterpret_cast<std::uintptr_t>(region.AllocationBase)) +
+                       " state=0x" + std::to_string(region.State) + " type=0x" + std::to_string(region.Type) + "\n";
+        }
+        CAPTURE(queried);
+        CHECK(std::ranges::all_of(reserved, [&view](const MEMORY_BASIC_INFORMATION &region) {
+            return region.State == MEM_RESERVE && region.AllocationBase == view.get();
+        }));
+    }
+
+    const auto before = snapshotResources();
+    REQUIRE(VirtualAlloc(firstIsland, pageBytes, MEM_COMMIT, PAGE_READWRITE) != nullptr);
+    const auto afterFirst = snapshotResources();
+    const auto firstRegions = queryRegions(view.get(), viewBytes);
+
+    // The actual address-space split: reserved prefix, the committed middle page, reserved
+    // suffix. All three share the view's AllocationBase; only the middle is committed mapped.
+    std::string queriedFirst;
+    for (const auto &region : firstRegions) {
+        queriedFirst += "base=" + std::to_string(reinterpret_cast<std::uintptr_t>(region.BaseAddress)) +
+                        " size=" + std::to_string(region.RegionSize) +
+                        " allocationBase=" + std::to_string(reinterpret_cast<std::uintptr_t>(region.AllocationBase)) +
+                        " state=0x" + std::to_string(region.State) + " type=0x" + std::to_string(region.Type) + "\n";
+    }
+    CAPTURE(queriedFirst);
+    REQUIRE(firstRegions.size() >= 3);
+    const auto &prefix = firstRegions.front();
+    CHECK(prefix.BaseAddress == view.get());
+    CHECK(prefix.State == MEM_RESERVE);
+    CHECK(prefix.AllocationBase == view.get());
+    CHECK(static_cast<const std::byte *>(prefix.BaseAddress) + prefix.RegionSize == firstIsland);
+    CHECK(std::ranges::all_of(
+        firstRegions, [&view](const MEMORY_BASIC_INFORMATION &region) { return region.AllocationBase == view.get(); }));
+    const auto firstMiddle =
+        std::ranges::find_if(firstRegions, [firstIslandAddress](const MEMORY_BASIC_INFORMATION &region) {
+            return reinterpret_cast<std::uintptr_t>(region.BaseAddress) == firstIslandAddress;
+        });
+    REQUIRE(firstMiddle != firstRegions.end());
+    CHECK(firstMiddle->State == MEM_COMMIT);
+    CHECK(firstMiddle->Type == MEM_MAPPED);
+    CHECK(firstMiddle->AllocationBase == view.get());
+    CHECK(firstMiddle->RegionSize == pageBytes);
+
+    // One logical view appeared, and its committed bytes are exactly the one committed page.
+    const auto first = afterFirst - before;
+    LeakReport firstReport;
+    firstReport.scenario = "SEC_RESERVE prefix";
+    firstReport.delta = first;
+    CAPTURE(pvdkit::test::formatReport(firstReport));
+    CHECK(first.mappedViews == 1);
+    CHECK(first.mappedBytes == static_cast<std::int64_t>(pageBytes));
+
+    // The raw diagnostic records follow VirtualQuery: one committed region, at the middle page,
+    // pagefile-backed, even though the view's allocated range began earlier at the reserved prefix.
+    const auto viewBegin = reinterpret_cast<std::uintptr_t>(view.get());
+    const auto viewEnd = viewBegin + viewBytes;
+    const auto recordedFirst =
+        std::ranges::count_if(afterFirst.regions, [viewBegin, viewEnd](const pvdkit::test::MappedRegion &region) {
+            return region.base >= viewBegin && region.base < viewEnd;
+        });
+    CHECK(recordedFirst == 1);
+    const auto firstRecord =
+        std::ranges::find_if(afterFirst.regions, [firstIslandAddress](const pvdkit::test::MappedRegion &region) {
+            return region.base == firstIslandAddress;
+        });
+    REQUIRE(firstRecord != afterFirst.regions.end());
+    CHECK(firstRecord->size == pageBytes);
+    CHECK(pvdkit::test::name(*firstRecord).empty());
+    {
+        const auto appeared = pvdkit::test::describeRegionChanges(afterFirst, before);
+        CAPTURE(appeared);
+        CHECK(std::ranges::count(appeared, '\n') == 1);
+        CHECK(appeared.find("  + 0x") == 0);
+        CHECK(appeared.find(" 4 KiB (pagefile-backed)\n") != std::string::npos);
+    }
+
+    // A second island behind a still-reserved gap is part of the same view: the logical view
+    // count stays one, while the committed byte total and the raw region count both grow.
+    const auto beforeSecond = snapshotResources();
+    REQUIRE(VirtualAlloc(secondIsland, pageBytes, MEM_COMMIT, PAGE_READWRITE) != nullptr);
+    const auto afterSecond = snapshotResources();
+    const auto secondRegions = queryRegions(view.get(), viewBytes);
+    std::string queriedSecond;
+    for (const auto &region : secondRegions) {
+        queriedSecond += "base=" + std::to_string(reinterpret_cast<std::uintptr_t>(region.BaseAddress)) +
+                         " size=" + std::to_string(region.RegionSize) +
+                         " allocationBase=" + std::to_string(reinterpret_cast<std::uintptr_t>(region.AllocationBase)) +
+                         " state=0x" + std::to_string(region.State) + " type=0x" + std::to_string(region.Type) + "\n";
+    }
+    CAPTURE(queriedSecond);
+    CHECK(std::ranges::count_if(secondRegions, [&view](const MEMORY_BASIC_INFORMATION &region) {
+              return region.State == MEM_COMMIT && region.Type == MEM_MAPPED && region.AllocationBase == view.get();
+          }) == 2);
+    const auto gap = std::ranges::find_if(secondRegions, [gapAddress](const MEMORY_BASIC_INFORMATION &region) {
+        const auto begin = reinterpret_cast<std::uintptr_t>(region.BaseAddress);
+        return gapAddress >= begin && gapAddress < begin + region.RegionSize;
+    });
+    REQUIRE(gap != secondRegions.end());
+    CHECK(gap->State == MEM_RESERVE);
+    CHECK(gap->AllocationBase == view.get());
+    const auto secondMiddle =
+        std::ranges::find_if(secondRegions, [secondIslandAddress](const MEMORY_BASIC_INFORMATION &region) {
+            return reinterpret_cast<std::uintptr_t>(region.BaseAddress) == secondIslandAddress;
+        });
+    REQUIRE(secondMiddle != secondRegions.end());
+    CHECK(secondMiddle->State == MEM_COMMIT);
+    CHECK(secondMiddle->Type == MEM_MAPPED);
+    CHECK(secondMiddle->AllocationBase == view.get());
+    CHECK(secondMiddle->RegionSize == pageBytes);
+
+    // Cumulative since the mapping was still fully reserved. The record spans of `before` expired
+    // two snapshots later (LeakCheck.hpp, ResourceUsage::blocks/regions), so `afterSecond - before`
+    // would subtract heap records from a buffer the newer snapshots already overwrote; the view and
+    // byte totals are plain saved scalars, so the cumulative check reads them directly.
+    const auto bothViews =
+        static_cast<std::int64_t>(afterSecond.mappedViews) - static_cast<std::int64_t>(before.mappedViews);
+    const auto bothBytes =
+        static_cast<std::int64_t>(afterSecond.mappedBytes) - static_cast<std::int64_t>(before.mappedBytes);
+    const auto increment = afterSecond - beforeSecond;
+    LeakReport secondReport;
+    secondReport.scenario = "SEC_RESERVE prefix, second island";
+    secondReport.delta = increment;
+    CAPTURE(pvdkit::test::formatReport(secondReport));
+    CAPTURE(bothViews);
+    CAPTURE(bothBytes);
+    CHECK(bothViews == 1);
+    CHECK(bothBytes == static_cast<std::int64_t>(2 * pageBytes));
+    CHECK(increment.mappedViews == 0);
+    CHECK(increment.mappedBytes == static_cast<std::int64_t>(pageBytes));
+
+    const auto recordedSecond =
+        std::ranges::count_if(afterSecond.regions, [viewBegin, viewEnd](const pvdkit::test::MappedRegion &region) {
+            return region.base >= viewBegin && region.base < viewEnd;
+        });
+    CHECK(recordedSecond == 2);
+    const auto secondRecord =
+        std::ranges::find_if(afterSecond.regions, [secondIslandAddress](const pvdkit::test::MappedRegion &region) {
+            return region.base == secondIslandAddress;
+        });
+    REQUIRE(secondRecord != afterSecond.regions.end());
+    CHECK(secondRecord->size == pageBytes);
+    CHECK(pvdkit::test::name(*secondRecord).empty());
+    {
+        const auto appeared = pvdkit::test::describeRegionChanges(afterSecond, beforeSecond);
+        CAPTURE(appeared);
+        CHECK(std::ranges::count(appeared, '\n') == 1);
+        CHECK(appeared.find("  + 0x") == 0);
+        CHECK(appeared.find(" 4 KiB (pagefile-backed)\n") != std::string::npos);
+    }
+
+    view.reset();
 }
 
 TEST_CASE("a view of a file is listed with the file behind it, so a lazily mapped system section has a name")
@@ -791,6 +1089,196 @@ TEST_CASE("the retry noise bound is forty-eight small blocks and no handle; view
     CHECK_FALSE(withinRetryNoise({0, 0, 1, 1, 4096, 0, 0}));
     // Private bytes and the heap's committed size are not exact counters and never block a retry.
     CHECK(withinRetryNoise({0, 0, 0, 0, 0, 64 * 1024 * 1024, 64 * 1024 * 1024}));
+}
+
+// The CPU warm-up is what keeps the OS's per-CPU caches (bcryptprimitives' ProcessPrng state is
+// the measured one) out of a measured leak pass: the real operation runs once on every allowed
+// CPU from a temporary thread pinned to that CPU, and the caller is never pinned. These tests stop
+// at the helper's own boundary; the leak scenarios exercise the real plugin operation.
+TEST_CASE("the CPU warm-up visits every allowed CPU once from a temporary thread and leaves the caller alone")
+{
+    using pvdkit::test::warmEveryAllowedCpu;
+    const auto callerBefore = currentThreadAffinity();
+    const auto processBefore = processAffinityMask();
+    const auto callerThread = GetCurrentThreadId();
+    const auto callbacks = std::popcount(processBefore);
+    REQUIRE(callbacks > 0);
+
+    std::vector<std::uintptr_t> masks;
+    std::vector<DWORD> threads;
+    warmEveryAllowedCpu([&] {
+        GROUP_AFFINITY affinity{};
+        if (GetThreadGroupAffinity(GetCurrentThread(), &affinity) == FALSE) {
+            throw std::runtime_error("GetThreadGroupAffinity failed inside the warm-up callback");
+        }
+        masks.push_back(affinity.Mask);
+        threads.push_back(GetCurrentThreadId());
+    });
+
+    REQUIRE(masks.size() == callbacks);
+    std::vector<std::uintptr_t> expected;
+    for (unsigned bit = 0; bit < sizeof(processBefore) * 8; ++bit) {
+        if ((processBefore & (std::uintptr_t{1} << bit)) != 0) {
+            expected.push_back(std::uintptr_t{1} << bit);
+        }
+    }
+    CHECK(masks == expected);
+    REQUIRE_FALSE(threads.empty());
+    CHECK(std::ranges::all_of(threads, [&](const DWORD id) { return id != callerThread; }));
+    checkCallerAffinityUnchanged(callerBefore);
+    CHECK(processAffinityMask() == processBefore);
+}
+
+// The per-CPU state the warm-up exists for is per thread as well: a cache first built on one
+// thread is not the state a later thread sees. A constant-initialised thread_local flag is the
+// minimal shape of that contract - no dynamic initialiser, no guard - so the first callback on a
+// thread must observe it unset. One warm-up thread pinned across CPUs sees it set from the second
+// CPU on; a fresh thread per CPU sees it unset every time. No result is mocked and no RNG is
+// named: the helper only has to give each callback its own thread.
+TEST_CASE(
+    "the CPU warm-up starts every CPU's callback on a fresh thread, so per-thread state is first used on each CPU")
+{
+    using pvdkit::test::warmEveryAllowedCpu;
+    const auto callerBefore = currentThreadAffinity();
+    const auto processBefore = processAffinityMask();
+    const auto callbacks = std::popcount(processBefore);
+    REQUIRE(callbacks > 0);
+
+    thread_local bool visited = false;
+    std::vector<std::uintptr_t> masks;
+    std::vector<bool> firstVisits;
+    warmEveryAllowedCpu([&] {
+        GROUP_AFFINITY affinity{};
+        if (GetThreadGroupAffinity(GetCurrentThread(), &affinity) == FALSE) {
+            throw std::runtime_error("GetThreadGroupAffinity failed inside the warm-up callback");
+        }
+        masks.push_back(affinity.Mask);
+        firstVisits.push_back(!visited);
+        visited = true;
+    });
+
+    REQUIRE(firstVisits.size() == callbacks);
+    CHECK(std::ranges::all_of(firstVisits, [](const bool first) { return first; }));
+    std::vector<std::uintptr_t> expected;
+    for (unsigned bit = 0; bit < sizeof(processBefore) * 8; ++bit) {
+        if ((processBefore & (std::uintptr_t{1} << bit)) != 0) {
+            expected.push_back(std::uintptr_t{1} << bit);
+        }
+    }
+    CHECK(masks == expected);
+    checkCallerAffinityUnchanged(callerBefore);
+    CHECK(processAffinityMask() == processBefore);
+}
+
+TEST_CASE("a callback exception stops the CPU warm-up at once, is rethrown, and leaves the caller's affinity alone")
+{
+    using pvdkit::test::warmEveryAllowedCpu;
+    const auto callerBefore = currentThreadAffinity();
+    const auto processBefore = processAffinityMask();
+    const auto callbacks = std::popcount(processBefore);
+    const auto stopAfter = std::min<std::size_t>(2, callbacks);
+    std::size_t calls = 0;
+
+    CHECK_THROWS_WITH_AS(warmEveryAllowedCpu([&] {
+                             ++calls;
+                             if (calls == stopAfter) {
+                                 throw std::runtime_error("injected callback failure");
+                             }
+                         }),
+                         "injected callback failure", std::runtime_error);
+    CHECK(calls == stopAfter);
+    checkCallerAffinityUnchanged(callerBefore);
+    CHECK(processAffinityMask() == processBefore);
+}
+
+TEST_CASE("the CPU warm-up rejects a system with more than one active processor group before running any callback")
+{
+    using pvdkit::test::CpuWarmupHooks;
+    using pvdkit::test::warmEveryAllowedCpu;
+    const auto callerBefore = currentThreadAffinity();
+    // The old process-group query still answers 1 here: it does not prove that the system has one
+    // active group, so this regression drives the hook rather than requiring >64-CPU hardware.
+    USHORT processGroups = 0;
+    REQUIRE(GetProcessGroupAffinity(GetCurrentProcess(), &processGroups, nullptr) == FALSE);
+    REQUIRE(GetLastError() == ERROR_INSUFFICIENT_BUFFER);
+    REQUIRE(processGroups == 1);
+    std::size_t calls = 0;
+    CpuWarmupHooks hooks;
+    hooks.activeGroupCount = [] { return std::uint32_t{2}; };
+
+    CHECK_THROWS_AS(warmEveryAllowedCpu([&] { ++calls; }, hooks), std::runtime_error);
+    CHECK(calls == 0);
+    checkCallerAffinityUnchanged(callerBefore);
+}
+
+TEST_CASE("the CPU warm-up rejects an active processor group count that changes during the warm-up")
+{
+    using pvdkit::test::CpuWarmupHooks;
+    using pvdkit::test::warmEveryAllowedCpu;
+    const auto callerBefore = currentThreadAffinity();
+    std::size_t readings = 0;
+    std::size_t calls = 0;
+    CpuWarmupHooks hooks;
+    hooks.activeGroupCount = [&] { return readings++ == 0 ? std::uint32_t{1} : std::uint32_t{2}; };
+
+    CHECK_THROWS_AS(warmEveryAllowedCpu([&] { ++calls; }, hooks), std::runtime_error);
+    CHECK(readings >= 2);
+    CHECK(calls == std::popcount(processAffinityMask()));
+    checkCallerAffinityUnchanged(callerBefore);
+}
+
+TEST_CASE("the CPU warm-up stops on a Win32 affinity failure without consulting the next CPU")
+{
+    using pvdkit::test::CpuWarmupHooks;
+    using pvdkit::test::warmEveryAllowedCpu;
+    const auto callerBefore = currentThreadAffinity();
+    std::size_t calls = 0;
+    CpuWarmupHooks hooks;
+    hooks.setAffinity = [](const std::uintptr_t) { return std::uintptr_t{0}; };
+
+    CHECK_THROWS_AS(warmEveryAllowedCpu([&] { ++calls; }, hooks), std::runtime_error);
+    CHECK(calls == 0);
+    checkCallerAffinityUnchanged(callerBefore);
+}
+
+TEST_CASE("the CPU warm-up rejects a process mask that changes between its first and last reading")
+{
+    using pvdkit::test::CpuWarmupHooks;
+    using pvdkit::test::warmEveryAllowedCpu;
+    const auto callerBefore = currentThreadAffinity();
+    const auto real = processAffinityMask();
+    const auto changed = real & (real - 1); // a different mask, including zero on a one-CPU process
+    std::size_t readings = 0;
+    std::size_t calls = 0;
+    CpuWarmupHooks hooks;
+    hooks.processMask = [&] { return readings++ == 0 ? real : changed; };
+
+    CHECK_THROWS_AS(warmEveryAllowedCpu([&] { ++calls; }, hooks), std::runtime_error);
+    CHECK(readings >= 2);
+    CHECK(calls == std::popcount(real));
+    checkCallerAffinityUnchanged(callerBefore);
+}
+
+TEST_CASE("a repeated small heap leak is still charged by the gate after the CPU warm-up")
+{
+    using pvdkit::test::heapGrew;
+    using pvdkit::test::warmEveryAllowedCpu;
+    std::size_t warmed = 0;
+    warmEveryAllowedCpu([&] { ++warmed; });
+    CHECK(warmed == std::popcount(processAffinityMask()));
+
+    std::vector<std::unique_ptr<std::byte[]>> retained;
+    retained.reserve(8);
+    const auto report = measureLeaks("post-warm-up intentional leak", 1, 5,
+                                     [&](const std::size_t) { retained.push_back(allocateBlock(4096)); });
+    CHECK(report.delta.heapBlocks >= expectedBlocks(5));
+    if (!underAddressSanitizer()) {
+        CHECK(report.delta.heapBytes >= 5 * 4096);
+        CHECK(heapGrew(report));
+        CHECK(report.secondPassRan);
+        CHECK(report.secondPass.heapBlocks == 5);
+    }
+    retained.clear(); // the control must not leave a leak behind for the cases after it
 }
 
 // The gate's failing side, through doctest's own bookkeeping: `expected_failures(n)` passes a

@@ -15,11 +15,14 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -128,10 +131,20 @@ namespace pvdkit::test
         // The committed MEM_MAPPED regions of the address space: every view of a file mapping
         // (file-backed or pagefile-backed), whatever module mapped it. VirtualQuery steps through
         // the whole range; free and reserved space is skipped in one step per region.
+        //
+        // A view is one allocation, not one VirtualQuery region: a protection change splits it into
+        // adjacent committed regions that still share an AllocationBase, and a reserved gap inside
+        // one allocation (SEC_RESERVE) leaves a hole between its committed parts. The walk is
+        // ascending and allocation regions are contiguous, so the base of the last committed mapped
+        // region is enough to count each view once, across skipped reserved regions too, without a
+        // set or any allocation. Only a committed mapped region updates it: a reserved region of the
+        // same allocation must not hide the first island behind it. Every committed region stays a
+        // raw record even when several share one view.
         struct MappedCensus
         {
-            std::uint64_t views = 0;
-            std::uint64_t bytes = 0;
+            std::uint64_t views = 0;   // distinct AllocationBase values of committed MEM_MAPPED regions
+            std::uint64_t regions = 0; // committed MEM_MAPPED VirtualQuery regions
+            std::uint64_t bytes = 0;   // their committed bytes
         };
 
         // The file behind a view, as UTF-8 in the record's fixed buffer: GetMappedFileNameW (an NT
@@ -175,9 +188,15 @@ namespace pvdkit::test
             const auto *address = static_cast<const std::byte *>(system.lpMinimumApplicationAddress);
             const auto *const end = static_cast<const std::byte *>(system.lpMaximumApplicationAddress);
             MEMORY_BASIC_INFORMATION region{};
+            std::uintptr_t previousAllocationBase = 0;
             while (address < end && VirtualQuery(address, &region, sizeof(region)) == sizeof(region)) {
+                const auto allocationBase = reinterpret_cast<std::uintptr_t>(region.AllocationBase);
                 if (region.State == MEM_COMMIT && region.Type == MEM_MAPPED) {
-                    ++census.views;
+                    if (allocationBase != previousAllocationBase) {
+                        ++census.views;
+                    }
+                    previousAllocationBase = allocationBase;
+                    ++census.regions;
                     census.bytes += region.RegionSize;
                     if (records.size() < records.capacity()) {
                         MappedRegion record;
@@ -231,6 +250,7 @@ namespace pvdkit::test
             usage.handles = handles;
             usage.mappedViews = mapped.views;
             usage.mappedBytes = mapped.bytes;
+            usage.mappedRegions = mapped.regions;
             usage.privateBytes = counters.PrivateUsage;
             usage.heapCommitted = census.committed;
             usage.blocks = records.blocks;
@@ -242,7 +262,8 @@ namespace pvdkit::test
         {
             return a.heapBlocks == b.heapBlocks && a.heapBytes == b.heapBytes && a.handles == b.handles &&
                    a.mappedViews == b.mappedViews && a.mappedBytes == b.mappedBytes &&
-                   a.privateBytes == b.privateBytes && a.heapCommitted == b.heapCommitted;
+                   a.mappedRegions == b.mappedRegions && a.privateBytes == b.privateBytes &&
+                   a.heapCommitted == b.heapCommitted;
         }
 
         std::string hexAddress(const std::uintptr_t address)
@@ -465,7 +486,7 @@ namespace pvdkit::test
         std::string text;
         forEachRegionOnlyIn(after, before, [&](const MappedRegion &region) { text += describeRegion('+', region); });
         forEachRegionOnlyIn(before, after, [&](const MappedRegion &region) { text += describeRegion('-', region); });
-        if (after.mappedViews > after.regions.size() || before.mappedViews > before.regions.size()) {
+        if (after.mappedRegions > after.regions.size() || before.mappedRegions > before.regions.size()) {
             text += "  (more mapped regions than the record buffers hold; the list above is partial)\n";
         }
         return text;
@@ -595,6 +616,141 @@ namespace pvdkit::test
             return defaultIterations;
         }
         return value;
+    }
+
+    namespace
+    {
+
+        [[noreturn]] void cpuWarmupFailure(const std::string &message)
+        {
+            throw std::runtime_error("CPU warm-up: " + message);
+        }
+
+        [[noreturn]] void cpuWarmupWin32Failure(const char *call, const DWORD error)
+        {
+            cpuWarmupFailure(std::string{call} + " failed (Win32 error " + std::to_string(error) + ")");
+        }
+
+        std::uint32_t cpuWarmupActiveGroupCount(const CpuWarmupHooks &hooks)
+        {
+            if (hooks.activeGroupCount) {
+                return hooks.activeGroupCount();
+            }
+            const DWORD count = GetActiveProcessorGroupCount();
+            if (count == 0) {
+                cpuWarmupWin32Failure("GetActiveProcessorGroupCount", GetLastError());
+            }
+            return count;
+        }
+
+        std::uintptr_t cpuWarmupProcessMask(const CpuWarmupHooks &hooks, DWORD_PTR &systemMask)
+        {
+            DWORD_PTR processMask = 0;
+            systemMask = 0;
+            if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) == FALSE) {
+                cpuWarmupWin32Failure("GetProcessAffinityMask", GetLastError());
+            }
+            const auto mask = hooks.processMask ? hooks.processMask() : static_cast<std::uintptr_t>(processMask);
+            if (mask == 0) {
+                cpuWarmupFailure("the process affinity mask is empty");
+            }
+            if ((mask & ~static_cast<std::uintptr_t>(systemMask)) != 0) {
+                cpuWarmupFailure("the process affinity mask names a CPU the system does not have");
+            }
+            return mask;
+        }
+
+        std::uintptr_t cpuWarmupApplyAffinity(const CpuWarmupHooks &hooks, const std::uintptr_t cpu)
+        {
+            if (hooks.setAffinity) {
+                const auto previous = hooks.setAffinity(cpu);
+                if (previous == 0) {
+                    cpuWarmupWin32Failure("SetThreadAffinityMask", GetLastError());
+                }
+                return previous;
+            }
+            SetLastError(ERROR_SUCCESS);
+            const auto previous = SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(cpu));
+            if (previous == 0) {
+                cpuWarmupWin32Failure("SetThreadAffinityMask", GetLastError());
+            }
+            return static_cast<std::uintptr_t>(previous);
+        }
+
+    } // namespace
+
+    void warmEveryAllowedCpu(const std::function<void()> &operation, const CpuWarmupHooks &hooks)
+    {
+        if (cpuWarmupActiveGroupCount(hooks) != 1) {
+            cpuWarmupFailure("this system does not have exactly one active processor group, which this "
+                             "test-only warm-up does not support");
+        }
+
+        DWORD_PTR systemBefore = 0;
+        const auto processBefore = cpuWarmupProcessMask(hooks, systemBefore);
+        GROUP_AFFINITY callerBefore{};
+        if (GetThreadGroupAffinity(GetCurrentThread(), &callerBefore) == FALSE) {
+            cpuWarmupWin32Failure("GetThreadGroupAffinity", GetLastError());
+        }
+
+        std::vector<std::uintptr_t> cpus;
+        for (unsigned bit = 0; bit < sizeof(processBefore) * 8; ++bit) {
+            const auto cpu = std::uintptr_t{1} << bit;
+            if ((processBefore & cpu) != 0) {
+                cpus.push_back(cpu);
+            }
+        }
+        if (cpus.empty()) {
+            cpuWarmupFailure("the process affinity mask is empty");
+        }
+
+        // A fresh short-lived warm-up thread per CPU, and the only thread that is ever pinned: each
+        // inherits the process affinity, narrows its own mask to exactly its CPU, runs the real
+        // operation and exits before the next CPU's thread starts. Per-thread state therefore
+        // initialises on every CPU (the measured case is Rust's std RandomState keys, whose first
+        // use reseeds from the OS on each new thread), which one thread pinned across CPUs would
+        // do only once. The caller and every thread a test starts afterwards keep the process
+        // affinity.
+        for (const std::uintptr_t cpu : cpus) {
+            std::exception_ptr threadFailure;
+            std::jthread worker{[&] {
+                try {
+                    static_cast<void>(cpuWarmupApplyAffinity(hooks, cpu));
+                    GROUP_AFFINITY applied{};
+                    if (GetThreadGroupAffinity(GetCurrentThread(), &applied) == FALSE) {
+                        cpuWarmupWin32Failure("GetThreadGroupAffinity on the warm-up thread", GetLastError());
+                    }
+                    if (applied.Mask != cpu) {
+                        cpuWarmupFailure("the warm-up thread did not take the requested CPU affinity");
+                    }
+                    operation();
+                } catch (...) {
+                    threadFailure = std::current_exception();
+                }
+            }};
+            worker.join();
+            if (threadFailure) {
+                std::rethrow_exception(threadFailure);
+            }
+        }
+
+        // A baseline taken after a topology or mask change would describe a different machine
+        // from the one the warm-up covered: reject it before the caller can measure.
+        if (cpuWarmupActiveGroupCount(hooks) != 1) {
+            cpuWarmupFailure("the active processor group count changed during the warm-up");
+        }
+        DWORD_PTR systemAfter = 0;
+        const auto processAfter = cpuWarmupProcessMask(hooks, systemAfter);
+        if (processAfter != processBefore || systemAfter != systemBefore) {
+            cpuWarmupFailure("the process affinity mask changed during the warm-up");
+        }
+        GROUP_AFFINITY callerAfter{};
+        if (GetThreadGroupAffinity(GetCurrentThread(), &callerAfter) == FALSE) {
+            cpuWarmupWin32Failure("GetThreadGroupAffinity after the warm-up", GetLastError());
+        }
+        if (callerAfter.Group != callerBefore.Group || callerAfter.Mask != callerBefore.Mask) {
+            cpuWarmupFailure("the caller thread's affinity changed during the warm-up");
+        }
     }
 
 } // namespace pvdkit::test

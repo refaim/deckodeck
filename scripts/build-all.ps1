@@ -15,6 +15,7 @@ param(
 # first: Name, Version, Architecture, Preset, BuildDirectory, PackageDirectory, Plugin, Size) for
 # callers such as scripts/package.ps1.
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "import-policy.ps1")
 
 function Invoke-Checked {
   param(
@@ -70,8 +71,11 @@ try {
         throw "Expected exactly one $($manifest.file) under $pluginDirectory, found $($candidates.Count)"
       }
       $plugin = $candidates[0].FullName
+      $imports = if ($null -eq $manifest.imports) { @() } else { @($manifest.imports) }
+      $allowedImports = @(Resolve-AllowedModule -Imports $imports)
       Invoke-Checked "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                                    (Join-Path $PSScriptRoot "check-imports.ps1"), "-Path", $plugin)
+                                    (Join-Path $PSScriptRoot "check-imports.ps1"), "-Path", $plugin,
+                                    "-AllowedModules", ($allowedImports -join ","))
       Invoke-Checked "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                     (Join-Path $PSScriptRoot "check-exports.ps1"), "-Path", $plugin)
 
@@ -89,6 +93,7 @@ try {
         BuildDirectory = $buildDirectory
         PackageDirectory = $manifestFile.Directory.FullName
         Plugin = $destination
+        Imports = $allowedImports
         Size = (Get-Item -LiteralPath $destination).Length
       }
     }

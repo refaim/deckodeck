@@ -17,12 +17,14 @@ param(
 # export-table gates on the DLL and checks that its FileVersion equals the manifest version -
 # every gate on every DLL before any zip is written, so a failure leaves nothing behind - and
 # writes <DistDir>/<NAME>-<version>-<arch>.zip holding exactly <NAME>.pvd, readme_en.txt,
-# readme_ru.txt, ChangeLog and LICENSES.txt (manifest.json is build metadata and stays out). A zip
-# of the same name is overwritten; other zips are left alone. Prints each zip path with its
-# SHA-256 on the information stream and emits one object per zip (Name, Version, Architecture,
-# Zip, Sha256) on the pipeline. scripts/package.ps1 builds everything from scratch, runs the
-# gates and then calls this script; the release workflow calls it on the CI build directories.
+# readme_ru.txt, ChangeLog, LICENSES.txt and any plain-leaf extra documents declared in
+# manifest.extra_documents (manifest.json is build metadata and stays out). A zip of the same
+# name is overwritten; other zips are left alone. Prints each zip path with its SHA-256 on the
+# information stream and emits one object per zip (Name, Version, Architecture, Zip, Sha256) on
+# the pipeline. scripts/package.ps1 builds everything from scratch, runs the gates and then calls
+# this script; the release workflow calls it on the CI build directories.
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "import-policy.ps1")
 
 function Invoke-Checked {
   param(
@@ -47,6 +49,67 @@ $DistDir = [IO.Path]::GetFullPath($DistDir)
 $powerShell = if ($PSVersionTable.PSEdition -eq "Core") { "pwsh" } else { "powershell" }
 # What the user gets: the DLL plus the four documents CMake staged next to the manifest.
 $packageDocuments = @("readme_en.txt", "readme_ru.txt", "ChangeLog", "LICENSES.txt")
+
+function Assert-PlainLeafName {
+  param(
+    [string]$Name,
+    [string]$Context
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Name)) {
+    throw "$Context is empty"
+  }
+  if ($Name -eq "." -or $Name -eq "..") {
+    throw "$Context '$Name' is not a file name"
+  }
+  if ([IO.Path]::IsPathRooted($Name) -or $Name.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+    throw "$Context '$Name' is not a plain leaf name"
+  }
+  if ($Name.IndexOf('/') -ge 0 -or $Name.IndexOf('\') -ge 0 -or [IO.Path]::GetFileName($Name) -cne $Name) {
+    throw "$Context '$Name' is not a plain leaf name"
+  }
+  # Keep this grammar identical to pvdkit_validate_extra_document_leaf: ASCII segments separated
+  # by single dots, no trailing dot/space, and no DOS device aliases.
+  if ($Name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*$') {
+    throw "$Context '$Name' is not a plain leaf name"
+  }
+  if ($Name -match '(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)') {
+    throw "$Context '$Name' is not a plain leaf name (Windows device alias)"
+  }
+}
+
+function Get-ManifestExtraDocument {
+  param(
+    [object]$Manifest,
+    [string]$ManifestPath,
+    [string[]]$ReservedNames
+  )
+
+  if ($null -eq $Manifest.extra_documents) {
+    return @()
+  }
+  if ($Manifest.extra_documents -is [string]) {
+    throw "$ManifestPath`: extra_documents must be an array of file names"
+  }
+
+  $reserved = @($ReservedNames | ForEach-Object { $_.ToLowerInvariant() })
+  $seen = @{}
+  $documents = @()
+  foreach ($name in @($Manifest.extra_documents)) {
+    Assert-PlainLeafName ([string]$name) "$ManifestPath extra_documents entry"
+    $leaf = [string]$name
+    $key = $leaf.ToLowerInvariant()
+    if ($seen.ContainsKey($key)) {
+      throw "$ManifestPath declares extra document '$leaf' more than once"
+    }
+    if ($reserved -contains $key) {
+      throw "$ManifestPath extra document '$leaf' collides with a package file"
+    }
+    $seen[$key] = $true
+    $documents += $leaf
+  }
+  return $documents
+}
 
 # Every packaged plugin of one architecture: id, manifest, package directory and DLL path.
 function Get-BuiltPluginList {
@@ -77,9 +140,21 @@ function Get-BuiltPluginList {
     if ($candidates.Count -ne 1) {
       throw "Expected exactly one $($manifest.file) under $pluginDirectory, found $($candidates.Count)"
     }
+    $imports = if ($null -eq $manifest.imports) { @() } else { @($manifest.imports) }
+    $allowedImports = @(Resolve-AllowedModule -Imports $imports)
     foreach ($document in $packageDocuments) {
       if (-not (Test-Path -LiteralPath (Join-Path $manifestFile.Directory.FullName $document) -PathType Leaf)) {
         throw "$document was not staged in $($manifestFile.Directory.FullName)"
+      }
+    }
+    $extraDocuments = @(Get-ManifestExtraDocument `
+      -Manifest $manifest `
+      -ManifestPath $manifestFile.FullName `
+      -ReservedNames (@($manifest.file, "$($manifest.name).pvd", "manifest.json") + $packageDocuments))
+    foreach ($extra in $extraDocuments) {
+      $extraPath = Join-Path $manifestFile.Directory.FullName $extra
+      if (-not (Test-Path -LiteralPath $extraPath -PathType Leaf)) {
+        throw "extra document '$extra' was not staged in $($manifestFile.Directory.FullName)"
       }
     }
     $built += [pscustomobject]@{
@@ -89,6 +164,8 @@ function Get-BuiltPluginList {
       Architecture = $Architecture
       PackageDirectory = $manifestFile.Directory.FullName
       Plugin = $candidates[0].FullName
+      Imports = $allowedImports
+      ExtraDocuments = $extraDocuments
     }
   }
   foreach ($id in $Plugins) {
@@ -126,7 +203,8 @@ foreach ($build in $builds) {
 # (the zips are written only after the whole set passed).
 foreach ($entry in $built) {
   Invoke-Checked $powerShell @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                               (Join-Path $PSScriptRoot "check-imports.ps1"), "-Path", $entry.Plugin)
+                               (Join-Path $PSScriptRoot "check-imports.ps1"), "-Path", $entry.Plugin,
+                               "-AllowedModules", ($entry.Imports -join ","))
   Invoke-Checked $powerShell @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                (Join-Path $PSScriptRoot "check-exports.ps1"), "-Path", $entry.Plugin)
   # The manifest version is the one the plugin's CMakeLists.txt declared (pvdkit_plugin_identity),
@@ -147,7 +225,7 @@ try {
     }
     New-Item -ItemType Directory -Force -Path $staging | Out-Null
     Copy-Item -LiteralPath $entry.Plugin -Destination (Join-Path $staging "$($entry.Name).pvd")
-    foreach ($document in $packageDocuments) {
+    foreach ($document in @($packageDocuments + $entry.ExtraDocuments)) {
       Copy-Item -LiteralPath (Join-Path $entry.PackageDirectory $document) -Destination (Join-Path $staging $document)
     }
 

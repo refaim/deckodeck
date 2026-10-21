@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="4" height="1">
+  <defs>
+    <linearGradient id="black-to-white" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="4" y2="0">
+      <stop offset="0" stop-color="#000000"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="4" height="1" fill="url(#black-to-white)"/>
+</svg>

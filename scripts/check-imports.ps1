@@ -1,12 +1,16 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [string]$Path
+  [string]$Path,
+  # Comma-separated allowlist from the plugin's package manifest. The default keeps every plugin
+  # that does not declare a wider policy at KERNEL32.dll.
+  [string]$AllowedModules = "KERNEL32.dll"
 )
 
 $ErrorActionPreference = "Stop"
 
 $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+. (Join-Path $PSScriptRoot "import-policy.ps1")
 . (Join-Path $PSScriptRoot "llvm-dir.ps1")
 $llvmReadObj = Join-Path (Get-LlvmDir) "llvm-readobj.exe"
 if (-not (Test-Path -LiteralPath $llvmReadObj)) {
@@ -21,15 +25,13 @@ if ($toolExitCode -ne 0) {
   exit 1
 }
 
-$modules = @(
-  $output |
-    ForEach-Object { if ($_ -match '^\s*Name:\s*(\S+)\s*$') { $Matches[1] } } |
-    Sort-Object -Unique
-)
+$modules = @(Select-ImportedModule -ReadObjOutput $output)
+$allowed = @($AllowedModules -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
-if ($modules.Count -ne 1 -or -not $modules[0].Equals("KERNEL32.dll", [StringComparison]::OrdinalIgnoreCase)) {
-  [Console]::Error.WriteLine("Import policy violation. Expected only KERNEL32.dll; found: $($modules -join ', ')")
+if (-not (Test-AllowedModule -Modules $modules -AllowedModules $allowed)) {
+  [Console]::Error.WriteLine(
+    "Import policy violation. Expected exactly: $($allowed -join ', '); found: $($modules -join ', ')")
   exit 1
 }
 
-Write-Output "Import policy passed: KERNEL32.dll is the only imported module."
+Write-Output "Import policy passed: exactly $($allowed -join ', ') imported."

@@ -3,3 +3,7 @@ plugins/*/package/readme_*.txt -text whitespace=cr-at-eol
 plugins/*/package/ChangeLog -text whitespace=cr-at-eol
 # Preserve the author's SDK snapshot byte-for-byte, including its CRLF line endings.
 third_party/pvd/PictureViewPlugin.h -text whitespace=cr-at-eol
+# Preserve the reviewed resvg distribution notices byte-for-byte.
+third_party/resvg/LICENSES-resvg.txt -text
+third_party/resvg/RUST-COPYRIGHT-library.html -text
+third_party/resvg/RUST-COPYRIGHT.html -text
