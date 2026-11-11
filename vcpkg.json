@@ -30,9 +30,16 @@
       ]
     },
     "rpgmvp": {
-      "description": "RPGMVP.pvd: RPG Maker MV/MZ encrypted PNG via libspng",
+      "description": "RPGMVP.pvd: RPG Maker MV/MZ encrypted PNG/WebP via libspng and libwebp",
       "dependencies": [
-        "libspng"
+        "libspng",
+        {
+          "name": "libwebp",
+          "default-features": false,
+          "features": [
+            "simd"
+          ]
+        }
       ]
     },
     "svg": {

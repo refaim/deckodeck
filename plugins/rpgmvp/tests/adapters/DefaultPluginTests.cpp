@@ -10,6 +10,7 @@
 #include <doctest/doctest.h>
 
 #include "adapters/spng/Decoder.hpp"
+#include "adapters/webp/Decoder.hpp"
 #include "core/Error.hpp"
 #include "pvd/PluginConstants.hpp"
 #include "pvd/PluginFactory.hpp"
@@ -52,9 +53,9 @@ TEST_CASE("the RPGMVP production composition reports its generated identity")
     CHECK(info.name == pvdkit::pvd::kPluginIdentity.name);
     CHECK(info.name == "RPGMVP");
     CHECK(info.version == pvdkit::pvd::kPluginIdentity.version);
-    CHECK(info.version == "1.2.0");
-    CHECK(info.comments ==
-          "RPG Maker MV/MZ encrypted PNG decoder: " + pvdkit::rpgmvp::libraryVersions() + "; static build");
+    CHECK(info.version == "1.3.0");
+    CHECK(info.comments == "RPG Maker MV/MZ encrypted PNG/WebP decoder: " + pvdkit::rpgmvp::libraryVersions() + ", " +
+                               pvdkit::rpgmvp::webp::libraryVersions() + "; static build");
 }
 
 TEST_CASE("the RPGMVP production composition opens memory and disk inputs identically")
@@ -83,6 +84,30 @@ TEST_CASE("the RPGMVP production composition opens memory and disk inputs identi
     CHECK(page->height == 38);
     CHECK(page->bitsPerPixel == 8);
     CHECK(page->frameTimeMs == 0);
+}
+
+TEST_CASE("the RPGMVP production composition selects WebP for encrypted WebP input")
+{
+    const auto plugin = pvdkit::pvd::makePlugin();
+    const auto bytes = pluginFixture("webp_rgba_lossless_2x2.png_");
+    const auto path = pluginFixturePath("webp_rgba_lossless_2x2.png_");
+    const auto name = utf8(path);
+
+    auto memory = plugin->open(pvdkit::pvd::OpenRequest{name, 0, bytes});
+    REQUIRE(memory.has_value());
+    CHECK((*memory)->imageInfo().compression == "WebP lossless");
+    CHECK((*memory)->imageInfo().comments == "8-bit RGBA");
+
+    auto disk = plugin->open(pvdkit::pvd::OpenRequest{name, bytes.size(), bytes});
+    REQUIRE(disk.has_value());
+    CHECK((*disk)->imageInfo().compression == (*memory)->imageInfo().compression);
+    const auto memoryPage = (*memory)->decodePage(0, {});
+    const auto diskPage = (*disk)->decodePage(0, {});
+    REQUIRE(memoryPage.has_value());
+    REQUIRE(diskPage.has_value());
+    CHECK(std::ranges::equal(memoryPage->pixels, diskPage->pixels));
+    CHECK(memoryPage->bitsPerPixel == 32);
+    CHECK(memoryPage->hasAlpha);
 }
 
 TEST_CASE("the RPGMVP production composition reports refusal, missing-file and limit errors")

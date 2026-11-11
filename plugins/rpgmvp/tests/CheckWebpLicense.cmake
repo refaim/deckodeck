@@ -1,0 +1,11 @@
+if(NOT DEFINED LICENSE_PATH)
+  message(FATAL_ERROR "LICENSE_PATH is required")
+endif()
+file(READ "${LICENSE_PATH}" license_text)
+foreach(required_text IN ITEMS "Google Inc." "Redistribution and use in source and binary forms"
+                               "Additional IP Rights Grant" "patent license")
+  string(FIND "${license_text}" "${required_text}" position)
+  if(position EQUAL -1)
+    message(FATAL_ERROR "RPGMVP package is missing libwebp notice: ${required_text}")
+  endif()
+endforeach()

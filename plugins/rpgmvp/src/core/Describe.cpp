@@ -32,7 +32,7 @@ namespace pvdkit::rpgmvp
 
     core::ImageDescription Describer::describe(const core::ImageMeta &meta) const
     {
-        return {"RPGMVP", "Deflate", rpgmvp::describe(meta)};
+        return {"RPGMVP", meta.compression.empty() ? "Deflate" : meta.compression, rpgmvp::describe(meta)};
     }
 
 } // namespace pvdkit::rpgmvp

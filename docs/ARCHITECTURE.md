@@ -428,8 +428,9 @@ or a prohibition on relative resolution. The exact lifetime and Windows path con
 §3.8.
 
 `ImageMeta::hasIcc` records only whether the container carries an ICC profile: the adapter sets it
-from the codec library's own presence check (libavif's parsed `image.icc`; RPGMVP's
-`spng_get_iccp` result) without retaining the profile bytes. The host ignores ICC profiles (proven,
+from the codec library's own presence check (libavif's parsed `image.icc`; RPGMVP/PNG's
+`spng_get_iccp` result), or RPGMVP/WebP's VP8X feature flag, without retaining the profile bytes.
+The host ignores ICC profiles (proven,
 [`docs/host/pictureview-abi.md`](host/pictureview-abi.md)), so there is no colour-management
 consumer to retain them for; ICC bytes are not part of the PVD boundary.
 
@@ -459,8 +460,10 @@ Decisions (Task 7, open point 1):
   ignores a set that fails the check as well. `compression` and
   `sourceDetail` (Task 26) let a plugin whose container facts the shared fields cannot express
   (an EXR's compression scheme and concise source summary) hand the describer file-wide facts;
-  the adapter fills them from the plugin's own core formatting functions and AVIF/RPGMVP leave
-  them empty. EXR multipage titles summarize the page count and structure rather than page zero
+  the adapter fills them from the plugin's own core formatting functions. AVIF and RPGMVP/PNG
+  leave them empty. RPGMVP/WebP sets `compression` to `WebP lossless`, `WebP lossy`, or `WebP`
+  when its bounded header probe cannot yet establish the coding variant. EXR multipage titles
+  summarize the page count and structure rather than page zero
   colour or channels; their compression field is empty because parts may differ. A float-valued source (EXR) delivers its pixels to the core as 16-bit PQ codes of
   absolute nits with `cicp.transfer = 16` and its tone-mapping peak in `masteringPeakNits`, so the
   one presentation path serves AVIF HDR and EXR alike (`plugins/exr/DESIGN.md` §4).
@@ -647,6 +650,13 @@ Decisions (Task 7, open point 1):
   `deepOutput = false` and `nativeRgbOutput = true`; its 8-bit renderer emits RGB24/RGBA32 through
   the native-RGB entry point and BGR24/BGRA32 through the legacy entry point. Defaulted
   compositions retain BGR.
+  RPGMVP's composition owns separate libspng and libwebp factories before its core
+  `CombinedDecoderFactory`, which borrows both and keeps PNG recognition first. The WebP adapter
+  links libwebp 1.6.0's SIMD-enabled decoder-only target, reconstructs the encrypted RIFF prefix
+  without a key and feeds it plus the mapped tail to the incremental codec. The codec may copy
+  compressed input internally; decoded RGB/RGBA or BGR/BGRA pixels go directly into the final
+  session page. It exposes only still VP8, VP8L and VP8X images and refuses animation. Its 8-bit
+  output does not change the existing PNG deep-output path.
   SVG's composition additionally owns its resvg state (the shared options, system-font load and
   parse mutex); the plugin-specific lifetime and resource rules are in `plugins/svg/DESIGN.md`.
   Plugin-specific values
@@ -1055,7 +1065,7 @@ Decisions (Task 7, open point 1):
   `reinterpret_cast` outside adapters/pvd, `#include <windows.h>` outside `src/adapters/**`,
   `plugins/*/src/adapters/**`, `src/pvd/Exports.cpp` and `src/pvd/PvdApi.hpp` (the same set
   AGENTS.md rule 4 names), codec headers (`avif/avif.h`, `dav1d/dav1d.h`, `spng.h`,
-  `OpenEXR/*.h`, `Imath/*.h`, `libdeflate.h`, `openjph/*.h`; extend the list with each plugin's
+  `OpenEXR/*.h`, `Imath/*.h`, `libdeflate.h`, `openjph/*.h`, `webp/*.h`; extend the list with each plugin's
   library) outside those adapters and `Exports.cpp`, `catch (`
   outside `Firewall.hpp`, `LCOV_EXCL`, `__builtin_unreachable`, `[[assume`, and (Task 24, AGENTS.md
   rule 13) the synchronisation family behind the `api-ms-win-core-synch-l1-2-0.dll` import of

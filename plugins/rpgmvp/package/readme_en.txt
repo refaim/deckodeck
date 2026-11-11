@@ -9,10 +9,12 @@ picture viewer plugin for Far Manager 3.
 How to use:
   Open the file the way you open any picture in PictureView. Files inside
   archives work too. Transparency is shown; 16-bit PNGs go to PictureView
-  as 16-bit.
+  as 16-bit. Encrypted WebP images are also supported, with lossy or
+  lossless compression and transparency. No game key is required.
 
   Animated PNGs (APNG) show their first frame only. RPG Maker never makes
-  them anyway. PNG gAMA/cHRM chunks and embedded ICC profiles are ignored.
+  them anyway. Animated WebP is not supported. PNG gAMA/cHRM chunks and
+  embedded ICC profiles are ignored.
 
 Install:
   Unpack the archive into PictureView's folder (the one with
@@ -22,8 +24,9 @@ Install:
   The plugin is self-contained: no runtime, no codecs, no GDI+, only
   Windows itself.
 
-License: MIT. The plugin bundles libspng (BSD-2-clause) and zlib (zlib
-license); their license texts are in LICENSES.txt. The PictureView plugin
+License: MIT. The plugin bundles libspng (BSD-2-clause), zlib (zlib
+license) and libwebp (BSD-3-clause with the WebM patent grant); their
+notices are in LICENSES.txt. The PictureView plugin
 interface header is (c) Pavel Skakov.
 
 Roman Kharitonov

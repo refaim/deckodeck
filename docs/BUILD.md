@@ -23,9 +23,9 @@ Plugins:
 - `plugins/exr` — `EXR.pvd`, OpenEXR decoder over OpenEXR 3.4.13 (its C core) + Imath 3.2.2 +
   libdeflate 1.25 + OpenJPH 0.30.1, presenting scene-linear pictures as tone-mapped sRGB. See
   `plugins/exr/README.md` for what it supports and how to install it.
-- `plugins/rpgmvp` — `RPGMVP.pvd`, decoder for RPG Maker MV/MZ encrypted PNG images
-  (`.rpgmvp`/`.png_`) over libspng + zlib. See `plugins/rpgmvp/README.md` for what it supports and
-  how to install it.
+- `plugins/rpgmvp` — `RPGMVP.pvd`, decoder for RPG Maker MV/MZ encrypted PNG and still WebP images
+  (`.rpgmvp`/`.png_`) over libspng + zlib + libwebp 1.6.0. See `plugins/rpgmvp/README.md` for what it
+  supports and how to install it.
 - `plugins/svg` — `SVG.pvd`, still SVG/SVGZ renderer over the unmodified resvg 0.48.1 C API,
   built as a static Rust library with YY-Thunks 1.2.3. See `plugins/svg/README.md` for support
   and installation, and
@@ -49,6 +49,11 @@ with one build change, and `openexr` with two patches, every change documented i
 `portfile.cmake`). The vcpkg-managed plugins have a manifest feature named after the plugin
 (`vcpkg.json`); SVG has no vcpkg feature because its renderer is built by Cargo. Generating the EXR fixtures
 (`plugins/exr/scripts/make-synthetic-fixtures.ps1`) needs `uv` on PATH; building does not.
+
+The `rpgmvp` feature selects libwebp with default features disabled and `simd` enabled, alongside
+libspng. RPGMVP links `WebP::webpdecoder`; encoders, muxing libraries and WebP command-line tools
+are not plugin dependencies. The package license aggregate includes libwebp's BSD-3-Clause
+`COPYING` notice and additional `PATENTS` grant, supplied by the vcpkg port.
 
 SVG adds a pinned Rust 1.99.1 MSVC build toolchain to these requirements, with the
 `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc` targets. A builder without it can install the
