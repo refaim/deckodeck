@@ -323,7 +323,7 @@ namespace
             // include text is lowercased before matching, hence the lowercase directories).
             .codecHeader =
                 std::regex{
-                    R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*((avif/avif|dav1d/dav1d|spng|libdeflate)[.]h|(openexr|imath|openjph)/[a-z0-9_]+[.]h)[ \t]*[>"])"},
+                    R"((^|\n)[ \t]*#[ \t]*include[ \t]*[<"][ \t]*((avif/avif|dav1d/dav1d|spng|libdeflate)[.]h|(openexr|imath|openjph|webp)/[a-z0-9_]+[.]h)[ \t]*[>"])"},
             // Captures the whole header path after `pvd/` (nested directories included, `.h` or `.hpp`)
             // so callers can check it against an allowlist, rather than hard-coding the forbidden names
             // in the pattern itself.
@@ -859,6 +859,13 @@ namespace
         }
         CHECK_FALSE(scan("project/src/core/Sample.cpp", "#include <spng.h>").empty());
         CHECK(scan("project/plugins/rpgmvp/src/adapters/spng/Sample.cpp", "#include <spng.h>").empty());
+        for (const auto include :
+             {std::string_view{"#include <webp/decode.h>"}, std::string_view{"#include \"webp/types.h\""}}) {
+            CAPTURE(include);
+            CHECK_FALSE(scan("project/plugins/rpgmvp/src/core/Sample.cpp", include).empty());
+            CHECK_FALSE(scan("project/plugins/rpgmvp/src/DefaultPlugin.cpp", include).empty());
+            CHECK(scan("project/plugins/rpgmvp/src/adapters/webp/Sample.cpp", include).empty());
+        }
         for (const auto include :
              {std::string_view{"#include <OpenEXR/openexr.h>"}, std::string_view{"#include <OpenEXR/ImfRgbaYca.h>"},
               std::string_view{"#include <Imath/ImathVec.h>"}, std::string_view{"#include <libdeflate.h>"},

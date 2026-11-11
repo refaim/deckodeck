@@ -80,5 +80,19 @@ namespace pvdkit::rpgmvp
             CHECK(result.comments == "4-bit indexed+alpha");
         }
 
+        TEST_CASE("Describer reports the WebP compression resolved by its decoder")
+        {
+            const Describer describer;
+            auto meta = baseMeta();
+            meta.hasAlpha = true;
+            for (const auto compression : {"WebP lossless", "WebP lossy"}) {
+                meta.compression = compression;
+                const auto result = describer.describe(meta);
+                CHECK(result.formatName == "RPGMVP");
+                CHECK(result.compression == compression);
+                CHECK(result.comments == "8-bit RGBA");
+            }
+        }
+
     } // namespace
 } // namespace pvdkit::rpgmvp

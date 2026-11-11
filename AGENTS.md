@@ -18,7 +18,7 @@ The author's reference decoders (`third_party/pvd/examples/pvdBMP.cpp`,
 (`third_party/pvd/dist-docs/`) document how the host calls the exports and which priorities the
 built-in decoders use; read them before touching the pvd layer. Plugins today: `plugins/avif` →
 `AVIF.pvd` (libavif + dav1d + libyuv), `plugins/exr` → `EXR.pvd` (OpenEXRCore + Imath +
-libdeflate + OpenJPH), `plugins/rpgmvp` → `RPGMVP.pvd` (libspng + zlib), `plugins/svg` →
+libdeflate + OpenJPH), `plugins/rpgmvp` → `RPGMVP.pvd` (libspng + zlib + libwebp), `plugins/svg` →
 `SVG.pvd` (the unmodified resvg C API built as a static Rust library, plus YY-Thunks).
 
 Every plugin ships x64 and x86 and links its codec libraries statically. AVIF, EXR and RPGMVP
@@ -117,7 +117,8 @@ system codec. The SVG exception does not apply to any other plugin.
   triplets `x64-windows-static-clang` and `x86-windows-static-clang` (`triplets/`; the x86 one
   cross-compiles with the same x64-hosted clang-cl and loads the x86 vcvars for the ports).
   Dependencies: `doctest` for the kit, one manifest feature per plugin (`avif`: `libavif[dav1d]`,
-  which pulls `libyuv`). Changing a file under `cmake/` or `triplets/` changes every port's ABI
+  which pulls `libyuv`; `rpgmvp`: `libspng` + `zlib` + SIMD-enabled `libwebp`). Changing a file under
+  `cmake/` or `triplets/` changes every port's ABI
   hash and rebuilds the ports once. A warm-up build may already be in vcpkg's binary cache.
 - SVG also needs a Rust MSVC toolchain: `cargo`/`rustc` with the
   `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc` targets. CMake builds the unmodified
@@ -149,7 +150,7 @@ plugins/<id>/   one plugin: CMakeLists.txt (identity + targets), src/core/, src/
                 src/DefaultPlugin.cpp (composition root), tests/{core,adapters,e2e}/, fixtures/,
                 scripts/, package/{readme_en.txt,readme_ru.txt,ChangeLog}, README.md, DESIGN.md
                 (avif: libavif adapter; exr: OpenEXRCore adapter + tests/support/ with the
-                generated reference pixels; rpgmvp: libspng adapter; svg: resvg C API adapter)
+                generated reference pixels; rpgmvp: libspng/libwebp adapters; svg: resvg C API adapter)
 tests/pvd/      shim, firewall, context handle, Progress, Exports with fakes (doctest)
 tests/core/     core logic with fake decoder / file source / describer (doctest)
 tests/adapters/ the win adapter on real files

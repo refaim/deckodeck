@@ -1,4 +1,4 @@
-// Composition root of RPGMVP.pvd: the only place where Win32, libspng, the format describer and
+// Composition root of RPGMVP.pvd: the only place where Win32, libspng, libwebp, the format describer and
 // the shared codec core meet.
 #include "pvd/PluginFactory.hpp"
 
@@ -8,8 +8,10 @@
 #include <thread>
 
 #include "adapters/spng/Decoder.hpp"
+#include "adapters/webp/Decoder.hpp"
 #include "adapters/win/FileSource.hpp"
 #include "core/CodecPlugin.hpp"
+#include "core/DecoderFactory.hpp"
 #include "core/Describe.hpp"
 #include "core/IDecoder.hpp"
 #include "core/colour/Pipeline.hpp"
@@ -33,14 +35,16 @@ namespace pvdkit::pvd
         PluginInfo defaultInfo()
         {
             return {kPluginIdentity.priority, std::string{kPluginIdentity.name}, std::string{kPluginIdentity.version},
-                    "RPG Maker MV/MZ encrypted PNG decoder: " + rpgmvp::libraryVersions() + "; static build"};
+                    "RPG Maker MV/MZ encrypted PNG/WebP decoder: " + rpgmvp::libraryVersions() + ", " +
+                        rpgmvp::webp::libraryVersions() + "; static build"};
         }
 
         class DefaultPlugin final : public IPlugin
         {
           public:
             explicit DefaultPlugin(const core::DecoderOptions &options)
-                : plugin_{fileSource_, decoderFactory_, describer_, tables_, options, defaultInfo()}
+                : decoderFactory_{pngFactory_, webpFactory_},
+                  plugin_{fileSource_, decoderFactory_, describer_, tables_, options, defaultInfo()}
             {
             }
 
@@ -56,7 +60,9 @@ namespace pvdkit::pvd
 
           private:
             win::FileSource fileSource_;
-            rpgmvp::DecoderFactory decoderFactory_;
+            rpgmvp::DecoderFactory pngFactory_;
+            rpgmvp::webp::DecoderFactory webpFactory_;
+            rpgmvp::CombinedDecoderFactory decoderFactory_;
             rpgmvp::Describer describer_;
             // Plugin-owned sRGB output tables and lazy immutable transfer/gain caches.
             // Sessions borrow entries; the owner outlives them and never evicts cached tables.

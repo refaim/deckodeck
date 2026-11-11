@@ -2,13 +2,22 @@
 
 ## Format and detection
 
-An encrypted file contains a 16-byte RPG Maker header, 16 encrypted bytes corresponding to PNG
-bytes 0..15, and unmodified PNG bytes 16..end. Those first PNG bytes are invariant: the signature,
+An encrypted file contains a 16-byte RPG Maker header, 16 encrypted image bytes, and unmodified
+image bytes 16..end. The PNG path restores invariant bytes: the signature,
 the 13-byte IHDR length and the `IHDR` chunk name. Detection requires at least 49 bytes, the exact
 eight-byte `RPGMV\0\0\0` signature, and a valid IHDR CRC after substituting the invariant bytes.
 Version bytes are informational and are never gated. CRC and recognition live in `src/core/Format`.
 
-## Adapter
+The WebP path lives in `src/core/Webp`. It identifies simple VP8L or VP8 payload signatures in the
+unencrypted tail, or the fixed-size VP8X extended header, after checking the same RPG Maker
+signature. It reconstructs `RIFF`, the little-endian RIFF size (`encryptedSize - 24`), `WEBP`, and
+the inferred first chunk name. The encrypted bytes and the game's key are not needed. The
+reconstructed container is then parsed and validated by libwebp; recognition alone does not
+promise a decodable bitstream. The core rejects a size that cannot fit RIFF's 32-bit size field.
+`CombinedDecoderFactory` routes to the PNG factory first and otherwise to the WebP factory, so
+the established PNG detection and decode paths remain unchanged.
+
+## PNG adapter
 
 `src/adapters/spng` is the only layer that includes libspng or zlib. Its stream callback serves the
 16 invariant PNG bytes and then the source span beginning at encrypted offset 32, without assembling
@@ -41,6 +50,33 @@ libspng 0.7.4's upstream CMake policy level otherwise ignores `CMAKE_MSVC_RUNTIM
 repository overlay port enables CMP0091 so the existing clang-cl chainload produces `/MT` archives.
 It does not patch codec source.
 
+## WebP adapter
+
+`src/adapters/webp` alone includes libwebp. Its factory parses a bounded reconstructed prefix with
+`WebPGetFeatures`, then passes plain image facts to `normaliseWebp` in core. The core checks
+dimensions and pixel limits before pixel allocation and rejects animated WebP as
+`UnsupportedFeature`. Still simple VP8, VP8L and extended VP8X images, including ALPH transparency,
+are supported. The decoder reports 8-bit source depth, straight alpha, one still page, and identity
+sRGB colour signalling.
+
+Each decode creates an independent incremental libwebp decoder over the caller's final tight
+RGB/RGBA or BGR/BGRA buffer. It appends the restored 16-byte prefix and then the mapped source
+tail at encrypted offset 32. No second full-image pixel buffer or separate full-file reconstruction
+is allocated by the adapter; libwebp may copy compressed input into its own incremental scratch
+buffer. A returned `VP8_STATUS_OUT_OF_MEMORY` and a failed decoder allocation become
+`std::bad_alloc` for the existing export firewall. Other parse/decode failures remain error values.
+
+VP8X flags report ICC, EXIF and XMP presence without retaining or applying their payloads. EXIF
+orientation is not applied. Compression is `WebP lossless` or `WebP lossy` when the bounded feature
+probe establishes the coding variant, and `WebP` when a preceding metadata chunk means that the
+probe has only the extended canvas header. This does not require scanning arbitrary metadata or
+duplicating libwebp's container parser.
+
+The manifest selects libwebp 1.6.0 with default features disabled and SIMD enabled; the plugin links
+only `WebP::webpdecoder`. The unmodified third-party library uses the existing static-library and
+static-CRT triplets. Packaging retains libwebp's BSD-3-Clause `COPYING` notice and its additional
+`PATENTS` grant. Both architectures remain subject to the RPGMVP KERNEL32-only import gate.
+
 ## Deflate implementation: stock zlib (zlib-ng measured and not adopted)
 
 Task 23 measured zlib-ng 2.3.3 in `ZLIB_COMPAT` mode (an overlay port installed under the name
@@ -69,9 +105,12 @@ historical figures above measure the legacy layout, not the gain from native out
 `src/core/Describe` derives the public format, compression and comment strings solely from
 `ImageMeta`. Comments retain source depth and RGB/RGBA, grey/grey+alpha or indexed/indexed+alpha,
 with optional interlaced and ICC presence markers. The format prefix already identifies RPGMVP,
-so the comments omit the encrypted-PNG prose. ICC presence does not mean application.
-`DefaultPlugin.cpp` owns the Win32 file source, libspng decoder factory, describer,
-the shared `core::colour::ColourTables` (built once in `pvdInit`; libspng reports identity
+so the comments omit the encrypted-image prose. ICC presence does not mean application. The
+describer uses PNG's existing `Deflate` label when `ImageMeta::compression` is empty and otherwise
+uses the WebP label supplied by the decoder.
+`DefaultPlugin.cpp` owns the Win32 file source, libspng and libwebp decoder factories, their combined
+router, the describer,
+the shared `core::colour::ColourTables` (built once in `pvdInit`; both codecs report identity
 CICP, so no session of this plugin presents colour today, but `CodecPlugin` takes the tables by
 reference and no function-local static may replace them - ARCHITECTURE §7) and the shared
 `CodecPlugin` in dependency order. Its limits and identity match the generated VERSIONINFO.
@@ -86,11 +125,12 @@ transparency independently of the fourth channel.
 
 ## Exclusions
 
-Audio encryption variants, key recovery, PNG encoding, APNG animation pages, PNG `gAMA`/`cHRM`
-application and ICC profile application are out of scope. ICC profile presence is detected
-(`ImageMeta::hasIcc`) but the bytes are not retained or forwarded through the PVD ABI. RPGMVP/PNG has no
-EXIF-orientation path. Unknown ancillary chunks remain libspng's responsibility; corrupt critical
-data is rejected as an expected parse/decode failure.
+Audio encryption variants, key recovery, image encoding, APNG animation pages, animated WebP,
+PNG `gAMA`/`cHRM` application and ICC profile application are out of scope. ICC profile presence is
+reported (`ImageMeta::hasIcc`) but the bytes are not retained or forwarded through the PVD ABI.
+PNG has no EXIF-orientation path; WebP EXIF orientation is ignored. Unknown chunks remain the
+codec libraries' responsibility; corrupt critical data is rejected as an expected parse/decode
+failure.
 
 ## Verification fixtures
 
@@ -104,3 +144,9 @@ RGB48 adapter cases synthesize truecolor16 and gray16 with libspng, including Ad
 then check exact little-endian samples, single-pixel expansion, guard bytes and repeated decoding.
 Packed opaque grayscale/indexed inputs check full-range 8-to-16 promotion; alpha/tRNS, short
 buffers, padded pitches and truncated streams check refusal and error behavior.
+
+Six synthetic encrypted WebP fixtures add opaque and straight-alpha VP8L, opaque VP8, VP8X with
+ALPH, VP8X with ICC/EXIF/XMP, and an animated VP8X rejection. Exact lossless pixels and pinned
+lossy decode pixels are checked through adapter and host output. Disk/memory and legacy/native
+RGB paths, repeated decodes, simultaneously outstanding pages, abort/retry, malformed input and
+resource limits are covered independently of the game corpus.

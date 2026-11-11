@@ -85,9 +85,10 @@ namespace pvdkit::e2e
         exports.pluginInfo(&info);
         CHECK(info.Priority == 10);
         CHECK(text(info.pName) == "RPGMVP");
-        CHECK(text(info.pVersion) == "1.2.0");
+        CHECK(text(info.pVersion) == "1.3.0");
         CHECK(text(info.pComments).find("libspng 0.7.4") != std::string::npos);
         CHECK(text(info.pComments).find("zlib 1.3.2") != std::string::npos);
+        CHECK(text(info.pComments).find("libwebp 1.6.0") != std::string::npos);
         CHECK(text(info.pComments).find("static build") != std::string::npos);
         CHECK_FALSE(text(info.pComments).empty());
         exports.pluginInfo(nullptr);
