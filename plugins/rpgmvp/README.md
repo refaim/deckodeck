@@ -35,7 +35,7 @@ for fixture provenance and verified expectations.
 
 ## Changes
 
-- 1.3.0 — unpublished candidate: encrypted still WebP support through libwebp, including lossy,
+- 1.3.0 — encrypted still WebP support through libwebp, including lossy,
   lossless and extended files with alpha. PNG behavior is preserved.
 - 1.2.0 — direct UTF-16 paths and native RGB24/RGBA32/RGB48/RGBA64
   through the wide entry point. Opaque 16-bit pages use 25% less pixel storage with RGB48;
